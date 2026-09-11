@@ -23,3 +23,4 @@
 - Словарь БД: `outputs/database-v1-dictionary.md`.
 - Применение и проверки: `db/README.md`, `db/tests/schema.test.mjs`.
 - Исходная концепция: `outputs/marketplace-control-concept.md`. Последующие согласованные уточнения отражены в документах БД.
+- Для первых тестов и MVP используется локальное развёртывание через `compose.yaml`. VPS пока не используется.
