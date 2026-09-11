@@ -14,7 +14,7 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Не удалось запустить локальный PostgreSQL.'
 }
 
-& $compose.Source exec --no-TTY postgres sh -c `
+& $compose.Source exec --no-TTY marketplace-control sh -c `
     'psql --username "$POSTGRES_USER" --dbname "$POSTGRES_DB" --set ON_ERROR_STOP=1 --command "SELECT version, applied_at FROM mc.schema_migrations ORDER BY version;"'
 
 if ($LASTEXITCODE -ne 0) {
