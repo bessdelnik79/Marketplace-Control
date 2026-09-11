@@ -1,0 +1,12 @@
+{
+  "name": "marketplace-control",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node app/server.mjs",
+    "test": "node --test app/**/*.test.mjs"
+  },
+  "dependencies": {
+    "pg": "8.16.3"
+  }
+}

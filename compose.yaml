@@ -20,6 +20,18 @@ services:
       retries: 12
       start_period: 10s
 
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-marketplace_control}:${POSTGRES_PASSWORD:-marketplace_control_local}@postgres:5432/${POSTGRES_DB:-marketplace_control}
+      PORT: 3000
+      NODE_ENV: development
+    ports:
+      - "127.0.0.1:${APP_PORT:-3000}:3000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   postgres_data:
-

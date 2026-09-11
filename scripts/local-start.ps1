@@ -9,7 +9,7 @@ if (-not $compose) {
     throw 'Docker Compose не найден. Перезапустите терминал после установки Docker Desktop.'
 }
 
-& $compose.Source up --detach --wait postgres
+& $compose.Source up --detach --build --wait
 if ($LASTEXITCODE -ne 0) {
     throw 'Не удалось запустить локальный PostgreSQL.'
 }
@@ -22,3 +22,4 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host 'Marketplace Control: локальная база готова на 127.0.0.1.'
+Write-Host "Интерфейс доступен: http://localhost:$($env:APP_PORT ?? '3000')"

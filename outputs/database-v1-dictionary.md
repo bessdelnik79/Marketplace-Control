@@ -41,6 +41,39 @@
 - `UNIQUE (provider, subject)`
 - `FOREIGN KEY (user_id) REFERENCES mc.users(id)`
 
+## auth_password_credentials
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| user_id | uuid | нет | — |
+| password_hash | text | нет | — |
+| password_changed_at | timestamp with time zone | нет | now() |
+| created_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `CHECK ((password_hash ~~ 'scrypt$%'::text))`
+- `PRIMARY KEY (user_id)`
+- `FOREIGN KEY (user_id) REFERENCES mc.users(id) ON DELETE CASCADE`
+
+## auth_sessions
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| user_id | uuid | нет | — |
+| token_hash | text | нет | — |
+| expires_at | timestamp with time zone | нет | — |
+| last_seen_at | timestamp with time zone | нет | now() |
+| created_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `CHECK ((expires_at > created_at))`
+- `PRIMARY KEY (id)`
+- `UNIQUE (token_hash)`
+- `FOREIGN KEY (user_id) REFERENCES mc.users(id) ON DELETE CASCADE`
+
 ## billing_invoices
 
 | Поле | Тип | NULL | По умолчанию |
