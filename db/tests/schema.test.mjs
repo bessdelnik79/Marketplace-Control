@@ -27,6 +27,7 @@ async function insert(table, values) {
 try {
   await db.exec(await readFile(path.join(root,'db/migrations/001_initial.sql'),'utf8'));
   await db.exec(await readFile(path.join(root,'db/migrations/002_password_auth.sql'),'utf8'));
+  await db.exec(await readFile(path.join(root,'db/migrations/003_registration_protection.sql'),'utf8'));
   pass('all migrations apply atomically to empty PostgreSQL');
   const version = (await one('select version()')).version;
   console.log(version);
@@ -35,7 +36,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,2);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,3);
   pass('password identity and expiring session are stored by migration 2');
   const b = await insert('businesses',{name:'Business A'});
   await insert('memberships',{business_id:b.id,user_id:user.id});

@@ -27,6 +27,17 @@ services:
       DATABASE_URL: postgres://${POSTGRES_USER:-marketplace_control}:${POSTGRES_PASSWORD:-marketplace_control_local}@postgres:5432/${POSTGRES_DB:-marketplace_control}
       PORT: 3000
       NODE_ENV: development
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://localhost:3000}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_SECURE: ${SMTP_SECURE:-false}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-Marketplace Control <no-reply@example.ru>}
+      YANDEX_CLIENT_ID: ${YANDEX_CLIENT_ID:-}
+      YANDEX_CLIENT_SECRET: ${YANDEX_CLIENT_SECRET:-}
+      SMARTCAPTCHA_CLIENT_KEY: ${SMARTCAPTCHA_CLIENT_KEY:-}
+      SMARTCAPTCHA_SERVER_KEY: ${SMARTCAPTCHA_SERVER_KEY:-}
     ports:
       - "127.0.0.1:${APP_PORT:-3000}:3000"
     depends_on:

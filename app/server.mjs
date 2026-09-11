@@ -1,59 +1,28 @@
-import http from 'node:http';
-import { readFile } from 'node:fs/promises';
-import path from 'node:path';
-import { createSessionToken, hashPassword, hashToken, normalizeEmail, validateRegistration, verifyPassword } from './auth.mjs';
-import { deleteSession, findPasswordUser, findSession, migrate, pool, registerUser, saveSession } from './db.mjs';
-import { authPage, dashboardPage } from './views.mjs';
-
-const port = Number(process.env.PORT ?? 3000);
-const sessionDays = 30;
-const attempts = new Map();
-const dummyHash = await hashPassword('dummy-password-for-equal-work');
-
-function cookies(request) {
-  return Object.fromEntries(String(request.headers.cookie ?? '').split(';').map((item) => item.trim().split('=')).filter(([key]) => key));
-}
-function send(response, status, body, headers = {}) { response.writeHead(status, { 'content-type': 'text/html; charset=utf-8', ...headers }); response.end(body); }
-function redirect(response, location, cookie) { response.writeHead(303, { location, ...(cookie ? { 'set-cookie': cookie } : {}) }); response.end(); }
-function sessionCookie(token, maxAge = sessionDays * 86400) { return `mc_session=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`; }
-async function form(request) { const chunks=[]; for await (const chunk of request) { chunks.push(chunk); if (Buffer.concat(chunks).length > 16_384) throw new Error('too_large'); } return Object.fromEntries(new URLSearchParams(Buffer.concat(chunks).toString())); }
-function allowAttempt(key) { const now=Date.now(); const recent=(attempts.get(key) ?? []).filter((at)=>now-at<15*60_000); if(recent.length>=10) return false; recent.push(now); attempts.set(key,recent); return true; }
-async function currentUser(request) { const token=cookies(request).mc_session; return token ? findSession(hashToken(token)) : null; }
-async function establishSession(response, userId) { const {token,tokenHash}=createSessionToken(); await saveSession({userId,tokenHash,expiresAt:new Date(Date.now()+sessionDays*86400_000)}); redirect(response,'/',sessionCookie(token)); }
-
-const server = http.createServer(async (request, response) => {
-  try {
-    const url = new URL(request.url, `http://${request.headers.host ?? 'localhost'}`);
-    if (request.method === 'GET' && url.pathname === '/health') return send(response, 200, 'ok', { 'content-type': 'text/plain; charset=utf-8' });
-    if (request.method === 'GET' && ['/styles.css','/favicon.svg'].includes(url.pathname)) {
-      const file = path.join(path.resolve('app/public'), url.pathname.slice(1));
-      const type = url.pathname.endsWith('.css') ? 'text/css; charset=utf-8' : 'image/svg+xml';
-      response.writeHead(200, { 'content-type': type, 'cache-control': 'public, max-age=3600' }); return response.end(await readFile(file));
-    }
-    const user = await currentUser(request);
-    if (request.method === 'GET' && url.pathname === '/') return user ? send(response,200,dashboardPage(user)) : redirect(response,'/login');
-    if (request.method === 'GET' && url.pathname === '/login') return user ? redirect(response,'/') : send(response,200,authPage({mode:'login'}));
-    if (request.method === 'GET' && url.pathname === '/register') return user ? redirect(response,'/') : send(response,200,authPage({mode:'register'}));
-    if (request.method === 'POST' && url.pathname === '/register') {
-      const data=await form(request); const checked=validateRegistration(data);
-      if (checked.error) return send(response,422,authPage({mode:'register',error:checked.error,values:data}));
-      if (!allowAttempt(`register:${request.socket.remoteAddress}`)) return send(response,429,authPage({mode:'register',error:'Слишком много попыток. Повторите через 15 минут.',values:data}));
-      try { const created=await registerUser({...checked.value,passwordHash:await hashPassword(checked.value.password)}); return establishSession(response,created.id); }
-      catch(error) { if(error.code==='23505') return send(response,409,authPage({mode:'register',error:'Аккаунт с таким email уже существует.',values:data})); throw error; }
-    }
-    if (request.method === 'POST' && url.pathname === '/login') {
-      const data=await form(request); const email=normalizeEmail(data.email); const key=`login:${request.socket.remoteAddress}:${email}`;
-      if (!allowAttempt(key)) return send(response,429,authPage({mode:'login',error:'Слишком много попыток. Повторите через 15 минут.',values:{email}}));
-      const found=await findPasswordUser(email); const valid=await verifyPassword(data.password,found?.password_hash ?? dummyHash);
-      if(!found || !valid || found.status!=='active') return send(response,401,authPage({mode:'login',error:'Неверный email или пароль.',values:{email}}));
-      return establishSession(response,found.id);
-    }
-    if (request.method === 'POST' && url.pathname === '/logout') { const token=cookies(request).mc_session; if(token) await deleteSession(hashToken(token)); return redirect(response,'/login',sessionCookie('',0)); }
-    return send(response,404,'Страница не найдена');
-  } catch (error) { console.error(error); return send(response,500,'Не удалось выполнить запрос. Попробуйте ещё раз.'); }
-});
-
-await migrate();
-server.listen(port,'0.0.0.0',()=>console.log(`Marketplace Control: http://localhost:${port}`));
-async function shutdown(){server.close();await pool.end();}
-process.on('SIGTERM',shutdown); process.on('SIGINT',shutdown);
+import http from 'node:http';import{readFile}from'node:fs/promises';import path from'node:path';
+import{createSessionToken,createVerificationCode,hashPassword,hashToken,normalizeEmail,validateRegistration,verifyPassword}from'./auth.mjs';
+import{consumeChallenge,consumeOauthState,deleteSession,findOrCreateYandexUser,findPasswordUser,findSession,markVerified,migrate,pool,registerUser,saveChallenge,saveOauthState,saveSession,takeLimit}from'./db.mjs';
+import{sendVerificationCode}from'./email.mjs';import{authPage,dashboardPage,verifyPage}from'./views.mjs';
+const port=Number(process.env.PORT??3000),days=30,dummyHash=await hashPassword('dummy-password-for-equal-work');
+const yandexEnabled=Boolean(process.env.YANDEX_CLIENT_ID&&process.env.YANDEX_CLIENT_SECRET&&process.env.PUBLIC_BASE_URL);
+function cookies(r){return Object.fromEntries(String(r.headers.cookie??'').split(';').map(x=>x.trim().split('=')).filter(([k])=>k));}
+function send(r,s,b,h={}){r.writeHead(s,{'content-type':'text/html; charset=utf-8',...h});r.end(b);}function redirect(r,l,c){r.writeHead(303,{location:l,...(c?{'set-cookie':c}:{})});r.end();}
+function cookie(t,max=days*86400){return`mc_session=${t}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${max}${process.env.NODE_ENV==='production'?'; Secure':''}`;}
+async function form(r){const a=[];for await(const c of r){a.push(c);if(Buffer.concat(a).length>16384)throw Error('too_large');}return Object.fromEntries(new URLSearchParams(Buffer.concat(a).toString()));}
+const ip=r=>r.socket.remoteAddress??'unknown';async function user(r){const t=cookies(r).mc_session;return t?findSession(hashToken(t)):null;}
+async function session(r,id){const{token,tokenHash}=createSessionToken();await saveSession({userId:id,tokenHash,expiresAt:new Date(Date.now()+days*86400000)});redirect(r,'/',cookie(token));}
+async function captchaOk(token,requestIp){if(!process.env.SMARTCAPTCHA_SERVER_KEY)return true;const body=new URLSearchParams({secret:process.env.SMARTCAPTCHA_SERVER_KEY,token:token??'',ip:requestIp});const response=await fetch('https://smartcaptcha.cloud.yandex.ru/validate',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body});return response.ok&&(await response.json()).status==='ok';}
+const server=http.createServer(async(req,res)=>{try{const url=new URL(req.url,`http://${req.headers.host??'localhost'}`);
+ if(req.method==='GET'&&url.pathname==='/health')return send(res,200,'ok',{'content-type':'text/plain'});
+ if(req.method==='GET'&&['/styles.css','/favicon.svg'].includes(url.pathname)){const f=path.join(path.resolve('app/public'),url.pathname.slice(1));res.writeHead(200,{'content-type':url.pathname.endsWith('.css')?'text/css':'image/svg+xml'});return res.end(await readFile(f));}
+ const current=await user(req);const page=(mode,extra={})=>authPage({mode,yandexEnabled,...extra});
+ if(req.method==='GET'&&url.pathname==='/')return current?send(res,200,dashboardPage(current)):redirect(res,'/login');
+ if(req.method==='GET'&&url.pathname==='/login')return current?redirect(res,'/'):send(res,200,page('login'));
+ if(req.method==='GET'&&url.pathname==='/register')return current?redirect(res,'/'):send(res,200,page('register'));
+ if(req.method==='POST'&&url.pathname==='/register'){const d=await form(req),v=validateRegistration(d),limit=await takeLimit(`register:ip:${ip(req)}`,5,60);if(v.error)return send(res,422,page('register',{error:v.error,values:d}));if(!limit.allowed)return send(res,429,page('register',{error:'Слишком много регистраций. Повторите позже.',values:d,captchaKey:process.env.SMARTCAPTCHA_CLIENT_KEY}));if(limit.attempts>=3&&!(await captchaOk(d['smart-token'],ip(req))))return send(res,422,page('register',{error:'Подтвердите, что вы не робот.',values:d,captchaKey:process.env.SMARTCAPTCHA_CLIENT_KEY}));if(await findPasswordUser(v.value.email))return send(res,409,page('register',{error:'Аккаунт с таким email уже существует.',values:d}));const code=createVerificationCode();await saveChallenge({...v.value,passwordHash:await hashPassword(v.value.password),codeHash:hashToken(code)});const mode=await sendVerificationCode(v.value.email,code);return send(res,200,verifyPage({email:v.value.email,devCode:mode==='development'?code:''}));}
+ if(req.method==='POST'&&url.pathname==='/verify-email'){const d=await form(req),email=normalizeEmail(d.email),limit=await takeLimit(`verify:${email}`,5,15);if(!limit.allowed)return send(res,429,verifyPage({email,error:'Слишком много попыток. Запросите новый код позже.'}));const ch=await consumeChallenge(email,hashToken(d.code));if(!ch)return send(res,422,verifyPage({email,error:'Неверный или просроченный код.'}));const created=await registerUser({name:ch.display_name,email,passwordHash:ch.password_hash});await markVerified(created.id);return session(res,created.id);}
+ if(req.method==='POST'&&url.pathname==='/login'){const d=await form(req),email=normalizeEmail(d.email),limit=await takeLimit(`login:${ip(req)}:${email}`,10,15);if(!limit.allowed)return send(res,429,page('login',{error:'Слишком много попыток. Повторите через 15 минут.',values:{email}}));const f=await findPasswordUser(email),ok=await verifyPassword(d.password,f?.password_hash??dummyHash);if(!f||!ok||f.status!=='active')return send(res,401,page('login',{error:'Неверный email или пароль.',values:{email}}));return session(res,f.id);}
+ if(req.method==='GET'&&url.pathname==='/auth/yandex'){if(!yandexEnabled)return send(res,503,'Яндекс ID пока не настроен.');const{token,stateHash}=createSessionToken();await saveOauthState(stateHash);const q=new URLSearchParams({response_type:'code',client_id:process.env.YANDEX_CLIENT_ID,redirect_uri:`${process.env.PUBLIC_BASE_URL}/auth/yandex/callback`,state:token});return redirect(res,`https://oauth.yandex.ru/authorize?${q}`);}
+ if(req.method==='GET'&&url.pathname==='/auth/yandex/callback'){if(!await consumeOauthState(hashToken(url.searchParams.get('state'))))return send(res,400,'Ссылка входа устарела.');const body=new URLSearchParams({grant_type:'authorization_code',code:url.searchParams.get('code')??'',client_id:process.env.YANDEX_CLIENT_ID,client_secret:process.env.YANDEX_CLIENT_SECRET});const tr=await fetch('https://oauth.yandex.ru/token',{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body});if(!tr.ok)return send(res,401,'Не удалось войти через Яндекс.');const tok=await tr.json(),info=await fetch('https://login.yandex.ru/info?format=json',{headers:{authorization:`OAuth ${tok.access_token}`}}),p=await info.json();const u=await findOrCreateYandexUser({subject:String(p.id),email:p.default_email??null,name:p.display_name??p.real_name??'Пользователь Яндекса'});return session(res,u.id);}
+ if(req.method==='POST'&&url.pathname==='/logout'){const t=cookies(req).mc_session;if(t)await deleteSession(hashToken(t));return redirect(res,'/login',cookie('',0));}return send(res,404,'Страница не найдена');
+ }catch(e){console.error(e);return send(res,500,'Не удалось выполнить запрос. Попробуйте ещё раз.');}});
+await migrate();server.listen(port,'0.0.0.0',()=>console.log(`Marketplace Control: http://localhost:${port}`));async function stop(){server.close();await pool.end();}process.on('SIGTERM',stop);process.on('SIGINT',stop);

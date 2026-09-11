@@ -43,3 +43,5 @@ export function createSessionToken() {
 export function hashToken(token) {
   return createHash('sha256').update(String(token)).digest('hex');
 }
+
+export function createVerificationCode(){return String(Number.parseInt(randomBytes(4).toString('hex'),16)%1_000_000).padStart(6,'0');}

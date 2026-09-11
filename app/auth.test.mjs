@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSessionToken, hashPassword, hashToken, normalizeEmail, validateRegistration, verifyPassword } from './auth.mjs';
+import { createSessionToken, createVerificationCode, hashPassword, hashToken, normalizeEmail, validateRegistration, verifyPassword } from './auth.mjs';
 
 test('registration data is normalized and validated', () => {
   const result=validateRegistration({name:'  Анна   Смирнова  ',email:' ANNA@Example.COM ',password:'очень-надёжный-пароль'});
@@ -22,3 +22,4 @@ test('session tokens are random and stored as hashes', () => {
   const first=createSessionToken(), second=createSessionToken();
   assert.notEqual(first.token,second.token); assert.equal(first.tokenHash,hashToken(first.token)); assert.equal(first.tokenHash.length,64);
 });
+test('email verification code contains six digits',()=>assert.match(createVerificationCode(),/^\d{6}$/));
