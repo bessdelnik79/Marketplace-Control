@@ -1,6 +1,7 @@
 // The build script prepends the declarative design data to this runtime.
 // No network, credentials, document deletion or third-party dependencies.
 async function importMarketplaceControl() {
+  await figma.loadAllPagesAsync();
   await Promise.all(['Regular', 'Medium', 'Semi Bold'].map(style =>
     figma.loadFontAsync({ family: 'Inter', style })));
   const prefix = 'MC · ';

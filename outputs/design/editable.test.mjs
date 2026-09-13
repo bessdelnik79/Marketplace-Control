@@ -48,7 +48,8 @@ test('native importer creates text, instances, properties and three pages withou
   let serial = 0;
   const all = [];
   class Node {
-    constructor(type) { this.id = String(++serial); this.type = type; this.children = []; this.props = {}; this.fills = []; this.x = 0; this.y = 0; this.width = 100; this.height = 100; all.push(this); }
+    constructor(type) { this.id = String(++serial); this.type = type; this._children = []; this.loaded = type !== 'PAGE'; this.props = {}; this.fills = []; this.x = 0; this.y = 0; this.width = 100; this.height = 100; all.push(this); }
+    get children() { assert.ok(this.loaded, 'Page children accessed before explicit loading'); return this._children; }
     resize(w, h) { assert.ok(w > 0 && h > 0); this.width = w; this.height = h; }
     appendChild(child) { if (child.parent) child.parent.children.splice(child.parent.children.indexOf(child), 1); child.parent = this; this.children.push(child); }
     addComponentProperty(name, type, value) { const key = name + '#' + serial++; this.props[key] = { type, value }; return key; }
@@ -60,8 +61,9 @@ test('native importer creates text, instances, properties and three pages withou
   let resolveDone;
   const done = new Promise(resolve => { resolveDone = resolve; });
   const figma = {
-    root, loadFontAsync: async () => {}, setCurrentPageAsync: async page => { figma.currentPage = page; },
-    createPage: () => { assert.ok(root.children.length < 3, 'Starter page cap'); const p = new Node('PAGE'); root.appendChild(p); return p; },
+    root, loadAllPagesAsync: async () => { for (const page of root.children) page.loaded = true; },
+    loadFontAsync: async () => {}, setCurrentPageAsync: async page => { page.loaded = true; figma.currentPage = page; },
+    createPage: () => { assert.ok(root.children.length < 3, 'Starter page cap'); const p = new Node('PAGE'); p.loaded = true; root.appendChild(p); return p; },
     variables: {
       getLocalVariableCollectionsAsync: async () => collections,
       createVariableCollection: name => { const c = { name, defaultModeId: 'default', renameMode() {} }; collections.push(c); return c; },
