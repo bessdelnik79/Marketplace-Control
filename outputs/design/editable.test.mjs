@@ -5,6 +5,21 @@ import vm from 'node:vm';
 import { design, current, average, renderSvg } from './build-editable.mjs';
 
 function walk(spec) { return [spec, ...(spec.children || []).flatMap(walk)]; }
+test('all vector paths use explicit Figma-compatible M L C Z commands', () => {
+  for (const spec of [...design.screens, design.states, design.styleSheet]) {
+    for (const node of walk(spec).filter(n => n.kind === 'path')) {
+      const tokens = node.path.trim().split(/\s+/);
+      let index = 0;
+      assert.equal(tokens[0], 'M');
+      while (index < tokens.length) {
+        const command = tokens[index++];
+        assert.ok(['M', 'L', 'C', 'Z'].includes(command), node.path);
+        const count = command === 'C' ? 6 : command === 'Z' ? 0 : 2;
+        for (let i = 0; i < count; i++) assert.ok(Number.isFinite(Number(tokens[index++])), node.path);
+      }
+    }
+  }
+});
 test('four screens, desktop 16:9, independent financial and current periods', () => {
   assert.equal(design.screens.length, 4);
   for (const screen of design.screens) {

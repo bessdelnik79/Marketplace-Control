@@ -15,18 +15,18 @@ const text = (name, x, y, value, size = 16, fill = 'text', weight = 400, w = 400
 const group = (name, x, y, w, h, children, props = {}) => ({ kind: 'frame', name, x, y, w, h, children, ...props });
 const line = (name, x, y, w, h = 1) => rect(name, x, y, w, h, 'border');
 const iconPaths = {
-  calendar: 'M4 4H20V21H4Z M4 9H20 M8 1V6 M16 1V6',
-  chevron: 'M6 9L12 15L18 9',
-  right: 'M8 5L15 12L8 19',
-  home: 'M2 11L12 2L22 11 M5 9V22H19V9 M10 22V15H14V22',
-  settings: 'M9 2H15L16 6L20 7L23 12L20 17L16 18L15 22H9L8 18L4 17L1 12L4 7L8 6Z M12 8A4 4 0 1 0 12 16A4 4 0 1 0 12 8',
-  sku: 'M6 3H18L21 7V22H3V7Z M8 3V8H16V3',
-  promo: 'M3 10L19 4V20L3 14Z M6 15L8 22H12L10 16',
-  region: 'M12 23C8 18 3 13 3 9A9 9 0 1 1 21 9C21 13 16 18 12 23Z M12 5A4 4 0 1 0 12 13A4 4 0 1 0 12 5',
-  stock: 'M3 8H21V22H3Z M7 8V3H17V8 M3 13H21',
-  data: 'M3 5C3 0 21 0 21 5V19C21 24 3 24 3 19Z M3 5C3 10 21 10 21 5 M3 12C3 17 21 17 21 12',
-  info: 'M12 2A10 10 0 1 0 12 22A10 10 0 1 0 12 2 M12 10V17 M12 6V7',
-  plus: 'M12 3V21 M3 12H21',
+  calendar: 'M 4 4 L 20 4 L 20 21 L 4 21 Z M 4 9 L 20 9 M 8 1 L 8 6 M 16 1 L 16 6',
+  chevron: 'M 6 9 L 12 15 L 18 9',
+  right: 'M 8 5 L 15 12 L 8 19',
+  home: 'M 2 11 L 12 2 L 22 11 M 5 9 L 5 22 L 19 22 L 19 9 M 10 22 L 10 15 L 14 15 L 14 22',
+  settings: 'M 9 2 L 15 2 L 16 6 L 20 7 L 23 12 L 20 17 L 16 18 L 15 22 L 9 22 L 8 18 L 4 17 L 1 12 L 4 7 L 8 6 Z M 12 8 C 9.7909 8 8 9.7909 8 12 C 8 14.2091 9.7909 16 12 16 C 14.2091 16 16 14.2091 16 12 C 16 9.7909 14.2091 8 12 8 Z',
+  sku: 'M 6 3 L 18 3 L 21 7 L 21 22 L 3 22 L 3 7 Z M 8 3 L 8 8 L 16 8 L 16 3',
+  promo: 'M 3 10 L 19 4 L 19 20 L 3 14 Z M 6 15 L 8 22 L 12 22 L 10 16',
+  region: 'M 12 23 C 8 18 3 13 3 9 C 3 4.0294 7.0294 0 12 0 C 16.9706 0 21 4.0294 21 9 C 21 13 16 18 12 23 Z M 12 5 C 9.7909 5 8 6.7909 8 9 C 8 11.2091 9.7909 13 12 13 C 14.2091 13 16 11.2091 16 9 C 16 6.7909 14.2091 5 12 5 Z',
+  stock: 'M 3 8 L 21 8 L 21 22 L 3 22 Z M 7 8 L 7 3 L 17 3 L 17 8 M 3 13 L 21 13',
+  data: 'M 3 5 C 3 0 21 0 21 5 L 21 19 C 21 24 3 24 3 19 Z M 3 5 C 3 10 21 10 21 5 M 3 12 C 3 17 21 17 21 12',
+  info: 'M 12 2 C 6.4772 2 2 6.4772 2 12 C 2 17.5228 6.4772 22 12 22 C 17.5228 22 22 17.5228 22 12 C 22 6.4772 17.5228 2 12 2 Z M 12 10 L 12 17 M 12 6 L 12 7',
+  plus: 'M 12 3 L 12 21 M 3 12 L 21 12',
 };
 const icon = (name, x, y, type, color = 'accent') => ({ kind: 'path', name, x, y, w: 24, h: 24, path: iconPaths[type], stroke: color, strokeWidth: 1.7 });
 function datePicker(name, x, y, w, dates) {
