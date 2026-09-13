@@ -114,7 +114,11 @@ async function importMarketplaceControl() {
           textNodes[key] = property;
         }
         if (data.kind === 'path') {
-          const property = node.addComponentProperty(key, 'INSTANCE_SWAP', actual.mainComponent.id);
+          // The icon definition is already known; avoid the synchronous
+          // InstanceNode.mainComponent getter forbidden by dynamic-page access.
+          const iconDefinition = icons.get(iconKey(data, theme));
+          if (!iconDefinition) throw new Error('Missing icon definition ' + key);
+          const property = node.addComponentProperty(key, 'INSTANCE_SWAP', iconDefinition.id);
           actual.componentPropertyReferences = { mainComponent: property };
           textNodes[key] = property;
         }

@@ -70,8 +70,9 @@ for (const importer of ['figma-import/code.js', 'scripter-import.js', 'scripter-
     resize(w, h) { assert.ok(w > 0 && h > 0); this.width = w; this.height = h; }
     appendChild(child) { if (child.parent) child.parent.children.splice(child.parent.children.indexOf(child), 1); child.parent = this; this.children.push(child); }
     addComponentProperty(name, type, value) { const key = name + '#' + serial++; this.props[key] = { type, value }; return key; }
-    createInstance() { assert.equal(this.type, 'COMPONENT'); const n = new Node('INSTANCE'); n.width = this.width; n.height = this.height; n.mainComponent = this; return n; }
-    setProperties(values) { for (const [key, value] of Object.entries(values)) { assert.ok(this.mainComponent.props[key], 'Invalid override: ' + key); assert.equal(typeof value, 'string'); } this.overrides = values; }
+    get mainComponent() { throw new Error('Synchronous mainComponent is forbidden with dynamic-page'); }
+    createInstance() { assert.equal(this.type, 'COMPONENT'); const n = new Node('INSTANCE'); n.width = this.width; n.height = this.height; n._mainComponent = this; return n; }
+    setProperties(values) { for (const [key, value] of Object.entries(values)) { assert.ok(this._mainComponent.props[key], 'Invalid override: ' + key); assert.equal(typeof value, 'string'); } this.overrides = values; }
   }
   const root = new Node('DOCUMENT'); root.appendChild(new Node('PAGE'));
   const collections = [];
@@ -110,7 +111,7 @@ for (const importer of ['figma-import/code.js', 'scripter-import.js', 'scripter-
   }
   assert.ok(all.filter(n => n.type === 'INSTANCE').length > 30);
   assert.ok(all.filter(n => n.type === 'COMPONENT' && !n.name.startsWith('Icon/')).every(n => Object.keys(n.props).length > 0));
-  assert.ok(all.filter(n => n.type === 'INSTANCE' && n.name === 'Icon').every(n => Object.values(n.mainComponent.props).length === 0));
+  assert.ok(all.filter(n => n.type === 'INSTANCE' && n.name === 'Icon').every(n => Object.values(n._mainComponent.props).length === 0));
   assert.ok(all.filter(n => n.type === 'COMPONENT').some(n => Object.values(n.props).some(p => p.type === 'INSTANCE_SWAP')));
   assert.ok(all.filter(n => n.type === 'TEXT').every(n => n.fontName.family === 'Inter'));
 });
