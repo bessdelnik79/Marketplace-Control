@@ -1,7 +1,8 @@
 // Native editable layers. Existing layers are never removed or overwritten.
 // Re-running resumes only layers tagged by this version of the importer.
 async function mcImportV2() {
-  if (typeof figma.loadAllPagesAsync === 'function') await figma.loadAllPagesAsync();
+  // Scripter bundles older typings; detect modern methods dynamically.
+  if (typeof figma['loadAllPagesAsync'] === 'function') await figma['loadAllPagesAsync']();
   await figma.loadFontAsync({ family: 'Inter', style: 'Regular' });
   await figma.loadFontAsync({ family: 'Inter', style: 'Medium' });
   await figma.loadFontAsync({ family: 'Inter', style: 'Semi Bold' });
@@ -19,7 +20,7 @@ async function mcImportV2() {
     return found;
   }
   async function selectPage(p) {
-    if (typeof figma.setCurrentPageAsync === 'function') await figma.setCurrentPageAsync(p);
+    if (typeof figma['setCurrentPageAsync'] === 'function') await figma['setCurrentPageAsync'](p);
     else figma.currentPage = p;
   }
   function make(spec, parent, inheritedTheme, key) {
