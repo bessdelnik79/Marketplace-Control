@@ -5,6 +5,20 @@ import vm from 'node:vm';
 import { design, current, average, renderSvg } from './build-editable.mjs';
 
 function walk(spec) { return [spec, ...(spec.children || []).flatMap(walk)]; }
+test('desktop profit omits delay caption and current chart labels are raised and larger', () => {
+  for (const screen of design.screens.filter(s => s.name.startsWith('Desktop'))) {
+    const profit = screen.children.find(n => n.name === 'Прибыль');
+    assert.ok(!profit.children.some(n => n.name === 'Delay'));
+    const now = screen.children.find(n => n.name === 'Сейчас / заказы');
+    for (const name of ['Current label', 'Average label']) {
+      const label = now.children.find(n => n.name === name);
+      assert.equal(label.size, 16);
+      assert.equal(label.y, 286);
+    }
+    assert.equal(now.children.find(n => n.name === 'Unit').size, 14);
+    assert.equal(now.children.find(n => n.name === 'Unit').y, 325);
+  }
+});
 test('all vector paths use explicit Figma-compatible M L C Z commands', () => {
   for (const spec of [...design.screens, design.states, design.styleSheet]) {
     for (const node of walk(spec).filter(n => n.kind === 'path')) {

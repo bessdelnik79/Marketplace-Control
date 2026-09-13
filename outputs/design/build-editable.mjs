@@ -45,6 +45,13 @@ function control(name, x, y, w, date, title, detail, compact = false) {
 }
 function nowBlock(x, y) {
   const kids = [text('Heading', 0, 0, 'СЕЙЧАС · 8–13 сентября', 16, 'text', 600, 460), datePicker('Dates', 0, 44, 340, '8–13 сентября 2026'), text('Orders tab', 10, 105, 'Заказы', 16, 'accent', 500, 90), text('Buyouts tab', 142, 105, 'Выкупы', 16, 'muted', 400, 100), rect('Active underline', 0, 139, 112, 2, 'accent'), line('Inactive underline', 132, 139, 112), text('Metric label', 0, 164, 'ЗАКАЗЫ ЗА ПЕРИОД', 14, 'muted', 500, 400), text('Metric', 0, 194, '42 шт. · 76 800 ₽', 32, 'text', 600, 365), icon('Metric info', 394, 205, 'info', 'muted'), text('Change', 0, 248, '↑ 23,5% к среднему за прошлые периоды', 16, 'success', 400, 460), circle('Current legend', 0, 312, 12, 'accent'), text('Current label', 24, 306, 'Текущие', 14, 'muted', 400, 96), circle('Average legend', 130, 312, 12, 'comparison'), text('Average label', 154, 306, 'Среднее за 4 периода', 14, 'muted', 400, 260), text('Unit', 0, 345, 'Заказы, шт.', 12, 'muted', 400, 100)];
+  for (const label of kids.filter(n => ['Current label', 'Average label', 'Unit'].includes(n.name))) {
+    label.y -= 20;
+    label.size += 2;
+    label.h = label.size * 1.45;
+    if (label.name === 'Unit') label.w = 120;
+  }
+  for (const marker of kids.filter(n => ['Current legend', 'Average legend'].includes(n.name))) marker.y -= 20;
   const baseline = 435;
   for (const tick of [0, 6, 12]) { kids.push(line('Grid ' + tick, 20, baseline - tick * 6, 428)); kids.push(text('Tick ' + tick, -18, baseline - tick * 6 - 8, String(tick), 11, 'muted', 400, 28)); }
   for (let i = 0; i < 6; i++) {
@@ -58,6 +65,8 @@ function desktop(theme) {
   [['SKU', 'sku'], ['Продвижение', 'promo'], ['Регионы', 'region'], ['Остатки', 'stock']].forEach(([label, type], i) => kids.push(nav(label, 16, 252 + i * 60, 244, label, type)));
   kids.push(line('Menu group divider', 32, 506, 212), text('Settings group', 32, 540, 'ДАННЫЕ И НАСТРОЙКИ', 12, 'muted', 500, 225), nav('Добавить данные', 16, 576, 244, 'Добавить данные', 'data'), nav('Настройки', 16, 636, 244, 'Настройки', 'settings'), icon('Help icon', 32, 1004, 'info', 'muted'), text('Help', 76, 1004, 'Помощь', 16, 'muted', 400, 145), datePicker('Business selector', 312, 28, 406, 'Дом и уют'), icon('Settings shortcut', 1840, 42, 'settings', 'text'));
   kids.push(group('Прибыль', 312, 126, 490, 460, [text('Heading', 0, 0, 'ПРИБЫЛЬ ПО ДОСТУПНЫМ ДАННЫМ', 16, 'muted', 600, 490), datePicker('Financial dates', 0, 44, 360, '1–7 сентября 2026'), text('Delay', 0, 100, 'Финансовые данные · итог с задержкой до 14 дней', 12, 'muted', 400, 490), text('Profit amount', 0, 156, '214 300 ₽', 56, 'text', 600, 490), text('Change', 0, 244, '↓ 5,1% к прошлой неделе', 18, 'danger', 400, 490), text('Revenue and expenses', 0, 312, 'Выручка  1 248 600 ₽  ·  Расходы  1 034 300 ₽', 16, 'text', 400, 490), group('Incomplete data', 0, 366, 490, 84, [circle('Warning', 16, 25, 30, 'warning'), text('Mark', 16, 26, '!', 20, 'onAccent', 600, 30, 'CENTER'), text('Missing costs', 64, 18, 'Не указана себестоимость 12 товаров —\nприбыль неполная ·', 14, 'text', 400, 410), text('Fill data', 205, 40, 'Заполнить', 14, 'accent', 500, 200)], { fill: 'warningBg', radius: 8 })]));
+  const profit = kids.find(n => n.name === 'Прибыль');
+  profit.children = profit.children.filter(n => n.name !== 'Delay');
   kids.push(line('Profit now divider', 842, 126, 1, 472), nowBlock(882, 126), line('Now attention divider', 1374, 126, 1, 472));
   kids.push(group('Требует внимания', 1414, 126, 458, 472, [text('Heading', 0, 0, 'ТРЕБУЕТ ВНИМАНИЯ · 4', 16, 'text', 600, 458), line('Header divider', 0, 42, 458), alertRow('Убыток', 0, 64, 458, 'Убыток до продвижения', '−18 400 ₽', 'За неделю 1–7 сентября'), alertRow('Штрафы', 0, 192, 458, 'Штрафы и пени', '12 480 ₽', 'Новые начисления'), alertRow('Возвраты', 0, 320, 458, 'Рост возвратов', '8,6% против 4,1%', 'К прошлому периоду', 'warning'), text('All situations', 0, 446, 'Все ситуации (4)  →', 16, 'accent', 500, 450)]));
   kids.push(line('Main horizontal divider', 312, 628, 1560), text('Investigations heading', 312, 660, 'СТОИТ ПРОВЕРИТЬ', 22, 'text', 600, 864), line('Bottom divider', 1212, 660, 1, 380), text('Control heading', 1260, 660, 'КОНТРОЛЬНЫЕ ТОЧКИ', 22, 'text', 600, 600));
