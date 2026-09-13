@@ -1,0 +1,89 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+import { design, current, average, renderSvg } from './build-editable.mjs';
+
+function walk(spec) { return [spec, ...(spec.children || []).flatMap(walk)]; }
+test('four screens, desktop 16:9, independent financial and current periods', () => {
+  assert.equal(design.screens.length, 4);
+  for (const screen of design.screens) {
+    assert.ok(['Light', 'Dark'].includes(screen.theme));
+    assert.equal(screen.w, screen.name.startsWith('Desktop') ? 1920 : 390);
+    if (screen.w === 1920) {
+      assert.equal(screen.w / screen.h, 16 / 9);
+      const labels = walk(screen).filter(n => n.kind === 'text').map(n => n.text).join('\n');
+      assert.match(labels, /1–7 сентября 2026/);
+      assert.match(labels, /8–13 сентября 2026/);
+      assert.match(labels, /Выкупы/);
+      assert.match(labels, /КОНТРОЛЬНЫЕ ТОЧКИ/);
+      assert.ok(!walk(screen).some(n => /previous|next|back/i.test(n.name) && n.kind === 'path'));
+    }
+  }
+});
+test('six pairs compare daily orders with daily historical mean', () => {
+  assert.equal(current.reduce((a, b) => a + b), 42);
+  assert.equal(average.reduce((a, b) => a + b), 34);
+  assert.equal(((42 / 34 - 1) * 100).toFixed(1), '23.5');
+  const now = design.screens[0].children.find(n => n.name === 'Сейчас / заказы');
+  const days = now.children.filter(n => n.name.startsWith('Day '));
+  assert.equal(days.length, 6);
+  for (const [i, day] of days.entries()) {
+    assert.equal(day.children.find(n => n.name === 'Current bar').h / 6, current[i]);
+    assert.equal(day.children.find(n => n.name === 'Average bar').h / 6, average[i]);
+  }
+});
+test('editable SVG contains live text, no raster images, and valid palette roles', () => {
+  for (const spec of [...design.screens, design.states, design.styleSheet]) {
+    const svg = renderSvg(spec);
+    assert.match(svg, /<text /);
+    assert.ok(!svg.includes('<image') && !svg.includes('undefined'));
+    for (const node of walk(spec)) {
+      assert.ok(Number.isFinite(node.w) && Number.isFinite(node.h) && node.w > 0 && node.h > 0, node.name);
+      for (const role of [node.fill, node.stroke].filter(Boolean)) assert.ok(role in design.palettes.Light && role in design.palettes.Dark, role);
+    }
+  }
+});
+test('native importer creates text, instances, properties and three pages without networking', async () => {
+  let serial = 0;
+  const all = [];
+  class Node {
+    constructor(type) { this.id = String(++serial); this.type = type; this.children = []; this.props = {}; this.fills = []; this.x = 0; this.y = 0; this.width = 100; this.height = 100; all.push(this); }
+    resize(w, h) { assert.ok(w > 0 && h > 0); this.width = w; this.height = h; }
+    appendChild(child) { if (child.parent) child.parent.children.splice(child.parent.children.indexOf(child), 1); child.parent = this; this.children.push(child); }
+    addComponentProperty(name, type, value) { const key = name + '#' + serial++; this.props[key] = { type, value }; return key; }
+    createInstance() { assert.equal(this.type, 'COMPONENT'); const n = new Node('INSTANCE'); n.width = this.width; n.height = this.height; n.mainComponent = this; return n; }
+    setProperties(values) { for (const [key, value] of Object.entries(values)) { assert.ok(this.mainComponent.props[key], 'Invalid override: ' + key); assert.equal(typeof value, 'string'); } this.overrides = values; }
+  }
+  const root = new Node('DOCUMENT'); root.appendChild(new Node('PAGE'));
+  const collections = [];
+  let resolveDone;
+  const done = new Promise(resolve => { resolveDone = resolve; });
+  const figma = {
+    root, loadFontAsync: async () => {}, setCurrentPageAsync: async page => { figma.currentPage = page; },
+    createPage: () => { assert.ok(root.children.length < 3, 'Starter page cap'); const p = new Node('PAGE'); root.appendChild(p); return p; },
+    variables: {
+      getLocalVariableCollectionsAsync: async () => collections,
+      createVariableCollection: name => { const c = { name, defaultModeId: 'default', renameMode() {} }; collections.push(c); return c; },
+      createVariable: () => ({ setValueForMode() {}, setVariableCodeSyntax() {} }),
+      setBoundVariableForPaint: paint => paint,
+    },
+    viewport: { scrollAndZoomIntoView() {} },
+    closePlugin: message => resolveDone(message),
+  };
+  for (const [fn, type] of Object.entries({ createFrame: 'FRAME', createAutoLayout: 'FRAME', createComponent: 'COMPONENT', createRectangle: 'RECTANGLE', createEllipse: 'ELLIPSE', createText: 'TEXT', createVector: 'VECTOR' })) figma[fn] = () => new Node(type);
+  const source = readFileSync(new URL('./figma-import/code.js', import.meta.url), 'utf8');
+  assert.ok(!/fetch\(|XMLHttpRequest|https:\/\//.test(source));
+  vm.runInNewContext(source, { figma });
+  const message = await done;
+  assert.match(message, /^Готово:/);
+  assert.equal(root.children.length, 3);
+  const screens = root.children.find(p => p.name === 'MC · Экраны');
+  assert.equal(screens.children.length, 4);
+  assert.ok(all.filter(n => n.type === 'TEXT').length > 100);
+  assert.ok(all.filter(n => n.type === 'INSTANCE').length > 30);
+  assert.ok(all.filter(n => n.type === 'COMPONENT' && !n.name.startsWith('Icon/')).every(n => Object.keys(n.props).length > 0));
+  assert.ok(all.filter(n => n.type === 'INSTANCE' && n.name === 'Icon').every(n => Object.values(n.mainComponent.props).length === 0));
+  assert.ok(all.filter(n => n.type === 'COMPONENT').some(n => Object.values(n.props).some(p => p.type === 'INSTANCE_SWAP')));
+  assert.ok(all.filter(n => n.type === 'TEXT').every(n => n.fontName.family === 'Inter'));
+});
