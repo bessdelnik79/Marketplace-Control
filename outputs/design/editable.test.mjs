@@ -44,12 +44,14 @@ test('editable SVG contains live text, no raster images, and valid palette roles
     }
   }
 });
-for (const importer of ['figma-import/code.js', 'scripter-import.js']) test(importer + ' creates native layers without networking', async () => {
+for (const importer of ['figma-import/code.js', 'scripter-import.js', 'scripter-recovery.js']) test(importer + ' creates native layers without networking', async () => {
   let serial = 0;
   const all = [];
   class Node {
     constructor(type) { this.id = String(++serial); this.type = type; this._children = []; this.loaded = type !== 'PAGE'; this.props = {}; this.fills = []; this.x = 0; this.y = 0; this.width = 100; this.height = 100; all.push(this); }
     get children() { assert.ok(this.loaded, 'Page children accessed before explicit loading'); return this._children; }
+    getPluginData(key) { return this.data?.[key] || ''; }
+    setPluginData(key, value) { this.data ||= {}; this.data[key] = value; }
     resize(w, h) { assert.ok(w > 0 && h > 0); this.width = w; this.height = h; }
     appendChild(child) { if (child.parent) child.parent.children.splice(child.parent.children.indexOf(child), 1); child.parent = this; this.children.push(child); }
     addComponentProperty(name, type, value) { const key = name + '#' + serial++; this.props[key] = { type, value }; return key; }
@@ -72,6 +74,7 @@ for (const importer of ['figma-import/code.js', 'scripter-import.js']) test(impo
     },
     viewport: { scrollAndZoomIntoView() {} },
     closePlugin: message => resolveDone(message),
+    notify: message => resolveDone(message),
   };
   for (const [fn, type] of Object.entries({ createFrame: 'FRAME', createAutoLayout: 'FRAME', createComponent: 'COMPONENT', createRectangle: 'RECTANGLE', createEllipse: 'ELLIPSE', createText: 'TEXT', createVector: 'VECTOR' })) figma[fn] = () => new Node(type);
   const source = readFileSync(new URL('./' + importer, import.meta.url), 'utf8');
@@ -83,6 +86,13 @@ for (const importer of ['figma-import/code.js', 'scripter-import.js']) test(impo
   const screens = root.children.find(p => p.name === 'MC · Экраны');
   assert.equal(screens.children.length, 4);
   assert.ok(all.filter(n => n.type === 'TEXT').length > 100);
+  if (importer === 'scripter-recovery.js') {
+    const count = all.length;
+    await vm.runInNewContext('(async () => {\n' + source + '\n})()', { figma });
+    assert.equal(all.length, count, 'Recovery rerun must not duplicate layers');
+    assert.ok(!source.includes('print('));
+    return;
+  }
   assert.ok(all.filter(n => n.type === 'INSTANCE').length > 30);
   assert.ok(all.filter(n => n.type === 'COMPONENT' && !n.name.startsWith('Icon/')).every(n => Object.keys(n.props).length > 0));
   assert.ok(all.filter(n => n.type === 'INSTANCE' && n.name === 'Icon').every(n => Object.values(n.mainComponent.props).length === 0));

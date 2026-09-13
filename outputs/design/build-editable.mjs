@@ -139,6 +139,7 @@ export function build(output = directory) {
     .replace("figma.closePlugin('Готово: 4 редактируемых экрана, компоненты и стили.');", "print('Готово: 4 редактируемых экрана, компоненты и стили.');")
     .replace("importMarketplaceControl().catch(error => figma.closePlugin('Импорт остановлен: ' + error.message));", 'await importMarketplaceControl();');
   writeFileSync(join(output, 'scripter-import.js'), 'const MC_DESIGN = ' + JSON.stringify(design) + ';\n' + "async function setPage(page) { if (typeof figma.setCurrentPageAsync === 'function') await figma.setCurrentPageAsync(page); else figma.currentPage = page; }\n" + scripterRuntime);
+  writeFileSync(join(output, 'scripter-recovery.js'), 'const MC_DESIGN = ' + JSON.stringify(design) + ';\n' + readFileSync(join(directory, 'scripter-runtime.js'), 'utf8'));
   console.log('Built four screens, states, styles and a native Figma importer.');
 }
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) build();
