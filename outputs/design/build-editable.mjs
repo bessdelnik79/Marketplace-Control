@@ -131,6 +131,14 @@ export function build(output = directory) {
   writeFileSync(join(output, 'design-spec.json'), JSON.stringify(design, null, 2) + '\n');
   const runtime = readFileSync(join(directory, 'figma-import/runtime.js'), 'utf8');
   writeFileSync(join(output, 'figma-import/code.js'), 'const MC_DESIGN = ' + JSON.stringify(design) + ';\n' + runtime);
+  const scripterRuntime = runtime
+    .replace('await figma.loadAllPagesAsync();', "if (typeof figma.loadAllPagesAsync === 'function') await figma.loadAllPagesAsync();")
+    .replace("if (existing.some(Boolean)) throw new Error('Макет MC уже импортирован. Используйте другой файл, чтобы не создавать дубликаты.');", "if (existing.slice(0, 2).some(p => p && p.children.length)) throw new Error('На страницах экранов или компонентов уже есть слои. Импорт остановлен без удаления данных.');")
+    .replace('const p = figma.root.children.find', 'const p = existing[i] || figma.root.children.find')
+    .replaceAll('await figma.setCurrentPageAsync(', 'await setPage(')
+    .replace("figma.closePlugin('Готово: 4 редактируемых экрана, компоненты и стили.');", "print('Готово: 4 редактируемых экрана, компоненты и стили.');")
+    .replace("importMarketplaceControl().catch(error => figma.closePlugin('Импорт остановлен: ' + error.message));", 'await importMarketplaceControl();');
+  writeFileSync(join(output, 'scripter-import.js'), 'const MC_DESIGN = ' + JSON.stringify(design) + ';\n' + "async function setPage(page) { if (typeof figma.setCurrentPageAsync === 'function') await figma.setCurrentPageAsync(page); else figma.currentPage = page; }\n" + scripterRuntime);
   console.log('Built four screens, states, styles and a native Figma importer.');
 }
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) build();

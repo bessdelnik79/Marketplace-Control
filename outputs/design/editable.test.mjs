@@ -44,7 +44,7 @@ test('editable SVG contains live text, no raster images, and valid palette roles
     }
   }
 });
-test('native importer creates text, instances, properties and three pages without networking', async () => {
+for (const importer of ['figma-import/code.js', 'scripter-import.js']) test(importer + ' creates native layers without networking', async () => {
   let serial = 0;
   const all = [];
   class Node {
@@ -74,9 +74,9 @@ test('native importer creates text, instances, properties and three pages withou
     closePlugin: message => resolveDone(message),
   };
   for (const [fn, type] of Object.entries({ createFrame: 'FRAME', createAutoLayout: 'FRAME', createComponent: 'COMPONENT', createRectangle: 'RECTANGLE', createEllipse: 'ELLIPSE', createText: 'TEXT', createVector: 'VECTOR' })) figma[fn] = () => new Node(type);
-  const source = readFileSync(new URL('./figma-import/code.js', import.meta.url), 'utf8');
+  const source = readFileSync(new URL('./' + importer, import.meta.url), 'utf8');
   assert.ok(!/fetch\(|XMLHttpRequest|https:\/\//.test(source));
-  vm.runInNewContext(source, { figma });
+  vm.runInNewContext('(async () => {\n' + source + '\n})().catch(error => figma.closePlugin(error.message));', { figma, print: resolveDone });
   const message = await done;
   assert.match(message, /^Готово:/);
   assert.equal(root.children.length, 3);
