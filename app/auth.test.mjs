@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSessionToken, createVerificationCode, hashPassword, hashToken, normalizeEmail, validateRegistration, verifyPassword } from './auth.mjs';
+import { createSessionToken, createVerificationCode, hashPassword, hashToken, normalizeEmail, requiresEmailVerification, validateRegistration, verifyPassword } from './auth.mjs';
+
+test('email verification can only be disabled explicitly outside production', () => {
+  assert.equal(requiresEmailVerification({}), true);
+  assert.equal(requiresEmailVerification({ NODE_ENV: 'development', EMAIL_VERIFICATION_REQUIRED: 'false' }), false);
+  assert.equal(requiresEmailVerification({ NODE_ENV: 'production', EMAIL_VERIFICATION_REQUIRED: 'false' }), true);
+  assert.equal(requiresEmailVerification({ EMAIL_VERIFICATION_REQUIRED: 'true' }), true);
+});
 
 test('registration data is normalized and validated', () => {
   const result=validateRegistration({name:'  Анна   Смирнова  ',email:' ANNA@Example.COM ',password:'очень-надёжный-пароль'});

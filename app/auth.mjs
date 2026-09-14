@@ -4,6 +4,10 @@ import { promisify } from 'node:util';
 const scrypt = promisify(scryptCallback);
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+export function requiresEmailVerification(env = process.env) {
+  return env.NODE_ENV === 'production' || env.EMAIL_VERIFICATION_REQUIRED !== 'false';
+}
+
 export function normalizeEmail(value) {
   return String(value ?? '').trim().toLowerCase();
 }
