@@ -60,6 +60,42 @@ async function withUserContext(id, action) {
   } finally { client.release(); }
 }
 
+async function withOwnedBusinessContext(userId, action) {
+  return withUserContext(userId, async client => {
+    const membership = (await client.query(
+      `select business_id,role from mc.memberships where user_id=$1 order by created_at limit 1`,
+      [userId]
+    )).rows[0];
+    if (!membership) throw new Error('business_not_found');
+    await client.query("select set_config('app.business_id',$1,true)", [membership.business_id]);
+    return action(client, membership.business_id, membership.role);
+  });
+}
+
+export async function listStores(userId) {
+  return withOwnedBusinessContext(userId, async (client, businessId) => (await client.query(
+    `select s.id,s.name,s.status,s.external_account_id,
+            exists(select 1 from mc.connections c where c.business_id=s.business_id and c.store_id=s.id and c.status='active') as connected
+       from mc.stores s
+      where s.business_id=$1 and s.status<>'archived'
+      order by s.created_at,s.id`,
+    [businessId]
+  )).rows);
+}
+
+export async function createPendingStore(userId, name) {
+  const cleanName = String(name ?? '').trim().replace(/\s+/g, ' ');
+  if (cleanName.length < 2 || cleanName.length > 80) throw new Error('invalid_store_name');
+  return withOwnedBusinessContext(userId, async (client, businessId, role) => {
+    if (!['owner','editor'].includes(role)) throw new Error('store_write_forbidden');
+    return (await client.query(
+    `insert into mc.stores(business_id,external_account_id,name,status)
+     values($1,null,$2,'paused') returning id,name,status`,
+    [businessId, cleanName]
+    )).rows[0];
+  });
+}
+
 export async function markVerified(id){await withUserContext(id, client => client.query(`update mc.users set email_verified_at=now() where id=$1`,[id]));}
 export async function takeLimit(key,limit,minutes=15){return (await pool.query(`insert into mc.auth_rate_limits(bucket_key,attempts,window_started_at,expires_at) values($1,1,now(),now()+make_interval(mins=>$3)) on conflict(bucket_key) do update set attempts=case when mc.auth_rate_limits.expires_at<=now() then 1 else mc.auth_rate_limits.attempts+1 end,window_started_at=case when mc.auth_rate_limits.expires_at<=now() then now() else mc.auth_rate_limits.window_started_at end,expires_at=case when mc.auth_rate_limits.expires_at<=now() then now()+make_interval(mins=>$3) else mc.auth_rate_limits.expires_at end returning attempts,attempts<=$2 allowed`,[key,limit,minutes])).rows[0];}
 export async function saveOauthState(hash){await pool.query(`insert into mc.auth_oauth_states(state_hash,provider,expires_at) values($1,'yandex',now()+interval '10 minutes')`,[hash]);}

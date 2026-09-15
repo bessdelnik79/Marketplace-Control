@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, mkdir, readdir } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 const root = fileURLToPath(new URL('../../', import.meta.url));
@@ -25,9 +25,8 @@ async function insert(table, values) {
 }
 
 try {
-  await db.exec(await readFile(path.join(root,'db/migrations/001_initial.sql'),'utf8'));
-  await db.exec(await readFile(path.join(root,'db/migrations/002_password_auth.sql'),'utf8'));
-  await db.exec(await readFile(path.join(root,'db/migrations/003_registration_protection.sql'),'utf8'));
+  const migrations=(await readdir(path.join(root,'db/migrations'))).filter(name=>/^\d+_.+\.sql$/.test(name)).sort();
+  for(const migration of migrations)await db.exec(await readFile(path.join(root,'db/migrations',migration),'utf8'));
   pass('all migrations apply atomically to empty PostgreSQL');
   const version = (await one('select version()')).version;
   console.log(version);
@@ -36,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,3);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,5);
   pass('password identity and expiring session are stored by migration 2');
   const b = await insert('businesses',{name:'Business A'});
   await insert('memberships',{business_id:b.id,user_id:user.id});
@@ -51,7 +50,10 @@ try {
   assert.equal(byCode.pro.product_limit,1000);
   assert.equal(byCode.plus.price,null);
   pass('new business receives free plan; paid prices remain unconfigured');
-  const store = await insert('stores',{business_id:b.id,external_account_id:'cabinet-a',name:'A'});
+  const store = await insert('stores',{business_id:b.id,external_account_id:null,name:'A',status:'paused'});
+  assert.equal(store.external_account_id,null);
+  await q("update mc.stores set external_account_id='cabinet-a',status='active' where id=$1",[store.id]);
+  await rejects("update mc.stores set external_account_id='cabinet-other' where id=$1",[store.id],/cannot be changed/,'assigned marketplace account is immutable');
   await rejects("insert into mc.stores(business_id,external_account_id,name) values($1,'extra','Extra')",[b.id],/store limit/,'free plan blocks second store');
   const product = async (s,n) => insert('products',{business_id:s.business_id,store_id:s.id,wb_article:n,seller_article:'Seller-'+n});
   const products = [];
@@ -80,7 +82,7 @@ try {
 
   const b2 = await insert('businesses',{name:'Business B'});
   await insert('memberships',{business_id:b2.id,user_id:user.id});
-  const store2 = await insert('stores',{business_id:b2.id,external_account_id:'cabinet-b',name:'B'});
+  const store2 = await insert('stores',{business_id:b2.id,external_account_id:'cabinet-b',name:'B',status:'active'});
   const foreign = await product(store2,123451);
   await rejects('insert into mc.variants(business_id,store_id,product_id,external_variant_id) values($1,$2,$3,$4)',[b.id,store.id,foreign.id,'X'],/foreign key/,'foreign store product cannot be linked');
   pass('same WB article is allowed in a different store');
@@ -180,6 +182,8 @@ try {
   assert.equal((await one('select count(*)::int as n from mc.selected_products')).n,3);
   pass('non-owner role sees only current business, including views');
   await context('',user.id);
+  assert.equal((await one('select count(*)::int as n from mc.memberships where user_id=$1',[user.id])).n,2);
+  pass('authenticated user can discover own business before tenant context is set');
   assert.equal((await one('select count(*)::int as n from mc.products')).n,0);
   pass('missing tenant context fails closed');
   await db.exec('reset role;');
@@ -197,7 +201,7 @@ try {
   const custom = await insert('billing_plans',{code:'test_four',name:'Four products / two stores'});
   const customV = await insert('billing_plan_versions',{plan_id:custom.id,version_no:1,product_limit:4,store_limit:2,price:123,billing_period:'month'});
   await q('update mc.subscriptions set plan_version_id=$1 where business_id=$2',[customV.id,b.id]);
-  const extra = await insert('stores',{business_id:b.id,external_account_id:'a-second',name:'A second'});
+  const extra = await insert('stores',{business_id:b.id,external_account_id:'a-second',name:'A second',status:'active'});
   const ep1 = await product(extra,9991), ep2 = await product(extra,9992);
   const extraDoc = await insert('source_documents',{business_id:b.id,store_id:extra.id,origin:'wb_api',document_type:'catalog',checksum:'cat-extra',completeness:'partial'});
   await rejects(selectSql,[extra.id,extraDoc.id,[ep1.id]],/complete WB catalog/,'selection waits for complete initial catalog');
@@ -210,7 +214,7 @@ try {
 
   const isolated = await insert('businesses',{name:'Deferred selection test'});
   await insert('memberships',{business_id:isolated.id,user_id:user.id});
-  const isolatedStore = await insert('stores',{business_id:isolated.id,external_account_id:'isolated',name:'isolated'});
+  const isolatedStore = await insert('stores',{business_id:isolated.id,external_account_id:'isolated',name:'isolated',status:'active'});
   const isolatedDoc = await insert('source_documents',{business_id:isolated.id,store_id:isolatedStore.id,origin:'wb_api',document_type:'catalog',checksum:'isolated',completeness:'complete'});
   await rejects('insert into mc.product_selections(business_id,store_id,plan_version_id,catalog_document_id,confirmed_by,product_limit_snapshot) values($1,$2,$3,$4,$5,3)',[isolated.id,isolatedStore.id,byCode.free.id,isolatedDoc.id,user.id],/nonempty and confirmed/,'cannot commit an unfinished selection header');
 
