@@ -21,6 +21,16 @@ export function validateRegistration({ name, email, password }) {
   return { value: { name: cleanName, email: cleanEmail, password: String(password) } };
 }
 
+export function validatePasswordChange({ currentPassword, newPassword, confirmPassword }) {
+  if (!String(currentPassword ?? '')) return { error: 'Введите текущий пароль.' };
+  if (String(newPassword ?? '').length < 10 || String(newPassword ?? '').length > 128) {
+    return { error: 'Новый пароль должен содержать от 10 до 128 символов.' };
+  }
+  if (newPassword !== confirmPassword) return { error: 'Новые пароли не совпадают.' };
+  if (newPassword === currentPassword) return { error: 'Новый пароль должен отличаться от текущего.' };
+  return { value: { currentPassword: String(currentPassword), newPassword: String(newPassword) } };
+}
+
 export async function hashPassword(password) {
   const salt = randomBytes(16);
   const derived = await scrypt(password, salt, 64, { N: 16384, r: 8, p: 1 });

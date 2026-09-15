@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSessionToken, createVerificationCode, hashPassword, hashToken, normalizeEmail, requiresEmailVerification, validateRegistration, verifyPassword } from './auth.mjs';
+import { createSessionToken, createVerificationCode, hashPassword, hashToken, normalizeEmail, requiresEmailVerification, validatePasswordChange, validateRegistration, verifyPassword } from './auth.mjs';
 
 test('email verification can only be disabled explicitly outside production', () => {
   assert.equal(requiresEmailVerification({}), true);
@@ -18,6 +18,12 @@ test('weak registration data is rejected', () => {
   assert.match(validateRegistration({name:'А',email:'bad',password:'123'}).error,/имя/i);
   assert.match(validateRegistration({name:'Анна',email:'bad',password:'1234567890'}).error,/email/i);
   assert.match(validateRegistration({name:'Анна',email:'a@b.ru',password:'123'}).error,/пароль/i);
+});
+test('password change requires the current password and matching strong replacement', () => {
+  assert.match(validatePasswordChange({currentPassword:'',newPassword:'новый-пароль',confirmPassword:'новый-пароль'}).error,/текущий/i);
+  assert.match(validatePasswordChange({currentPassword:'старый-пароль',newPassword:'короткий',confirmPassword:'короткий'}).error,/от 10 до 128/i);
+  assert.match(validatePasswordChange({currentPassword:'старый-пароль',newPassword:'новый-пароль-2026',confirmPassword:'другой-пароль-2026'}).error,/не совпадают/i);
+  assert.deepEqual(validatePasswordChange({currentPassword:'старый-пароль',newPassword:'новый-пароль-2026',confirmPassword:'новый-пароль-2026'}).value,{currentPassword:'старый-пароль',newPassword:'новый-пароль-2026'});
 });
 test('password hash verifies only the original password', async () => {
   const hash=await hashPassword('длинный секрет 2026');

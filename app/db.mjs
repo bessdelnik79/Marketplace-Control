@@ -96,6 +96,38 @@ export async function createPendingStore(userId, name) {
   });
 }
 
+export async function updateProfile(userId, displayName) {
+  const cleanName = String(displayName ?? '').trim().replace(/\s+/g, ' ');
+  if (cleanName.length < 2 || cleanName.length > 80) throw new Error('invalid_display_name');
+  return withUserContext(userId, async client => (await client.query(
+    `update mc.users set display_name=$2 where id=$1 returning id,display_name,email`,
+    [userId, cleanName]
+  )).rows[0]);
+}
+
+export async function getPasswordCredential(userId) {
+  return withUserContext(userId, async client => (await client.query(
+    `select password_hash,password_changed_at from mc.auth_password_credentials where user_id=$1`,
+    [userId]
+  )).rows[0] ?? null);
+}
+
+export async function replacePassword(userId, passwordHash, currentTokenHash) {
+  return withUserContext(userId, async client => {
+    const updated = await client.query(
+      `update mc.auth_password_credentials
+          set password_hash=$2,password_changed_at=now()
+        where user_id=$1`,
+      [userId, passwordHash]
+    );
+    if (updated.rowCount !== 1) throw new Error('password_login_not_available');
+    await client.query(
+      `delete from mc.auth_sessions where user_id=$1 and token_hash<>$2`,
+      [userId, currentTokenHash]
+    );
+  });
+}
+
 export async function markVerified(id){await withUserContext(id, client => client.query(`update mc.users set email_verified_at=now() where id=$1`,[id]));}
 export async function takeLimit(key,limit,minutes=15){return (await pool.query(`insert into mc.auth_rate_limits(bucket_key,attempts,window_started_at,expires_at) values($1,1,now(),now()+make_interval(mins=>$3)) on conflict(bucket_key) do update set attempts=case when mc.auth_rate_limits.expires_at<=now() then 1 else mc.auth_rate_limits.attempts+1 end,window_started_at=case when mc.auth_rate_limits.expires_at<=now() then now() else mc.auth_rate_limits.window_started_at end,expires_at=case when mc.auth_rate_limits.expires_at<=now() then now()+make_interval(mins=>$3) else mc.auth_rate_limits.expires_at end returning attempts,attempts<=$2 allowed`,[key,limit,minutes])).rows[0];}
 export async function saveOauthState(hash){await pool.query(`insert into mc.auth_oauth_states(state_hash,provider,expires_at) values($1,'yandex',now()+interval '10 minutes')`,[hash]);}
