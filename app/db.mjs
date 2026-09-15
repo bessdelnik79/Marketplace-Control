@@ -75,8 +75,9 @@ async function withOwnedBusinessContext(userId, action) {
 export async function listStores(userId) {
   return withOwnedBusinessContext(userId, async (client, businessId) => (await client.query(
     `select s.id,s.name,s.status,s.external_account_id,
-            exists(select 1 from mc.connections c where c.business_id=s.business_id and c.store_id=s.id and c.status='active') as connected
+            (c.status='active') as connected,c.status as connection_status,c.scopes,c.last_checked_at
        from mc.stores s
+       left join mc.connections c on c.business_id=s.business_id and c.store_id=s.id
       where s.business_id=$1 and s.status<>'archived'
       order by s.created_at,s.id`,
     [businessId]
@@ -93,6 +94,41 @@ export async function createPendingStore(userId, name) {
      values($1,null,$2,'paused') returning id,name,status`,
     [businessId, cleanName]
     )).rows[0];
+  });
+}
+
+export async function saveWbConnection(userId, {storeId,sellerId,scopes,encrypted}) {
+  return withOwnedBusinessContext(userId, async (client, businessId, role) => {
+    if (!['owner','editor'].includes(role)) throw new Error('connection_write_forbidden');
+    const store=(await client.query(
+      `select id,external_account_id from mc.stores
+        where business_id=$1 and id=$2 and marketplace_code='wb' and status<>'archived'
+        for update`,[businessId,storeId]
+    )).rows[0];
+    if(!store)throw new Error('store_not_found');
+    if(store.external_account_id&&store.external_account_id!==sellerId)throw new Error('store_account_mismatch');
+    await client.query(`update mc.stores set external_account_id=$3,status='active' where business_id=$1 and id=$2`,[businessId,storeId,sellerId]);
+    const existing=(await client.query(`select id from mc.connections where business_id=$1 and store_id=$2`,[businessId,storeId])).rows[0];
+    const connectionId=existing?.id??randomUUID();
+    const connection=(await client.query(
+      `insert into mc.connections(id,business_id,store_id,secret_ref,scopes,status,last_checked_at)
+       values($1,$2,$3,$4,$5,'active',now())
+       on conflict(store_id) do update set secret_ref=excluded.secret_ref,scopes=excluded.scopes,status='active',last_checked_at=now()
+       returning id,status,last_checked_at`,
+      [connectionId,businessId,storeId,`database:${connectionId}`,scopes]
+    )).rows[0];
+    await client.query(
+      `insert into mc.connection_secrets(business_id,connection_id,ciphertext,nonce,auth_tag,key_version)
+       values($1,$2,$3,$4,$5,$6)
+       on conflict(connection_id) do update set ciphertext=excluded.ciphertext,nonce=excluded.nonce,auth_tag=excluded.auth_tag,key_version=excluded.key_version,updated_at=now()`,
+      [businessId,connection.id,encrypted.ciphertext,encrypted.nonce,encrypted.authTag,encrypted.keyVersion]
+    );
+    for(const sourceType of ['catalog','financial_reports'])await client.query(
+      `insert into mc.sync_streams(business_id,store_id,source_type,next_run_at,status)
+       values($1,$2,$3,now(),'active') on conflict(store_id,source_type) do update set status='active',next_run_at=now()`,
+      [businessId,storeId,sourceType]
+    );
+    return connection;
   });
 }
 

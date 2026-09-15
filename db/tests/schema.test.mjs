@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,5);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,6);
   pass('password identity and expiring session are stored by migration 2');
   const b = await insert('businesses',{name:'Business A'});
   await insert('memberships',{business_id:b.id,user_id:user.id});
@@ -53,6 +53,10 @@ try {
   const store = await insert('stores',{business_id:b.id,external_account_id:null,name:'A',status:'paused'});
   assert.equal(store.external_account_id,null);
   await q("update mc.stores set external_account_id='cabinet-a',status='active' where id=$1",[store.id]);
+  const connection=await insert('connections',{business_id:b.id,store_id:store.id,secret_ref:'database:test-secret',scopes:['content','analytics','statistics','finance'],status:'active'});
+  await q("insert into mc.connection_secrets(business_id,connection_id,ciphertext,nonce,auth_tag) values($1,$2,decode('abcd','hex'),decode(repeat('01',12),'hex'),decode(repeat('02',16),'hex'))",[b.id,connection.id]);
+  assert.equal((await one('select count(*)::int as n from mc.connection_secrets where connection_id=$1',[connection.id])).n,1);
+  await rejects("insert into mc.connections(business_id,store_id,secret_ref) values($1,$2,'database:duplicate')",[b.id,store.id],/unique constraint/,'store has only one replaceable encrypted connection');
   await rejects("update mc.stores set external_account_id='cabinet-other' where id=$1",[store.id],/cannot be changed/,'assigned marketplace account is immutable');
   await rejects("insert into mc.stores(business_id,external_account_id,name) values($1,'extra','Extra')",[b.id],/store limit/,'free plan blocks second store');
   const product = async (s,n) => insert('products',{business_id:s.business_id,store_id:s.id,wb_article:n,seller_article:'Seller-'+n});
