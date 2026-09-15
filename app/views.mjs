@@ -1,3 +1,4 @@
+import { overviewPage } from './ui.mjs';
 const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 
 function shell({ title, body }) {
@@ -17,5 +18,5 @@ export function verifyPage({ email, error = '', devCode = '' }) {
 }
 
 export function dashboardPage(user) {
-  return shell({ title: 'Обзор', body: `<header class="topbar">${logo()}<div class="account"><span>${escapeHtml(user.display_name)}</span><form method="post" action="/logout"><button class="quiet" type="submit">Выйти</button></form></div></header><main class="dashboard"><p class="eyebrow">Обзор</p><h1>Здравствуйте, ${escapeHtml(user.display_name)}!</h1><p class="dashboard-lead">Аккаунт создан. Следующий шаг — подключить магазин Wildberries.</p><section class="welcome-card"><div class="check">✓</div><div><h2>Регистрация завершена</h2><p>Для вашего бизнеса подключён бесплатный тариф: до 3 товаров и 1 магазина.</p></div><button disabled>Подключение магазина — скоро</button></section></main>` });
+  return overviewPage(user);
 }

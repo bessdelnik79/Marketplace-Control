@@ -1,0 +1,36 @@
+(() => {
+  const $ = (s, root=document) => root.querySelector(s);
+  const all = s => [...document.querySelectorAll(s)];
+  const storage = {get(key){try{return localStorage.getItem(key)}catch{return null}},set(key,value){try{localStorage.setItem(key,value);return true}catch{return false}},remove(key){try{localStorage.removeItem(key)}catch{}}};
+  const accountKey = `mc-profile:${document.body.dataset.account}`;
+  const media = matchMedia('(prefers-color-scheme: dark)');
+  let theme = storage.get('mc-theme') || 'system';
+  function applyTheme(value) {theme=value;document.documentElement.dataset.theme=value==='system'?(media.matches?'dark':'light'):value;all('[data-theme-choice]').forEach(b=>{b.classList.toggle('selected',b.dataset.themeChoice===value);b.setAttribute('aria-pressed',String(b.dataset.themeChoice===value))});}
+  applyTheme(theme);media.addEventListener('change',()=>applyTheme(theme));
+  all('[data-theme-choice]').forEach(b=>b.addEventListener('click',()=>{applyTheme(b.dataset.themeChoice);storage.set('mc-theme',theme)}));
+  function toast(text){$('.toast').textContent=text;$('.toast').classList.add('visible');clearTimeout(toast.timer);toast.timer=setTimeout(()=>$('.toast').classList.remove('visible'),4000)}
+  const dialog=$('#ui-dialog');
+  function openDialog(content){$('#dialog-content').innerHTML=content;dialog.showModal()}
+  dialog.addEventListener('click',e=>{if(e.target===dialog){const r=dialog.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)dialog.close()}});
+  $('[data-menu]').addEventListener('click',()=>document.body.classList.toggle('menu-open'));
+  document.addEventListener('keydown',e=>{if(e.key==='Escape')document.body.classList.remove('menu-open')});
+  document.addEventListener('click',e=>{if(document.body.classList.contains('menu-open')&&!e.target.closest('.sidebar')&&!e.target.closest('[data-menu]'))document.body.classList.remove('menu-open')});
+  all('.anchor-tabs a').forEach(a=>a.addEventListener('click',()=>{all('.anchor-tabs a').forEach(x=>x.classList.remove('selected'));a.classList.add('selected')}));
+  all('[data-calendar]').forEach(button=>button.addEventListener('click',()=>{
+    openDialog(`<h2>Выберите даты</h2><p>Даты меняют подпись периода. Демонстрационные показатели остаются прежними.</p><form id="date-form"><label>Начало<input type="date" name="start" value="${button.dataset.start}" required></label><label>Конец<input type="date" name="end" value="${button.dataset.end}" required></label><button class="outline-button" type="submit">Применить</button></form>`);
+    $('#date-form').addEventListener('submit',e=>{e.preventDefault();const f=e.target,start=f.elements.start.value,end=f.elements.end.value;if(start>end){f.elements.end.setCustomValidity('Конец периода должен быть не раньше начала');f.elements.end.reportValidity();return}f.elements.end.setCustomValidity('');button.dataset.start=start;button.dataset.end=end;const fmt=v=>new Date(v+'T12:00:00').toLocaleDateString('ru-RU',{day:'numeric',month:'long',year:'numeric'});$('span',button).textContent=`${fmt(start)} — ${fmt(end)}`;dialog.close();toast('Период выбран')});
+    $('#date-form input[name=end]').addEventListener('input',e=>e.target.setCustomValidity(''));
+  }));
+  all('[data-period]').forEach(button=>button.addEventListener('click',()=>{all('[data-period]').forEach(b=>b.classList.toggle('selected',b===button));$('[data-calendar="mobile-profit"]').click()}));
+  $('[data-info]')?.addEventListener('click',()=>{$('.comparison-info').hidden=!$('.comparison-info').hidden});
+  $('[data-info]')?.addEventListener('mouseenter',()=>{$('.comparison-info').hidden=false});
+  $('[data-info]')?.addEventListener('focus',()=>{$('.comparison-info').hidden=false});
+  $('[data-info]')?.addEventListener('mouseleave',()=>{$('.comparison-info').hidden=true});
+  $('[data-info]')?.addEventListener('blur',()=>{$('.comparison-info').hidden=true});
+  all('[data-metric]').forEach(button=>button.addEventListener('click',()=>{const orders=button.dataset.metric==='orders';all('[data-metric]').forEach(b=>b.setAttribute('aria-selected',String(b===button)));$('#metric-total').textContent=orders?'42 шт. · 76 800 ₽':'31 шт. · 58 400 ₽';$('#metric-change').textContent=orders?'↑ 23,5%':'↑ 10,7%';$('#average-total').textContent=orders?'34 заказа · 62 100 ₽':'28 выкупов · 52 800 ₽';$('.orders-chart').setAttribute('aria-label',orders?'Заказы: текущие и среднее за 4 периода':'Выкупы: текущие и среднее за 4 периода');all('.bar').forEach((bar,i)=>{const index=Math.floor(i/2);const v=orders?Number(bar.dataset[bar.classList.contains('current')?'current':'average']):(bar.classList.contains('current')?[5,6,4,5,6,5]:[4,5,4,4,6,5])[index];bar.style.setProperty('--value',v);$('span',bar).textContent=v})}));
+  $('[data-token-eye]')?.addEventListener('click',()=>{const input=$('#api-token');input.type=input.type==='password'?'text':'password';$('[data-token-eye]').setAttribute('aria-label',input.type==='text'?'Скрыть демонстрационный токен':'Показать демонстрационный токен')});
+  const modalTexts={token:['Замена токена','Подключение Wildberries появится на следующем этапе. В этом интерфейсе токены не отправляются и не сохраняются.'], 'token-help':['Подключение Wildberries','Здесь будет инструкция подключения магазина. Сейчас показан демонстрационный магазин.'],cost:['Себестоимость','Форма внесения себестоимости готовится.'],expense:['Дополнительные расходы','Форма внесения расходов готовится.'],tax:['Настройка налогов','Форма налоговых параметров готовится.']};
+  all('[data-modal]').forEach(b=>b.addEventListener('click',()=>{const [title,text]=modalTexts[b.dataset.modal];openDialog(`<h2>${title}</h2><p>${text}</p><a href="/settings#data">Данные для расчёта →</a>`)}));
+  const form=$('#account-form');
+  if(form){let profile;try{profile=JSON.parse(storage.get(accountKey))}catch{};if(profile){form.elements.displayName.value=profile.name||form.elements.displayName.value;form.elements.displayEmail.value=profile.email||form.elements.displayEmail.value};let saved={name:form.elements.displayName.value,email:form.elements.displayEmail.value,theme};form.addEventListener('submit',e=>{e.preventDefault();const p={name:form.elements.displayName.value.trim(),email:form.elements.displayEmail.value.trim()};if(p.name.length<2){form.elements.displayName.setCustomValidity('Введите имя от двух символов');form.elements.displayName.reportValidity();return}form.elements.displayName.setCustomValidity('');if(storage.set(accountKey,JSON.stringify(p))&&storage.set('mc-theme',theme)){saved={...p,theme};toast('Изменения сохранены в этом браузере')}else toast('Браузер не разрешает сохранение настроек')});form.elements.displayName.addEventListener('input',e=>e.target.setCustomValidity(''));$('[data-reset-settings]').addEventListener('click',()=>{form.elements.displayName.value=saved.name;form.elements.displayEmail.value=saved.email;applyTheme(saved.theme);storage.set('mc-theme',saved.theme);toast('Изменения отменены')});$('[data-logout]').addEventListener('click',()=>{storage.remove(accountKey);const f=document.createElement('form');f.method='post';f.action='/logout';document.body.append(f);f.submit()})}
+})();
