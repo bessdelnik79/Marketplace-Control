@@ -97,6 +97,30 @@ export async function createPendingStore(userId, name) {
   });
 }
 
+export async function getBillingSummary(userId) {
+  return withOwnedBusinessContext(userId, async (client, businessId) => {
+    const current=(await client.query(
+      `select p.code,p.name,v.id as plan_version_id,v.product_limit,v.store_limit,
+              v.price::text,v.currency,v.billing_period,s.status,s.period_end,s.cancel_at_period_end
+         from mc.subscriptions s
+         join mc.billing_plan_versions v on v.id=s.plan_version_id
+         join mc.billing_plans p on p.id=v.plan_id
+        where s.business_id=$1`,[businessId]
+    )).rows[0]??null;
+    const plans=(await client.query(
+      `select p.code,p.name,v.id as plan_version_id,v.product_limit,v.store_limit,
+              v.price::text,v.currency,v.billing_period
+         from mc.billing_plans p
+         join lateral (
+           select * from mc.billing_plan_versions candidate
+            where candidate.plan_id=p.id order by candidate.version_no desc limit 1
+         ) v on true
+        order by case p.code when 'free' then 1 when 'minimum' then 2 when 'plus' then 3 when 'pro' then 4 else 5 end`
+    )).rows;
+    return {current,plans};
+  });
+}
+
 export async function saveWbConnection(userId, {storeId,sellerId,scopes,encrypted}) {
   return withOwnedBusinessContext(userId, async (client, businessId, role) => {
     if (!['owner','editor'].includes(role)) throw new Error('connection_write_forbidden');
