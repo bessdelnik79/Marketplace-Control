@@ -21,8 +21,18 @@ test('WB token is accepted only after official ping and seller identity check',a
   const fetchImpl=async(url,options)=>{calls.push({url,authorization:options.headers.Authorization});return url.endsWith('/ping')?new Response(JSON.stringify({Status:'OK'}),{status:200}):new Response(JSON.stringify({sid:sellerId,tradeMark:'Мой WB'}),{status:200});};
   const verified=await verifyWbToken(raw,{fetchImpl,now:1_700_000_000_000});
   assert.equal(verified.sellerName,'Мой WB');
+  assert.equal(verified.sellerInfoAvailable,true);
   assert.equal(calls.length,2);
   assert.ok(calls.every(call=>call.authorization===`Bearer ${raw}`));
+});
+
+test('WB token remains connectable when optional seller info is rate limited',async()=>{
+  const raw=token({sid:sellerId,exp:2_000_000_000,s:Number(fullMask),acc:1,t:false});
+  let call=0;
+  const verified=await verifyWbToken(raw,{fetchImpl:async()=>++call===1?new Response('{}',{status:200}):new Response('{}',{status:429}),now:1_700_000_000_000});
+  assert.equal(call,2);
+  assert.equal(verified.sellerId,sellerId);
+  assert.equal(verified.sellerInfoAvailable,false);
 });
 
 test('WB token validation rejects missing categories, expiry and API denial',async()=>{

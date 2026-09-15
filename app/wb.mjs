@@ -40,9 +40,11 @@ export async function verifyWbToken(value,{fetchImpl=fetch,now=Date.now()}={}) {
   const missing=requiredWbScopes.filter(scope=>!decoded.scopes.includes(scope));
   if(missing.length){const error=new Error('wb_scopes_missing');error.missingScopes=missing;throw error;}
   await wbRequest('https://common-api.wildberries.ru/ping',decoded.token,fetchImpl);
-  const response=await wbRequest('https://common-api.wildberries.ru/api/v1/seller-info',decoded.token,fetchImpl);
+  let response;
+  try{response=await wbRequest('https://common-api.wildberries.ru/api/v1/seller-info',decoded.token,fetchImpl);}
+  catch(error){if(error.message==='wb_rate_limited')return {...decoded,sellerName:'Магазин Wildberries',sellerInfoAvailable:false};throw error;}
   let seller;
   try{seller=await response.json();}catch{throw new Error('wb_unavailable');}
   if(!seller?.sid||String(seller.sid)!==decoded.sellerId)throw new Error('wb_seller_mismatch');
-  return {...decoded,sellerName:String(seller.tradeMark||seller.name||'Магазин Wildberries')};
+  return {...decoded,sellerName:String(seller.tradeMark||seller.name||'Магазин Wildberries'),sellerInfoAvailable:true};
 }
