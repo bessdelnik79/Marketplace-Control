@@ -15,9 +15,15 @@ test('WB catalog loads all cursor pages and keeps variants',async()=>{
 });
 
 test('catalog normalization extracts color and rejects broken cards',()=>{
-  const [card]=normalizeCatalogCards([{nmID:42,vendorCode:'VC',title:'Чашка',characteristics:[{name:'Цвет товара',value:['синий','белый']}],sizes:[{chrtID:7,techSize:'0',skus:[]}]}]);
+  const [card]=normalizeCatalogCards([{nmID:42,vendorCode:'VC',title:'Чашка',photos:[{big:'https://basket-01.wbbasket.ru/item/big.webp',c246x328:'https://basket-01.wbbasket.ru/item/thumb.webp'}],characteristics:[{name:'Цвет товара',value:['синий','белый']}],sizes:[{chrtID:7,techSize:'0',skus:[]}]}]);
   assert.equal(card.variants[0].colorLabel,'синий, белый');
+  assert.equal(card.imageUrl,'https://basket-01.wbbasket.ru/item/thumb.webp');
   assert.throws(()=>normalizeCatalogCards([{nmID:0}]),/catalog_invalid_response/);
+});
+
+test('catalog ignores an image URL outside the Wildberries image host',()=>{
+  const [card]=normalizeCatalogCards([{nmID:43,photos:[{c246x328:'javascript:alert(1)',big:'https://example.com/image.webp'}]}]);
+  assert.equal(card.imageUrl,null);
 });
 
 test('WB catalog maps authorization and rate limit failures',async()=>{

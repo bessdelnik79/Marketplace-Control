@@ -194,11 +194,11 @@ export async function completeCatalogSync(userId,job,catalog){
     for(const card of catalog.cards){
       articleIds.push(card.nmId);
       const product=(await client.query(
-        `insert into mc.products(business_id,store_id,wb_article,seller_article,title,status)
-         values($1,$2,$3,$4,$5,'active')
-         on conflict(store_id,wb_article) do update set seller_article=excluded.seller_article,title=excluded.title,status='active'
-           where (mc.products.seller_article,mc.products.title,mc.products.status) is distinct from (excluded.seller_article,excluded.title,excluded.status)
-         returning id`,[businessId,job.store_id,card.nmId,card.vendorCode,card.title]
+        `insert into mc.products(business_id,store_id,wb_article,seller_article,title,image_url,status)
+         values($1,$2,$3,$4,$5,$6,'active')
+         on conflict(store_id,wb_article) do update set seller_article=excluded.seller_article,title=excluded.title,image_url=excluded.image_url,status='active'
+           where (mc.products.seller_article,mc.products.title,mc.products.image_url,mc.products.status) is distinct from (excluded.seller_article,excluded.title,excluded.image_url,excluded.status)
+         returning id`,[businessId,job.store_id,card.nmId,card.vendorCode,card.title,card.imageUrl]
       )).rows[0]??(await client.query(`select id from mc.products where store_id=$1 and wb_article=$2`,[job.store_id,card.nmId])).rows[0];
       for(const variant of card.variants){
         variantIds.push(variant.externalId);
@@ -242,7 +242,7 @@ export async function getCatalogState(userId,storeId){
         where ss.business_id=$1 and ss.store_id=$2 and ss.source_type='catalog'`,[businessId,storeId]
     )).rows[0]??null;
     const products=(await client.query(
-      `select p.id,p.wb_article,p.seller_article,p.title,p.status,
+      `select p.id,p.wb_article,p.seller_article,p.title,p.image_url,p.status,
               exists(select 1 from mc.product_selection_items i where i.business_id=p.business_id and i.store_id=p.store_id and i.product_id=p.id) as selected
          from mc.products p where p.business_id=$1 and p.store_id=$2
           and (p.status='active' or exists(select 1 from mc.product_selection_items i where i.business_id=p.business_id and i.store_id=p.store_id and i.product_id=p.id))
