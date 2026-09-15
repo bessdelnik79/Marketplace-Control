@@ -23,10 +23,11 @@ export function decodeWbToken(value) {
 async function wbRequest(url, token, fetchImpl) {
   let response;
   try{response=await fetchImpl(url,{headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(10000)});}
-  catch{throw new Error('wb_unavailable');}
-  if(response.status===401||response.status===403)throw new Error('wb_token_rejected');
-  if(response.status===429)throw new Error('wb_rate_limited');
-  if(!response.ok)throw new Error('wb_unavailable');
+  catch{const error=new Error('wb_unavailable');error.endpoint=url;throw error;}
+  const failure=message=>{const error=new Error(message);error.endpoint=url;error.status=response.status;return error;};
+  if(response.status===401||response.status===403)throw failure('wb_token_rejected');
+  if(response.status===429)throw failure('wb_rate_limited');
+  if(!response.ok)throw failure('wb_unavailable');
   return response;
 }
 

@@ -115,7 +115,7 @@ export async function saveWbConnection(userId, {storeId,sellerId,scopes,encrypte
        values($1,$2,$3,$4,$5,'active',now())
        on conflict(store_id) do update set secret_ref=excluded.secret_ref,scopes=excluded.scopes,status='active',last_checked_at=now()
        returning id,status,last_checked_at`,
-      [connectionId,businessId,storeId,`database:${connectionId}`,scopes]
+      [connectionId,businessId,storeId,`database:${connectionId}`,JSON.stringify(scopes)]
     )).rows[0];
     await client.query(
       `insert into mc.connection_secrets(business_id,connection_id,ciphertext,nonce,auth_tag,key_version)
