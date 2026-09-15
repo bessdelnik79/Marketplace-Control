@@ -266,6 +266,13 @@ export async function confirmProductSelection(userId,{storeId,productIds}){
   });
 }
 
+export async function addProductsToSelection(userId,{storeId,productIds}){
+  return withOwnedBusinessContext(userId,async(client,businessId,role)=>{
+    if(!['owner','editor'].includes(role))throw new Error('selection_write_forbidden');
+    return (await client.query(`select mc.add_products_to_selection($1,$2::uuid[]) as id`,[storeId,productIds])).rows[0];
+  });
+}
+
 export async function updateProfile(userId, displayName) {
   const cleanName = String(displayName ?? '').trim().replace(/\s+/g, ' ');
   if (cleanName.length < 2 || cleanName.length > 80) throw new Error('invalid_display_name');

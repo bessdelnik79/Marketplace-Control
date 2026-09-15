@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,7);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,8);
   pass('password identity and expiring session are stored by migration 2');
   const b = await insert('businesses',{name:'Business A'});
   await insert('memberships',{business_id:b.id,user_id:user.id});
@@ -78,7 +78,7 @@ try {
   await rejects(selectSql,[store.id,doc.id,[products[3].id]],/already selected/,'selection cannot be replaced');
   await rejects('delete from mc.product_selection_items where product_id=$1',[products[0].id],/immutable/,'selected product cannot be removed');
   await rejects('update mc.product_selection_items set product_id=$1 where product_id=$2',[products[3].id,products[0].id],/immutable/,'selected product cannot be swapped');
-  await rejects('insert into mc.product_selection_items(business_id,store_id,selection_id,product_id) values($1,$2,$3,$4)',[b.id,store.id,selection.id,products[3].id],/confirmed/,'sealed selection cannot be extended silently');
+  await rejects('insert into mc.product_selection_items(business_id,store_id,selection_id,product_id) values($1,$2,$3,$4)',[b.id,store.id,selection.id,products[3].id],/unavailable/,'confirmed selection cannot be extended outside the guarded function');
   await rejects('delete from mc.product_selections where id=$1',[selection.id],/immutable/,'selection cannot be reset by deleting header');
   await q('update mc.stores set status=$1 where id=$2',['archived',store.id]);
   await q('update mc.stores set status=$1 where id=$2',['active',store.id]);
@@ -215,6 +215,20 @@ try {
   pass('new plan permits another store with remaining product allowance');
   await rejects('update mc.subscriptions set plan_version_id=$1 where business_id=$2',[byCode.free.id,b.id],/downgrade/,'unresolved downgrade cannot silently remove selected products');
   await rejects('update mc.billing_plan_versions set product_limit=999 where id=$1',[byCode.free.id],/immutable/,'published plan conditions require a new version');
+
+  const extensionBusiness = await insert('businesses',{name:'Selection extension test'});
+  await insert('memberships',{business_id:extensionBusiness.id,user_id:user.id});
+  await context(extensionBusiness.id,user.id);
+  const extensionStore = await insert('stores',{business_id:extensionBusiness.id,external_account_id:'extension',name:'Extension',status:'active'});
+  const extensionDoc = await insert('source_documents',{business_id:extensionBusiness.id,store_id:extensionStore.id,origin:'wb_api',document_type:'catalog',checksum:'extension',completeness:'complete'});
+  const extensionProducts=[];
+  for(let i=1;i<=4;i++) extensionProducts.push(await product(extensionStore,880000+i));
+  await one(selectSql,[extensionStore.id,extensionDoc.id,extensionProducts.slice(0,3).map(p=>p.id)]);
+  await q('update mc.subscriptions set plan_version_id=$1 where business_id=$2',[byCode.minimum.id,extensionBusiness.id]);
+  await one('select mc.add_products_to_selection($1,$2::uuid[]) as id',[extensionStore.id,[extensionProducts[3].id]]);
+  assert.equal((await one('select count(*)::int as n from mc.product_selection_items where business_id=$1',[extensionBusiness.id])).n,4);
+  pass('upgraded plan can extend a confirmed selection without replacing prior products');
+  await rejects('select mc.add_products_to_selection($1,$2::uuid[])',[extensionStore.id,[extensionProducts[3].id]],/already selected/,'selected product cannot be added twice');
 
   const isolated = await insert('businesses',{name:'Deferred selection test'});
   await insert('memberships',{business_id:isolated.id,user_id:user.id});
