@@ -24,7 +24,12 @@ const themeBoot = `try{const t=localStorage.getItem('mc-theme')||'system';docume
 function frame(user, route, body, stores=[{name:'Дом и уют',status:'active',connected:true,demo:true}]) {
   user = { ...user, id: user.user_id || user.id };
   if (Array.isArray(user.stores)) stores = user.stores;
-  if (route === '/overview' && stores.length) body = `<div class="desktop-overview">${body}</div>${mobileOverview()}`;
+  if (route === '/overview' && stores.length) {
+    const mobileBody = stores.some(store => store.connected)
+      ? mobileOverview()
+      : `<div class="mobile-overview">${body}</div>`;
+    body = `<div class="desktop-overview">${body}</div>${mobileBody}`;
+  }
   const title = uiRoutes.get(route) || 'Обзор';
   const selected=stores[0];
   const storeName=selected?.name||'Добавить магазин';
@@ -43,12 +48,15 @@ function mobileOverview() {
 function populatedOverviewPage(user) {
   return frame(user,'/overview',`<div class="overview-top"><section class="profit"><h2>ПРИБЫЛЬ ПО ДОСТУПНЫМ ДАННЫМ</h2>${dates('profit','1–7 сентября 2026','2026-09-01','2026-09-07')}<div class="profit-total"><strong>214 300 ₽</strong><span class="negative">↓ 5,1%</span></div><dl class="financial-details"><div><dt>Выручка</dt><dd>1 248 600 ₽</dd></div><div><dt>Расходы</dt><dd>1 034 300 ₽</dd></div><div><dt>Налог</dt><dd>${link('/settings#data','Настроить')}</dd></div></dl>${warning}</section><section class="current-section"><h2>СЕЙЧАС</h2>${dates('current','8–13 сентября 2026','2026-09-08','2026-09-13')}<div class="tabs" role="tablist" aria-label="Показатель"><button role="tab" aria-selected="true" data-metric="orders">Заказы</button><button role="tab" aria-selected="false" data-metric="buyouts">Выкупы</button></div><div class="current-total"><strong id="metric-total">42 шт. · 76 800 ₽</strong><button class="info-toggle" data-info aria-label="Как рассчитано сравнение">${icon('info')}</button><span class="positive" id="metric-change">↑ 23,5%</span></div><div class="comparison-info" hidden>В среднем: <span id="average-total">34 заказа · 62 100 ₽</span> за сопоставимые 6 дней.<br>Среднее для каждого дня по 4 предыдущим периодам.</div><div class="legend"><span><i></i>Текущие</span><span><i></i>Среднее за 4 периода</span></div>${chart()}</section><section class="attention"><h2>ТРЕБУЕТ ВНИМАНИЯ · 4</h2>${[['danger','Убыток до продвижения','−18 400 ₽','За неделю 1–7 сентября','loss'],['danger','Штрафы и пени','12 480 ₽','Новые начисления','fines'],['warning','Рост возвратов','8,6% против 4,1% в прошлом периоде','','returns']].map(([type,title,value,detail,id])=>`<a class="attention-row" href="/situation?type=${id}"><span class="signal-mark ${type}">!</span><div><strong>${title}</strong><p class="${type==='danger'?'negative':'muted'}">${value}</p><small>${detail}</small></div>${icon('right')}</a>`).join('')}<a class="section-link" href="/situations">Все ситуации (4) <span>→</span></a></section></div><div class="overview-bottom"><section class="checks"><h2>СТОИТ ПРОВЕРИТЬ</h2>${[['Рост возвратов','8,6% против 4,1% в прошлом периоде','Основной вклад: SKU «Термокружка 350 мл»','4,1%','8,6%','Разобраться','/situation?type=returns'],['Низкая оборачиваемость','18 товаров с остатком > 40 шт.','Риск заморозки средств','18','40','Проверить остатки','/stocks'],['Снижение заказов','−22% по сравнению с предыдущими 6 днями','Возможно, влияет остаток или продвижение','54','42','Посмотреть причины','/situation?type=orders']].map(([title,detail,note,a,b,action,href],i)=>`<div class="check-row"><span class="check-dot ${i===2?'quiet-dot':''}"></span><div class="check-copy"><strong>${title}</strong><p>${detail}<br>${note}</p></div><div class="mini-chart"><div><b>${a}</b><i style="height:${i===0?18:25}px"></i><small>${i===0?'Прошлый период':i===1?'Текущий остаток':'1–7 сен'}</small></div><div><b>${b}</b><i style="height:${i===0?38:32}px"></i><small>${i===0?'Текущий период':i===1?'Порог':'8–13 сен'}</small></div></div><a href="${href}">${action} →</a></div>`).join('')}</section><section class="checkpoints"><h2>КОНТРОЛЬНЫЕ ТОЧКИ</h2><div class="timeline"><a href="/checkpoint?id=ad"><strong>14 сент.</strong><div>Проверить результат теста рекламы<small>Цель: результат товара ≥ 0 ₽<br>Через 1 день</small></div></a><a href="/checkpoint?id=delivery"><strong>18 сент.</strong><div>Уточнить результат поставки<small>Ожидается подтверждение приёмки<br>Через 5 дней</small></div></a></div><div class="checkpoint-actions"><a href="/checkpoints">Все контрольные точки →</a><a class="outline-button" href="/checkpoint?new=1">${icon('plus')}Добавить контрольную точку</a></div></section></div>`);
 }
-export function emptyOverviewPage(user) {
-  const stores=[];
-  return frame({...user,stores},'/overview',`<section class="empty-state"><span class="empty-state-icon">${icon('stock')}</span><p class="eyebrow">Начало работы</p><h1>Добавьте первый магазин</h1><p>После подключения магазина здесь появятся прибыль, заказы, выкупы и ситуации, которые требуют внимания.</p><div><a class="outline-button primary-button" href="/onboarding/store">Добавить магазин</a><a href="/settings">Перейти в настройки →</a></div></section>`,stores);
+export function emptyOverviewPage(user, stores=[]) {
+  const hasStore=stores.length>0;
+  const title=hasStore?'Подключите Wildberries':'Добавьте первый магазин';
+  const text=hasStore?'Магазин уже добавлен. Подключите API Wildberries в настройках, чтобы загрузить реальные показатели.':'После подключения магазина здесь появятся прибыль, заказы, выкупы и ситуации, которые требуют внимания.';
+  const action=hasStore?'<a class="outline-button primary-button" href="/settings#store">Перейти к подключению</a>':'<a class="outline-button primary-button" href="/onboarding/store">Добавить магазин</a>';
+  return frame({...user,stores},'/overview',`<section class="empty-state"><span class="empty-state-icon">${icon('stock')}</span><p class="eyebrow">Начало работы</p><h1>${title}</h1><p>${text}</p><div>${action}<a href="/settings">Перейти в настройки →</a></div></section>`,stores);
 }
 export function overviewPage(user, stores=user.stores) {
-  if (Array.isArray(stores) && stores.length===0) return emptyOverviewPage(user);
+  if (Array.isArray(stores) && !stores.some(store=>store.connected)) return emptyOverviewPage(user,stores);
   return populatedOverviewPage({...user,stores});
 }
 export function storeOnboardingPage(user,{error='',value=''}={}) {
