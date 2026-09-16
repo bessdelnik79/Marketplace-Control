@@ -35,8 +35,13 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,8);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,9);
   pass('password identity and expiring session are stored by migration 2');
+  const financialMethod=await one("select implementation_version from mc.method_versions where code='wb_finance_import' and version_no=1");
+  assert.equal(financialMethod.implementation_version,'wb-finance-v1');
+  assert.deepEqual((await q("select code from mc.financial_categories where code in ('acquiring','deduction','additional_payment') order by code")).map(row=>row.code),['acquiring','additional_payment','deduction']);
+  assert.equal((await one("select is_nullable,column_default from information_schema.columns where table_schema='mc' and table_name='sync_runs' and column_name='progress'")).is_nullable,'NO');
+  pass('financial report importer method, categories and progress state are installed');
   const b = await insert('businesses',{name:'Business A'});
   await insert('memberships',{business_id:b.id,user_id:user.id});
   await context(b.id,user.id);

@@ -1,0 +1,233 @@
+import { createHash } from 'node:crypto';
+
+export const financialReportsEndpoint = 'https://finance-api.wildberries.ru/api/finance/v1/sales-reports/detailed';
+export const financialParserVersion = 'wb-finance-v1';
+
+const identifierFields = ['reportId','rrdId','giId','nmId','shkId','ppvzOfficeId','orderId','trbxId','loyaltyId'];
+const identifierPattern = new RegExp(`("(?:${identifierFields.join('|')})"\\s*:\\s*)(-?\\d+)(?=\\s*[,}])`, 'g');
+const decimalPattern = /^-?\d+(?:\.\d+)?$/;
+
+function apiError(message, response, retryAfterMs) {
+  const error = new Error(message);
+  error.status = response?.status;
+  error.endpoint = financialReportsEndpoint;
+  if (retryAfterMs) error.retryAfterMs = retryAfterMs;
+  return error;
+}
+
+function retryDelay(response, fallbackMs) {
+  const seconds = Number(response?.headers?.get?.('retry-after'));
+  return Number.isFinite(seconds) && seconds >= 0 ? Math.max(1000, seconds * 1000) : fallbackMs;
+}
+
+export function parseFinancialJson(raw) {
+  try {
+    return JSON.parse(String(raw).replace(identifierPattern, '$1"$2"'));
+  } catch {
+    throw new Error('financial_invalid_response');
+  }
+}
+
+function stable(value) {
+  if (Array.isArray(value)) return value.map(stable);
+  if (value && typeof value === 'object') return Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])]));
+  return value;
+}
+
+export function stableJson(value) {
+  return JSON.stringify(stable(value));
+}
+
+function hash(value) {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function dateValue(value) {
+  const result = String(value ?? '').slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(result) || Number.isNaN(Date.parse(`${result}T00:00:00Z`))) throw new Error('financial_invalid_row');
+  return result;
+}
+
+function decimalId(value) {
+  const result = String(value ?? '');
+  if (!/^\d+$/.test(result)) throw new Error('financial_invalid_row');
+  return result.replace(/^0+(?=\d)/, '');
+}
+
+function compareDecimalIds(a, b) {
+  return a.length - b.length || a.localeCompare(b);
+}
+
+export function decimal(value, { absolute = false, negative = false } = {}) {
+  if (value === null || value === undefined || value === '') return null;
+  let result = String(value).trim().replace(',', '.');
+  if (!decimalPattern.test(result)) throw new Error('financial_invalid_amount');
+  const parts = result.replace(/^-/, '').split('.');
+  let whole = parts[0].replace(/^0+(?=\d)/, '') || '0';
+  let fraction = (parts[1] ?? '').replace(/0+$/, '');
+  result = fraction ? `${whole}.${fraction}` : whole;
+  if (result === '0') return '0';
+  const sourceNegative = String(value).trim().startsWith('-');
+  if (negative || (!absolute && sourceNegative)) return `-${result}`;
+  return result;
+}
+
+function hasMoney(row, fields) {
+  return fields.some(field => {
+    const value = decimal(row[field]);
+    return value !== null && value !== '0';
+  });
+}
+
+export function normalizeFinancialOperation(row) {
+  const label = `${row?.docTypeName ?? ''} ${row?.sellerOperName ?? ''}`.toLocaleLowerCase('ru-RU');
+  let operationType = 'unclassified';
+  if (label.includes('возврат')) operationType = 'return';
+  else if (label.includes('продаж')) operationType = 'sale';
+  else if (hasMoney(row, ['deliveryService','rebillLogisticCost','paidStorage','paidAcceptance','ppvzSalesCommission','acquiringFee'])) operationType = 'service_charge';
+  else if (hasMoney(row, ['penalty','deduction','additionalPayment'])) operationType = 'adjustment';
+  else if (hasMoney(row, ['forPay'])) operationType = 'settlement';
+
+  const components = [];
+  const add = (field, categoryCode, sign) => {
+    const raw = decimal(row?.[field]);
+    if (raw === null || raw === '0') return;
+    const amountSigned = sign === 'negative' ? decimal(raw, { negative: true }) : sign === 'positive' ? decimal(raw, { absolute: true }) : raw;
+    components.push({ componentKey: field, categoryCode, amountSigned, sourceField: field });
+  };
+  if (operationType === 'sale') add('retailAmount', 'revenue', 'positive');
+  if (operationType === 'return') add('retailAmount', 'revenue_return', 'negative');
+  add('ppvzSalesCommission', 'commission', 'negative');
+  add('acquiringFee', 'acquiring', 'negative');
+  add('deliveryService', 'logistics', 'negative');
+  add('rebillLogisticCost', 'logistics', 'negative');
+  add('paidStorage', 'storage', 'negative');
+  add('paidAcceptance', 'acceptance', 'negative');
+  add('penalty', 'penalty', 'negative');
+  add('deduction', 'deduction', 'negative');
+  add('additionalPayment', 'additional_payment', 'positive');
+  add('forPay', 'payout', 'source');
+
+  let quantity = decimal(row?.quantity);
+  if (quantity !== null && operationType === 'return') quantity = decimal(quantity, { negative: true });
+  else if (quantity !== null && operationType === 'sale') quantity = decimal(quantity, { absolute: true });
+  return {
+    operationType,
+    accountingDate: dateValue(row?.rrDate),
+    sourceOccurredAt: row?.saleDt || row?.orderDt || null,
+    quantity,
+    wbArticle: row?.nmId == null ? null : String(row.nmId),
+    variantBarcode: row?.sku == null ? null : String(row.sku),
+    srid: row?.srid == null ? null : String(row.srid),
+    components
+  };
+}
+
+function requestBody({ dateFrom, dateTo, limit, rrdId }) {
+  if (!/^\d+$/.test(String(rrdId))) throw new Error('financial_invalid_cursor');
+  const prefix = JSON.stringify({ dateFrom, dateTo, limit, period: 'weekly' });
+  return `${prefix.slice(0, -1)},"rrdId":${rrdId}}`;
+}
+
+async function fetchPage(token, params, { fetchImpl, waitImpl, retryLimit }) {
+  for (let attempt = 0; attempt <= retryLimit; attempt++) {
+    let response;
+    try {
+      response = await fetchImpl(financialReportsEndpoint, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+        body: requestBody(params),
+        signal: AbortSignal.timeout(30000)
+      });
+    } catch {
+      if (attempt < retryLimit) { await waitImpl(1000 * (attempt + 1)); continue; }
+      throw apiError('financial_unavailable');
+    }
+    if (response.status === 204) return { done: true, response };
+    if (response.status === 401 || response.status === 403) throw apiError('financial_unauthorized', response);
+    if (response.status === 402) throw apiError('financial_payment_required', response);
+    if (response.status === 429) {
+      const delay = retryDelay(response, 60000);
+      if (attempt < retryLimit) { await waitImpl(delay); continue; }
+      throw apiError('financial_rate_limited', response, delay);
+    }
+    if (response.status >= 500) {
+      if (attempt < retryLimit) { await waitImpl(1000 * (attempt + 1)); continue; }
+      throw apiError('financial_unavailable', response);
+    }
+    if (!response.ok) throw apiError('financial_invalid_request', response);
+    const raw = await response.text();
+    const rows = parseFinancialJson(raw);
+    if (!Array.isArray(rows) || rows.length === 0) throw apiError('financial_invalid_response', response);
+    return { done: false, response, raw, rows };
+  }
+  throw apiError('financial_unavailable');
+}
+
+export function normalizeFinancialReports(rows) {
+  const reports = new Map();
+  for (const rawData of rows) {
+    if (!rawData || typeof rawData !== 'object') throw new Error('financial_invalid_row');
+    const externalReportId = decimalId(rawData.reportId);
+    const externalRowKey = decimalId(rawData.rrdId);
+    const periodStart = dateValue(rawData.dateFrom);
+    const periodEnd = dateValue(rawData.dateTo);
+    if (periodEnd < periodStart || String(rawData.currency ?? '') !== 'RUB') throw new Error('financial_invalid_row');
+    const rowJson = stableJson(rawData);
+    const rowChecksum = hash(rowJson);
+    let report = reports.get(externalReportId);
+    if (!report) {
+      report = { externalReportId, periodStart, periodEnd, currency: 'RUB', createdAt: rawData.createDate ?? null, rows: [], keys: new Map() };
+      reports.set(externalReportId, report);
+    }
+    if (report.periodStart !== periodStart || report.periodEnd !== periodEnd) throw new Error('financial_report_period_mismatch');
+    const prior = report.keys.get(externalRowKey);
+    if (prior && prior !== rowChecksum) throw new Error('financial_duplicate_row_conflict');
+    if (prior) continue;
+    report.keys.set(externalRowKey, rowChecksum);
+    report.rows.push({ externalRowKey, rawData, rowChecksum });
+  }
+  return [...reports.values()].map(report => {
+    report.rows.sort((a, b) => compareDecimalIds(a.externalRowKey, b.externalRowKey));
+    const checksum = hash(report.rows.map(row => `${row.externalRowKey}:${row.rowChecksum}`).join('\n'));
+    delete report.keys;
+    return { ...report, checksum };
+  }).sort((a, b) => a.periodStart.localeCompare(b.periodStart) || compareDecimalIds(a.externalReportId, b.externalReportId));
+}
+
+export async function loadWbFinancialReports(token, {
+  dateFrom,
+  dateTo,
+  fetchImpl = fetch,
+  waitImpl = ms => new Promise(resolve => setTimeout(resolve, ms)),
+  minIntervalMs = 60000,
+  limit = 100000,
+  maxPages = 100,
+  retryLimit = 2,
+  onPage = async () => {}
+} = {}) {
+  dateFrom = dateValue(dateFrom);
+  dateTo = dateValue(dateTo);
+  if (dateTo < dateFrom || !Number.isInteger(limit) || limit < 1 || limit > 100000) throw new Error('financial_invalid_request');
+  const rows = [], pages = [];
+  let rrdId = '0';
+  for (let page = 0; page < maxPages; page++) {
+    const result = await fetchPage(token, { dateFrom, dateTo, limit, rrdId }, { fetchImpl, waitImpl, retryLimit });
+    if (result.done) return { dateFrom, dateTo, rows, reports: normalizeFinancialReports(rows), pages, pageCount: pages.length, finalRrdId: rrdId };
+    const last = decimalId(result.rows.at(-1)?.rrdId);
+    if (compareDecimalIds(last, rrdId) <= 0) throw new Error('financial_invalid_cursor');
+    rows.push(...result.rows);
+    pages.push({ partNumber: page, raw: result.raw, checksum: hash(result.raw), rowCount: result.rows.length, firstRrdId: decimalId(result.rows[0].rrdId), lastRrdId: last });
+    rrdId = last;
+    await onPage({ pageCount: pages.length, rowCount: rows.length, rrdId });
+    await waitImpl(minIntervalMs);
+  }
+  throw new Error('financial_too_large');
+}
+
+export function financialDateRange(now = new Date(), days = 91) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat('en-US', { timeZone: 'Europe/Moscow', year: 'numeric', month: '2-digit', day: '2-digit' }).formatToParts(now).filter(part => part.type !== 'literal').map(part => [part.type, part.value]));
+  const end = new Date(`${parts.year}-${parts.month}-${parts.day}T00:00:00Z`);
+  const start = new Date(end.getTime() - days * 86400000);
+  return { dateFrom: start.toISOString().slice(0, 10), dateTo: end.toISOString().slice(0, 10) };
+}
