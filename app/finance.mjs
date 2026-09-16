@@ -15,11 +15,6 @@ function apiError(message, response, retryAfterMs) {
   return error;
 }
 
-function retryDelay(response, fallbackMs) {
-  const seconds = Number(response?.headers?.get?.('retry-after'));
-  return Number.isFinite(seconds) && seconds >= 0 ? Math.max(fallbackMs, seconds * 1000) : fallbackMs;
-}
-
 export function parseFinancialJson(raw) {
   try {
     return JSON.parse(String(raw).replace(identifierPattern, '$1"$2"'));
@@ -129,39 +124,34 @@ function requestBody({ dateFrom, dateTo, limit, rrdId }) {
   return `${prefix.slice(0, -1)},"rrdId":${rrdId}}`;
 }
 
-async function fetchPage(token, params, { fetchImpl, waitImpl, retryLimit }) {
-  for (let attempt = 0; attempt <= retryLimit; attempt++) {
-    let response;
-    try {
-      response = await fetchImpl(financialReportsEndpoint, {
-        method: 'POST',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-        body: requestBody(params),
-        signal: AbortSignal.timeout(30000)
-      });
-    } catch {
-      if (attempt < retryLimit) { await waitImpl(1000 * (attempt + 1)); continue; }
-      throw apiError('financial_unavailable');
-    }
-    if (response.status === 204) return { done: true, response };
-    if (response.status === 401 || response.status === 403) throw apiError('financial_unauthorized', response);
-    if (response.status === 402) throw apiError('financial_payment_required', response);
-    if (response.status === 429) {
-      const delay = retryDelay(response, 60000);
-      if (attempt < retryLimit) { await waitImpl(delay); continue; }
-      throw apiError('financial_rate_limited', response, delay);
-    }
-    if (response.status >= 500) {
-      if (attempt < retryLimit) { await waitImpl(1000 * (attempt + 1)); continue; }
-      throw apiError('financial_unavailable', response);
-    }
-    if (!response.ok) throw apiError('financial_invalid_request', response);
-    const raw = await response.text();
-    const rows = parseFinancialJson(raw);
-    if (!Array.isArray(rows) || rows.length === 0) throw apiError('financial_invalid_response', response);
-    return { done: false, response, raw, rows };
+async function fetchPage(token, params, fetchImpl) {
+  let response;
+  try {
+    response = await fetchImpl(financialReportsEndpoint, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: requestBody(params),
+      signal: AbortSignal.timeout(30000)
+    });
+  } catch {
+    throw apiError('financial_unavailable');
   }
-  throw apiError('financial_unavailable');
+  if (response.status === 204) return { done: true, response };
+  if (response.status === 401 || response.status === 403) throw apiError('financial_unauthorized', response);
+  if (response.status === 402) throw apiError('financial_payment_required', response);
+  if (response.status === 429) throw apiError('financial_rate_limited', response);
+  if (response.status >= 500) throw apiError('financial_unavailable', response);
+  if (!response.ok) throw apiError('financial_invalid_request', response);
+  const raw = await response.text();
+  const rows = parseFinancialJson(raw);
+  if (!Array.isArray(rows) || rows.length === 0) throw apiError('financial_invalid_response', response);
+  return { done: false, response, raw, rows };
+}
+
+export function financialRequestDelaySeconds(random = Math.random) {
+  const value = Number(random());
+  if (!Number.isFinite(value) || value < 0 || value >= 1) throw new Error('financial_invalid_random');
+  return 65 + Math.floor(value * 11);
 }
 
 export function normalizeFinancialReports(rows) {
@@ -199,11 +189,9 @@ export async function loadWbFinancialReports(token, {
   dateFrom,
   dateTo,
   fetchImpl = fetch,
-  waitImpl = ms => new Promise(resolve => setTimeout(resolve, ms)),
-  minIntervalMs = 60000,
   limit = 100000,
   maxPages = 100,
-  retryLimit = 2,
+  beforeRequest = async () => {},
   onPage = async () => {}
 } = {}) {
   dateFrom = dateValue(dateFrom);
@@ -212,7 +200,8 @@ export async function loadWbFinancialReports(token, {
   const rows = [], pages = [];
   let rrdId = '0';
   for (let page = 0; page < maxPages; page++) {
-    const result = await fetchPage(token, { dateFrom, dateTo, limit, rrdId }, { fetchImpl, waitImpl, retryLimit });
+    await beforeRequest({ page, rrdId, rowCount: rows.length });
+    const result = await fetchPage(token, { dateFrom, dateTo, limit, rrdId }, fetchImpl);
     if (result.done) return { dateFrom, dateTo, rows, reports: normalizeFinancialReports(rows), pages, pageCount: pages.length, finalRrdId: rrdId };
     const last = decimalId(result.rows.at(-1)?.rrdId);
     if (compareDecimalIds(last, rrdId) <= 0) throw new Error('financial_invalid_cursor');
@@ -220,7 +209,6 @@ export async function loadWbFinancialReports(token, {
     pages.push({ partNumber: page, raw: result.raw, checksum: hash(result.raw), rowCount: result.rows.length, firstRrdId: decimalId(result.rows[0].rrdId), lastRrdId: last });
     rrdId = last;
     await onPage({ pageCount: pages.length, rowCount: rows.length, rrdId });
-    await waitImpl(minIntervalMs);
   }
   throw new Error('financial_too_large');
 }

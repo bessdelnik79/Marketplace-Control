@@ -2,7 +2,7 @@
 
 Готовые транзакционные миграции PostgreSQL и проверки модели. На VM работает подключение WB с зашифрованным хранением токена, загрузка каталога и детализации финансовых отчётов; обработчик платежей ещё не реализован.
 
-- [Исходная миграция](migrations/001_initial.sql), [регистрация с паролем](migrations/002_password_auth.sql), [зашифрованные секреты WB](migrations/006_wb_connection_secrets.sql), [изображения каталога](migrations/007_product_images.sql), [расширение выбора товаров](migrations/008_extend_product_selection.sql) и [финансовая синхронизация](migrations/009_financial_report_sync.sql).
+- [Исходная миграция](migrations/001_initial.sql), [регистрация с паролем](migrations/002_password_auth.sql), [зашифрованные секреты WB](migrations/006_wb_connection_secrets.sql), [изображения каталога](migrations/007_product_images.sql), [расширение выбора товаров](migrations/008_extend_product_selection.sql), [финансовая синхронизация](migrations/009_financial_report_sync.sql) и [общий лимитер запросов WB](migrations/010_wb_api_request_slots.sql).
 - [Схема и принятые решения](../outputs/database-v1.md).
 - [Все поля, типы, значения и ограничения](../outputs/database-v1-dictionary.md).
 - [Проверки](tests/schema.test.mjs).

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decimal, financialDateRange, loadWbFinancialReports, normalizeFinancialOperation, normalizeFinancialReports, parseFinancialJson } from './finance.mjs';
+import { decimal, financialDateRange, financialRequestDelaySeconds, loadWbFinancialReports, normalizeFinancialOperation, normalizeFinancialReports, parseFinancialJson } from './finance.mjs';
 
 const row = (overrides = {}) => ({
   reportId: '90071992547409931', dateFrom: '2026-09-01', dateTo: '2026-09-07', createDate: '2026-09-08', currency: 'RUB',
@@ -13,36 +13,38 @@ test('financial JSON keeps 64-bit WB identifiers as strings', () => {
   assert.deepEqual(parsed, [{ reportId: '90071992547409931', rrdId: '90071992547409941', nmId: '123' }]);
 });
 
-test('financial reports paginate by exact rrdId until 204', async () => {
-  const bodies = [], waits = [];
+test('financial reports reserve every request and paginate by exact rrdId until 204', async () => {
+  const bodies = [], reservations = [];
   const first = row(), second = row({ rrdId: '90071992547409999', reportId: '90071992547409932', dateFrom: '2026-09-08', dateTo: '2026-09-14' });
   const responses = [new Response(JSON.stringify([first])), new Response(JSON.stringify([second])), new Response(null, { status: 204 })];
   const result = await loadWbFinancialReports('token', {
-    dateFrom: '2026-09-01', dateTo: '2026-09-15', limit: 1, minIntervalMs: 60000,
+    dateFrom: '2026-09-01', dateTo: '2026-09-15', limit: 1,
     fetchImpl: async (_url, options) => { bodies.push(options.body); return responses.shift(); },
-    waitImpl: async ms => waits.push(ms)
+    beforeRequest: async request => reservations.push(request)
   });
   assert.equal(result.pageCount, 2);
   assert.equal(result.reports.length, 2);
   assert.match(bodies[1], /"rrdId":90071992547409941/);
-  assert.deepEqual(waits, [60000, 60000]);
+  assert.equal(reservations.length, 3);
+  assert.deepEqual(reservations.map(request=>request.rrdId),['0','90071992547409941','90071992547409999']);
 });
 
-test('financial loader retries rate limits without losing cursor', async () => {
+test('financial loader stops after the first rate limit response', async () => {
   let calls = 0;
-  const waits = [];
-  const result = await loadWbFinancialReports('token', {
-    dateFrom: '2026-09-01', dateTo: '2026-09-07', minIntervalMs: 5,
+  await assert.rejects(()=>loadWbFinancialReports('token', {
+    dateFrom: '2026-09-01', dateTo: '2026-09-07',
     fetchImpl: async () => {
       calls++;
-      if (calls === 1) return new Response('{}', { status: 429, headers: { 'retry-after': '2' } });
-      if (calls === 2) return new Response(JSON.stringify([row()]));
-      return new Response(null, { status: 204 });
-    },
-    waitImpl: async ms => waits.push(ms)
-  });
-  assert.equal(result.rows.length, 1);
-  assert.deepEqual(waits, [60000, 5]);
+      return new Response('{}', { status: 429, headers: { 'retry-after': '2' } });
+    }
+  }),/financial_rate_limited/);
+  assert.equal(calls,1);
+});
+
+test('financial request jitter is an integer from 65 through 75 seconds',()=>{
+  assert.equal(financialRequestDelaySeconds(()=>0),65);
+  assert.equal(financialRequestDelaySeconds(()=>0.999999),75);
+  assert.throws(()=>financialRequestDelaySeconds(()=>1),/financial_invalid_random/);
 });
 
 test('normalization rejects changed duplicate rows and foreign currency', () => {

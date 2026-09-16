@@ -20,6 +20,11 @@ export function decodeWbToken(value) {
   }catch(error){if(error.message==='wb_token_invalid')throw error;throw new Error('wb_token_invalid');}
 }
 
+export function assertWbFinancialToken(decoded) {
+  if (decoded?.accountType !== 3) throw new Error('financial_token_type_unsupported');
+  return decoded;
+}
+
 async function wbRequest(url, token, fetchImpl) {
   let response;
   try{response=await fetchImpl(url,{headers:{Authorization:`Bearer ${token}`},signal:AbortSignal.timeout(10000)});}

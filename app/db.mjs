@@ -277,7 +277,7 @@ export async function addProductsToSelection(userId,{storeId,productIds}){
 export async function beginFinancialSync(userId,storeId,{force=false,initialRange,recentRange}={}){
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
     const row=(await client.query(
-      `select ss.id as stream_id,ss.next_run_at,ss.last_success_at,cs.ciphertext,cs.nonce,cs.auth_tag,
+      `select ss.id as stream_id,ss.next_run_at,ss.last_success_at,cs.ciphertext,cs.nonce,cs.auth_tag,s.external_account_id as seller_id,
               exists(select 1 from mc.product_selections ps where ps.business_id=s.business_id and ps.store_id=s.id and ps.status='confirmed') as selected
          from mc.stores s
          join mc.connections c on c.business_id=s.business_id and c.store_id=s.id and c.status='active'
@@ -300,7 +300,25 @@ export async function beginFinancialSync(userId,storeId,{force=false,initialRang
       [businessId,storeId,row.stream_id,range.dateFrom,range.dateTo]
     )).rows[0];
     await client.query(`update mc.sync_streams set next_run_at=null where id=$1`,[row.stream_id]);
-    return {started:true,business_id:businessId,store_id:storeId,stream_id:row.stream_id,run_id:run.id,date_from:range.dateFrom,date_to:range.dateTo,ciphertext:row.ciphertext,nonce:row.nonce,auth_tag:row.auth_tag};
+    return {started:true,business_id:businessId,store_id:storeId,stream_id:row.stream_id,run_id:run.id,date_from:range.dateFrom,date_to:range.dateTo,seller_id:row.seller_id,ciphertext:row.ciphertext,nonce:row.nonce,auth_tag:row.auth_tag};
+  });
+}
+
+export async function reserveFinancialRequestSlot(userId,job,delaySeconds){
+  if(!Number.isInteger(delaySeconds)||delaySeconds<65||delaySeconds>75)throw new Error('financial_invalid_rate_delay');
+  return withOwnedBusinessContext(userId,async(client,businessId)=>{
+    if(businessId!==job.business_id||!job.seller_id)throw new Error('financial_context_mismatch');
+    const rateKey=createHash('sha256').update(`wb:finance:sales-reports:${job.seller_id}`).digest('hex');
+    const slot=(await client.query(
+      `insert into mc.wb_api_request_slots(rate_key,next_allowed_at)
+       values($1,clock_timestamp()+make_interval(secs=>$2))
+       on conflict(rate_key) do update
+         set next_allowed_at=greatest(mc.wb_api_request_slots.next_allowed_at,clock_timestamp())+make_interval(secs=>$2),
+             updated_at=clock_timestamp()
+       returning next_allowed_at-make_interval(secs=>$2) as scheduled_at,next_allowed_at`,
+      [rateKey,delaySeconds]
+    )).rows[0];
+    return {scheduledAt:slot.scheduled_at,nextAllowedAt:slot.next_allowed_at,waitMs:Math.max(0,new Date(slot.scheduled_at).getTime()-Date.now())};
   });
 }
 
@@ -407,12 +425,14 @@ export async function completeFinancialSync(userId,job,{documentId,reports,objec
   });
 }
 
-export async function failFinancialSync(userId,job,errorCode){
+export async function failFinancialSync(userId,job,errorCode,{retryDelaySeconds=70}={}){
+  if(!Number.isInteger(retryDelaySeconds)||retryDelaySeconds<65||retryDelaySeconds>75)throw new Error('financial_invalid_rate_delay');
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
     const code=String(errorCode).slice(0,100);
     await client.query(`update mc.sync_runs set status='failed',finished_at=now(),error_code=$2,progress=jsonb_set(progress,'{stage}','"failed"') where id=$1 and business_id=$3 and status='running'`,[job.run_id,code,businessId]);
-    if(['financial_unauthorized','financial_payment_required','financial_invalid_request'].includes(code))await client.query(`update mc.sync_streams set status='blocked',next_run_at=null where id=$1 and business_id=$2`,[job.stream_id,businessId]);
-    else await client.query(`update mc.sync_streams set next_run_at=now()+case when $3='financial_rate_limited' then interval '2 minutes' else interval '15 minutes' end where id=$1 and business_id=$2`,[job.stream_id,businessId,code]);
+    if(['financial_unauthorized','financial_payment_required','financial_invalid_request','financial_token_type_unsupported'].includes(code))await client.query(`update mc.sync_streams set status='blocked',next_run_at=null where id=$1 and business_id=$2`,[job.stream_id,businessId]);
+    else if(code==='financial_rate_limited')await client.query(`update mc.sync_streams set next_run_at=now()+make_interval(secs=>$3) where id=$1 and business_id=$2`,[job.stream_id,businessId,retryDelaySeconds]);
+    else await client.query(`update mc.sync_streams set next_run_at=now()+interval '15 minutes' where id=$1 and business_id=$2`,[job.stream_id,businessId]);
   });
 }
 
