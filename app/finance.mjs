@@ -17,7 +17,7 @@ function apiError(message, response, retryAfterMs) {
 
 function retryDelay(response, fallbackMs) {
   const seconds = Number(response?.headers?.get?.('retry-after'));
-  return Number.isFinite(seconds) && seconds >= 0 ? Math.max(1000, seconds * 1000) : fallbackMs;
+  return Number.isFinite(seconds) && seconds >= 0 ? Math.max(fallbackMs, seconds * 1000) : fallbackMs;
 }
 
 export function parseFinancialJson(raw) {

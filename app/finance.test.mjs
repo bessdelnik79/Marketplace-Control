@@ -42,7 +42,7 @@ test('financial loader retries rate limits without losing cursor', async () => {
     waitImpl: async ms => waits.push(ms)
   });
   assert.equal(result.rows.length, 1);
-  assert.deepEqual(waits, [2000, 5]);
+  assert.deepEqual(waits, [60000, 5]);
 });
 
 test('normalization rejects changed duplicate rows and foreign currency', () => {
