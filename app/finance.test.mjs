@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decimal, financialDateRange, financialRequestDelaySeconds, loadWbFinancialReports, normalizeFinancialOperation, normalizeFinancialReports, parseFinancialJson } from './finance.mjs';
+import { decimal, financialDateRange, financialReportPeriodMatches, financialRequestDelaySeconds, loadWbFinancialReports, normalizeFinancialOperation, normalizeFinancialReports, parseFinancialJson } from './finance.mjs';
 
 const row = (overrides = {}) => ({
   reportId: '90071992547409931', dateFrom: '2026-09-01', dateTo: '2026-09-07', createDate: '2026-09-08', currency: 'RUB',
@@ -11,6 +11,13 @@ const row = (overrides = {}) => ({
 test('financial JSON keeps 64-bit WB identifiers as strings', () => {
   const parsed = parseFinancialJson('[{"reportId":90071992547409931,"rrdId":90071992547409941,"nmId":123}]');
   assert.deepEqual(parsed, [{ reportId: '90071992547409931', rrdId: '90071992547409941', nmId: '123' }]);
+});
+
+test('stored PostgreSQL dates match the same financial report calendar period', () => {
+  const stored={period_start:new Date(2026,7,10),period_end:new Date(2026,7,16)};
+  assert.equal(financialReportPeriodMatches(stored,{periodStart:'2026-08-10',periodEnd:'2026-08-16'}),true);
+  assert.equal(financialReportPeriodMatches(stored,{periodStart:'2026-08-10',periodEnd:'2026-08-17'}),false);
+  assert.equal(financialReportPeriodMatches({period_start:'2026-08-10',period_end:'2026-08-16'},{periodStart:'2026-08-10',periodEnd:'2026-08-16'}),true);
 });
 
 test('financial reports reserve every request and paginate by exact rrdId until 204', async () => {

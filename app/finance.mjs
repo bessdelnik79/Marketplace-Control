@@ -3,6 +3,20 @@ import { createHash } from 'node:crypto';
 export const financialReportsEndpoint = 'https://finance-api.wildberries.ru/api/finance/v1/sales-reports/detailed';
 export const financialParserVersion = 'wb-finance-v1';
 
+const calendarDate=value=>{
+  if(value instanceof Date){
+    if(Number.isNaN(value.getTime()))return null;
+    const pad=part=>String(part).padStart(2,'0');
+    return`${value.getFullYear()}-${pad(value.getMonth()+1)}-${pad(value.getDate())}`;
+  }
+  const text=String(value??'').slice(0,10);
+  return/^\d{4}-\d{2}-\d{2}$/.test(text)?text:null;
+};
+
+export function financialReportPeriodMatches(existing,incoming){
+  return calendarDate(existing?.period_start)===incoming?.periodStart&&calendarDate(existing?.period_end)===incoming?.periodEnd;
+}
+
 const identifierFields = ['reportId','rrdId','giId','nmId','shkId','ppvzOfficeId','orderId','trbxId','loyaltyId'];
 const identifierPattern = new RegExp(`("(?:${identifierFields.join('|')})"\\s*:\\s*)(-?\\d+)(?=\\s*[,}])`, 'g');
 const decimalPattern = /^-?\d+(?:\.\d+)?$/;

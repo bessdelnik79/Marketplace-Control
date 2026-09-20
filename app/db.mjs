@@ -3,7 +3,7 @@ import path from 'node:path';
 import pg from 'pg';
 import { createHash, randomUUID } from 'node:crypto';
 import { requiresEmailVerification } from './auth.mjs';
-import { financialParserVersion, normalizeFinancialOperation, stableJson } from './finance.mjs';
+import { financialParserVersion, financialReportPeriodMatches, normalizeFinancialOperation, stableJson } from './finance.mjs';
 
 const { Pool } = pg;
 export const pool = new Pool({
@@ -786,7 +786,7 @@ export async function completeFinancialSync(userId,job,{documentId,reports,objec
     let insertedReports=0,unchangedReports=0,insertedRows=0,issues=0;
     for(const source of reports){
       let report=(await client.query(`select id,period_start,period_end from mc.reports where store_id=$1 and report_type='weekly_realization' and external_report_id=$2`,[job.store_id,source.externalReportId])).rows[0];
-      if(report&&(String(report.period_start).slice(0,10)!==source.periodStart||String(report.period_end).slice(0,10)!==source.periodEnd))throw new Error('financial_report_period_mismatch');
+      if(report&&!financialReportPeriodMatches(report,source))throw new Error('financial_report_period_mismatch');
       if(!report)report=(await client.query(
         `insert into mc.reports(business_id,store_id,external_report_id,report_type,period_start,period_end)
          values($1,$2,$3,'weekly_realization',$4,$5) returning id,period_start,period_end`,
