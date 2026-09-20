@@ -17,10 +17,32 @@ const fixture={
 };
 
 await migrate();
-await pool.query(`insert into mc.users(id,display_name) values ($1,'P02 owner'),($2,'P02 viewer'),($3,'P02 foreign owner')`,[fixture.ownerId,fixture.viewerId,fixture.foreignOwnerId]);
-await pool.query(`insert into mc.businesses(id,name) values ($1,'P02 test'),($2,'P02 foreign test')`,[fixture.businessId,fixture.foreignBusinessId]);
-await pool.query(`insert into mc.memberships(business_id,user_id,role) values ($1,$2,'owner'),($1,$3,'viewer'),($4,$5,'owner')`,[fixture.businessId,fixture.ownerId,fixture.viewerId,fixture.foreignBusinessId,fixture.foreignOwnerId]);
-await pool.query(`insert into mc.stores(id,business_id,external_account_id,name) values ($1,$2,'p02-test','P02 store'),($3,$4,'p02-foreign-test','P02 foreign store')`,[fixture.storeId,fixture.businessId,fixture.foreignStoreId,fixture.foreignBusinessId]);
+async function inContext(userId,businessId,action){
+  const client=await pool.connect();
+  try{
+    await client.query('begin');
+    await client.query("select set_config('app.user_id',$1,true),set_config('app.business_id',$2,true)",[userId,businessId]);
+    const result=await action(client);
+    await client.query('commit');
+    return result;
+  }catch(error){await client.query('rollback');throw error;}finally{client.release();}
+}
+await inContext(fixture.ownerId,fixture.businessId,async client=>{
+  await client.query(`insert into mc.users(id,display_name) values ($1,'P02 owner')`,[fixture.ownerId]);
+  await client.query(`insert into mc.businesses(id,name) values ($1,'P02 test')`,[fixture.businessId]);
+  await client.query(`insert into mc.memberships(business_id,user_id,role) values ($1,$2,'owner')`,[fixture.businessId,fixture.ownerId]);
+  await client.query(`insert into mc.stores(id,business_id,external_account_id,name,status) values ($1,$2,'p02-test','P02 store','active')`,[fixture.storeId,fixture.businessId]);
+});
+await inContext(fixture.viewerId,fixture.businessId,async client=>{
+  await client.query(`insert into mc.users(id,display_name) values ($1,'P02 viewer')`,[fixture.viewerId]);
+  await client.query(`insert into mc.memberships(business_id,user_id,role) values ($1,$2,'viewer')`,[fixture.businessId,fixture.viewerId]);
+});
+await inContext(fixture.foreignOwnerId,fixture.foreignBusinessId,async client=>{
+  await client.query(`insert into mc.users(id,display_name) values ($1,'P02 foreign owner')`,[fixture.foreignOwnerId]);
+  await client.query(`insert into mc.businesses(id,name) values ($1,'P02 foreign test')`,[fixture.foreignBusinessId]);
+  await client.query(`insert into mc.memberships(business_id,user_id,role) values ($1,$2,'owner')`,[fixture.foreignBusinessId,fixture.foreignOwnerId]);
+  await client.query(`insert into mc.stores(id,business_id,external_account_id,name,status) values ($1,$2,'p02-foreign-test','P02 foreign store','active')`,[fixture.foreignStoreId,fixture.foreignBusinessId]);
+});
 
 test('P0.2 application DB methods preserve versions, atomic imports, roles and tax void semantics',async()=>{
   const input={storeId:fixture.storeId,category:'packaging',amount:'9007199254740991.1234',periodStart:'2026-09-01',periodEnd:'2026-09-01',recognitionMethod:'on_date',description:'Коробки'};
@@ -37,10 +59,11 @@ test('P0.2 application DB methods preserve versions, atomic imports, roles and t
   const repeatedImport=await importExpenses(fixture.ownerId,{storeId:fixture.storeId,fileName:'expenses.csv',checksum,rows});
   assert.deepEqual({ok:repeatedImport.ok,applied:repeatedImport.applied,skipped:repeatedImport.skipped},{ok:true,applied:0,skipped:1});
 
-  const countBefore=Number((await pool.query('select count(*) from mc.expenses where business_id=$1',[fixture.businessId])).rows[0].count);
+  const expenseCount=()=>inContext(fixture.ownerId,fixture.businessId,async client=>Number((await client.query('select count(*) from mc.expenses where business_id=$1',[fixture.businessId])).rows[0].count));
+  const countBefore=await expenseCount();
   const rejected=await importExpenses(fixture.ownerId,{storeId:fixture.storeId,fileName:'broken.csv',checksum:'b'.repeat(64),rows:[...rows,{rowNumber:3,category:'not_allowed',amount:'1',periodStart:'2026-09-03',periodEnd:'2026-09-03',recognitionMethod:'on_date'}]});
   assert.equal(rejected.ok,false);
-  assert.equal(Number((await pool.query('select count(*) from mc.expenses where business_id=$1',[fixture.businessId])).rows[0].count),countBefore);
+  assert.equal(await expenseCount(),countBefore);
 
   const concurrentInput={...input,expenseId:created.expenseId,amount:'42.1250',description:'Исправление'};
   const concurrent=await Promise.all([
