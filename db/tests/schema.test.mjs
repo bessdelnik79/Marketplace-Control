@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,10);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,11);
   pass('password identity and expiring session are stored by migration 2');
   const financialMethod=await one("select implementation_version from mc.method_versions where code='wb_finance_import' and version_no=1");
   assert.equal(financialMethod.implementation_version,'wb-finance-v1');
@@ -130,6 +130,87 @@ try {
   await rejects('insert into mc.expenses(business_id,store_id,product_id,external_entry_key) values($1,$2,$3,$4)',[b.id,store.id,products[0].id,'promo-1'],/unique constraint/,'stable expense key prevents duplicate import');
   await rejects('update mc.expense_versions set amount=100 where id=$1',[expenseV.id],/immutable/,'expense versions are immutable');
 
+  const storeExpense = await insert('expenses',{...base,external_entry_key:'store-1'});
+  assert.equal(storeExpense.product_id,null);
+  const expenseValues={...base,expense_id:storeExpense.id,version_no:1,amount:'123.4567',period_start:'2026-09-01',period_end:'2026-09-01',recognition_method:'on_date',origin:'manual',changed_by:user.id};
+  for(const [i,category] of ['external_promotion','agency_services','other_external','packaging','software_services'].entries()) {
+    await insert('expense_versions',{...expenseValues,version_no:i+1,category});
+  }
+  pass('store-wide expenses retain exact amounts and support old and new categories');
+  await rejects('insert into mc.expenses(business_id,store_id) values($1,$2)',[b.id,store2.id],/foreign key/,'store-wide expense cannot link a foreign tenant store');
+  await rejects('insert into mc.expenses(business_id,store_id) values($1,gen_random_uuid())',[b.id],/foreign key/,'store-wide expense must reference an existing store');
+  await rejects('insert into mc.expenses(business_id,store_id,product_id) values($1,$2,$3)',[b.id,store.id,products[3].id],/foreign key/,'product expense still requires a selected product');
+  await rejects('insert into mc.expenses(business_id,store_id,product_id) values($1,$2,$3)',[b.id,store.id,foreign.id],/foreign key/,'product expense rejects foreign tenant product');
+  await rejects('update mc.expenses set product_id=$1 where id=$2',[products[0].id,storeExpense.id],/immutable/,'store-wide expense cannot silently change to product scope');
+  await rejects('update mc.expenses set current_version_id=$1 where id=$2',[expenseV.id,storeExpense.id],/foreign key/,'expense pointer must reference its own version');
+  await assert.rejects(()=>insert('expense_versions',{...expenseValues,version_no:6,category:'wb_commission'}),/check constraint/);
+  pass('unsupported expense categories are rejected');
+  for(const kind of ['promotion_expenses','expenses']) {
+    await insert('import_batches',{...base,document_id:doc.id,kind,uploaded_by:user.id});
+  }
+  pass('generic expense imports coexist with legacy promotion expense imports');
+
+  const tax = await insert('tax_settings',{business_id:b.id,effective_from:'2026-01-01'});
+  const taxValues={business_id:b.id,tax_setting_id:tax.id,version_no:1,regime_code:'usn_income',usn_rate_fraction:'0.0600000000000000001',vat_mode:'exempt',changed_by:user.id};
+  const taxV1=await insert('tax_setting_versions',taxValues);
+  assert.equal(taxV1.usn_rate_fraction,'0.0600000000000000001');
+  await q('update mc.tax_settings set current_version_id=$1 where id=$2',[taxV1.id,tax.id]);
+  const taxV2=await insert('tax_setting_versions',{...taxValues,version_no:2,usn_rate_fraction:'0.05',vat_mode:'special'});
+  await q('update mc.tax_settings set current_version_id=$1 where id=$2',[taxV2.id,tax.id]);
+  assert.equal((await one('select usn_rate_fraction from mc.tax_setting_versions where id=$1',[taxV1.id])).usn_rate_fraction,taxValues.usn_rate_fraction);
+  pass('tax correction switches current version and preserves exact historical rate');
+  const laterTax=await insert('tax_settings',{business_id:b.id,effective_from:'2026-10-01'});
+  const laterTaxV=await insert('tax_setting_versions',{...taxValues,tax_setting_id:laterTax.id,usn_rate_fraction:'0.06',vat_mode:'general'});
+  await q('update mc.tax_settings set current_version_id=$1 where id=$2',[laterTaxV.id,laterTax.id]);
+  assert.equal((await one(`select v.id from mc.tax_settings s join mc.tax_setting_versions v on v.id=s.current_version_id where s.business_id=$1 and s.effective_from<=$2::date order by s.effective_from desc limit 1`,[b.id,'2026-09-30'])).id,taxV2.id);
+  assert.equal((await one(`select v.id from mc.tax_settings s join mc.tax_setting_versions v on v.id=s.current_version_id where s.business_id=$1 and s.effective_from<=$2::date order by s.effective_from desc limit 1`,[b.id,'2026-10-01'])).id,laterTaxV.id);
+  pass('tax effective dates preserve independent pre- and post-change settings');
+  await rejects('insert into mc.tax_settings(business_id,effective_from) values($1,$2)',[b.id,'2026-01-01'],/unique constraint/,'tax effective date is unique per business');
+  await rejects('update mc.tax_settings set current_version_id=$1 where id=$2',[laterTaxV.id,tax.id],/foreign key/,'tax pointer cannot reference another effective date');
+  await rejects('update mc.tax_settings set effective_from=$1 where id=$2',['2026-02-01',tax.id],/immutable/,'tax effective date cannot be overwritten');
+  await rejects('update mc.tax_settings set business_id=$1 where id=$2',[b2.id,tax.id],/immutable/,'tax identity cannot move to another tenant');
+  await rejects('delete from mc.tax_settings where id=$1',[tax.id],/immutable/,'tax identity cannot be deleted');
+  await rejects('update mc.tax_setting_versions set usn_rate_fraction=0.07 where id=$1',[taxV1.id],/immutable/,'historical tax rate cannot be overwritten');
+  await rejects('delete from mc.tax_setting_versions where id=$1',[taxV1.id],/immutable/,'historical tax version cannot be deleted');
+  await assert.rejects(()=>insert('tax_setting_versions',{...taxValues,business_id:b2.id,version_no:3}),/foreign key/);
+  pass('tax version parent is tenant-bound even for database owner');
+  await context(b2.id,user.id);
+  const foreignTax=await insert('tax_settings',{business_id:b2.id,effective_from:'2026-01-01'});
+  const foreignTaxV=await insert('tax_setting_versions',{...taxValues,business_id:b2.id,tax_setting_id:foreignTax.id});
+  await context(b.id,user.id);
+  await rejects('update mc.tax_settings set current_version_id=$1 where id=$2',[foreignTaxV.id,tax.id],/foreign key/,'tax pointer cannot reference a foreign tenant version');
+  for(const invalid of [
+    {usn_rate_fraction:null},{usn_rate_fraction:'-0.01'},{usn_rate_fraction:'1.01'},
+    {usn_rate_fraction:'NaN'},{usn_rate_fraction:'Infinity'},
+    {regime_code:'osno',usn_rate_fraction:'0.06'},
+    {regime_code:'usn_income_expenses',usn_rate_fraction:null},
+    {regime_code:'unknown'},{vat_mode:'unknown'},{state:'deleted'},{currency:'USD'},{version_no:0}
+  ]) {
+    await assert.rejects(()=>insert('tax_setting_versions',{...taxValues,version_no:3,...invalid}),/check constraint/);
+  }
+  const noRate={...taxValues,version_no:3};
+  delete noRate.usn_rate_fraction;
+  await assert.rejects(()=>insert('tax_setting_versions',noRate),/check constraint/);
+  await assert.rejects(()=>insert('tax_setting_versions',{...taxValues,version_no:3,vat_mode:null}),/not-null constraint/);
+  pass('tax regime, finite rate, VAT mode, state and currency constraints reject invalid inputs and missing rate');
+  for(const [i,values] of [
+    {regime_code:'usn_income',usn_rate_fraction:'0',vat_mode:'unmodeled'},
+    {regime_code:'usn_income_expenses',usn_rate_fraction:'1',vat_mode:'exempt'},
+    {regime_code:'usn_income_expenses',usn_rate_fraction:'0.15',vat_mode:'special'},
+    {regime_code:'osno',usn_rate_fraction:null,vat_mode:'general'},
+    {regime_code:'osno',usn_rate_fraction:null,vat_mode:'exempt',state:'voided'}
+  ].entries()) await insert('tax_setting_versions',{...taxValues,version_no:i+3,...values});
+  pass('all planned tax regimes, independent VAT modes and explicit zero USN rate are representable');
+  const voidedTax=await insert('tax_setting_versions',{...taxValues,version_no:8,state:'voided'});
+  await q('update mc.tax_settings set current_version_id=$1 where id=$2',[voidedTax.id,tax.id]);
+  assert.equal((await one('select count(*)::int as n from mc.tax_setting_versions where tax_setting_id=$1',[tax.id])).n,8);
+  pass('voiding a tax setting appends history instead of deleting it');
+  const taxAudit=await q("select * from mc.audit_events where entity_type in ('tax_settings','tax_setting_versions') and business_id=$1",[b.id]);
+  assert.ok(taxAudit.some(row=>row.action==='created'&&row.entity_id===taxV1.id));
+  assert.ok(taxAudit.some(row=>row.action==='updated'&&row.safe_details.after.current_version_id===voidedTax.id));
+  assert.ok(taxAudit.every(row=>row.store_id===null&&row.actor_user_id===user.id));
+  pass('business-level tax creation, versions and pointer changes produce actor-attributed audit events');
+
   const reportDoc = await insert('source_documents',{...base,origin:'wb_api',document_type:'financial_report',checksum:'report-content',completeness:'complete'});
   const report = await insert('reports',{...base,external_report_id:'report-1',period_start:'2026-08-31',period_end:'2026-09-06'});
   const rv = await insert('report_versions',{...base,report_id:report.id,document_id:reportDoc.id,version_no:1,checksum:'hash-1',parser_version:'test'});
@@ -196,11 +277,35 @@ try {
   assert.equal((await one('select count(*)::int as n from mc.products where store_id=$1',[store2.id])).n,0);
   assert.equal((await one('select count(*)::int as n from mc.selected_products')).n,3);
   pass('non-owner role sees only current business, including views');
+  assert.equal((await one('select count(*)::int as n from mc.tax_settings')).n,2);
+  assert.equal((await one('select count(*)::int as n from mc.tax_setting_versions where business_id=$1',[b2.id])).n,0);
+  pass('tax settings and versions enforce tenant-scoped reads');
   await context('',user.id);
   assert.equal((await one('select count(*)::int as n from mc.memberships where user_id=$1',[user.id])).n,2);
   pass('authenticated user can discover own business before tenant context is set');
   assert.equal((await one('select count(*)::int as n from mc.products')).n,0);
+  for(const table of ['expenses','expense_versions','tax_settings','tax_setting_versions']) {
+    assert.equal((await one(`select count(*)::int as n from mc.${table}`)).n,0);
+  }
   pass('missing tenant context fails closed');
+  await db.exec('reset role;');
+  const taxRls=await q("select relrowsecurity,relforcerowsecurity from pg_class where oid in ('mc.tax_settings'::regclass,'mc.tax_setting_versions'::regclass)");
+  assert.ok(taxRls.length===2&&taxRls.every(row=>row.relrowsecurity&&row.relforcerowsecurity));
+  await db.exec('grant insert,update on mc.tax_settings,mc.tax_setting_versions,mc.expenses,mc.expense_versions,mc.audit_events to mc_test_reader; set role mc_test_reader;');
+  await rejects('insert into mc.tax_settings(business_id,effective_from) values($1,$2)',[b.id,'2027-01-01'],/row-level security/,'missing tenant context prevents tax writes');
+  await context(b.id,user.id);
+  await rejects('insert into mc.tax_settings(business_id,effective_from) values($1,$2)',[b2.id,'2027-01-01'],/row-level security/,'non-owner cannot create tax identity in another tenant');
+  await assert.rejects(()=>insert('tax_setting_versions',{...taxValues,business_id:b2.id,tax_setting_id:foreignTax.id,version_no:2}),/row-level security/);
+  await rejects('insert into mc.expenses(business_id,store_id) values($1,$2)',[b2.id,store2.id],/row-level security/,'non-owner cannot create expense in another tenant');
+  assert.equal((await q('update mc.tax_settings set current_version_id=null where id=$1 returning id',[foreignTax.id])).length,0);
+  const roleTax=await insert('tax_settings',{business_id:b.id,effective_from:'2027-01-01'});
+  const roleTaxVersion=await insert('tax_setting_versions',{...taxValues,tax_setting_id:roleTax.id});
+  await q('update mc.tax_settings set current_version_id=$1 where id=$2',[roleTaxVersion.id,roleTax.id]);
+  assert.equal((await one('select current_version_id from mc.tax_settings where id=$1',[roleTax.id])).current_version_id,roleTaxVersion.id);
+  const roleExpense=await insert('expenses',{...base,external_entry_key:'role-store-expense'});
+  const roleExpenseVersion=await insert('expense_versions',{...expenseValues,expense_id:roleExpense.id,category:'packaging'});
+  await q('update mc.expenses set current_version_id=$1 where id=$2',[roleExpenseVersion.id,roleExpense.id]);
+  pass('forced RLS permits valid non-owner tax and expense workflows with audit while isolating foreign writes');
   await db.exec('reset role;');
   await context(b.id,user.id);
   await q("update mc.subscriptions set status='ended' where business_id=$1",[b.id]);
@@ -224,6 +329,7 @@ try {
   await rejects(selectSql,[extra.id,extraDoc.id,[ep1.id,ep2.id]],/product limit/,'product quota is shared across stores');
   await one(selectSql,[extra.id,extraDoc.id,[ep1.id]]);
   pass('new plan permits another store with remaining product allowance');
+  await rejects('insert into mc.expenses(business_id,store_id,product_id) values($1,$2,$3)',[b.id,store.id,ep1.id],/foreign key/,'expense cannot use a selected product from another store of the same business');
   await rejects('update mc.subscriptions set plan_version_id=$1 where business_id=$2',[byCode.free.id,b.id],/downgrade/,'unresolved downgrade cannot silently remove selected products');
   await rejects('update mc.billing_plan_versions set product_limit=999 where id=$1',[byCode.free.id],/immutable/,'published plan conditions require a new version');
 
@@ -254,18 +360,20 @@ try {
   for(const t of tables) {
     inventory.push(`## ${t.table_name}`,'','| Поле | Тип | NULL | По умолчанию |','|---|---|---|---|');
     for(const c of cols.filter(x=>x.table_name===t.table_name)) {
-      const type=c.data_type==='numeric'?`numeric(${c.numeric_precision},${c.numeric_scale})`:c.data_type;
+      const type=c.data_type==='numeric'&&c.numeric_precision!==null?`numeric(${c.numeric_precision},${c.numeric_scale})`:c.data_type;
       inventory.push(`| ${c.column_name} | ${type} | ${c.is_nullable==='YES'?'да':'нет'} | ${(c.column_default??'—').replaceAll('|','\\|')} |`);
     }
     inventory.push('','Ограничения и связи:','');
     for(const c of constraints.filter(x=>x.table_name===t.table_name)) inventory.push(`- \`${c.definition}\``);
     inventory.push('');
   }
-  await mkdir(path.join(root,'outputs'),{recursive:true});
-  await writeFile(path.join(root,'outputs/database-v1-dictionary.md'),inventory.join('\n')+'\n');
-  await mkdir(path.join(root,'work'),{recursive:true});
-  await writeFile(path.join(root,'work/db-test-result.json'),JSON.stringify({engine:version,passed:count,tables:tables.length},null,2));
-  console.log(`PASS: ${count} checks, ${tables.length} tables. Dictionary generated.`);
+  if(process.env.DB_TEST_CHECK_ONLY!=='1') {
+    await mkdir(path.join(root,'outputs'),{recursive:true});
+    await writeFile(path.join(root,'outputs/database-v1-dictionary.md'),inventory.join('\n')+'\n');
+    await mkdir(path.join(root,'work'),{recursive:true});
+    await writeFile(path.join(root,'work/db-test-result.json'),JSON.stringify({engine:version,passed:count,tables:tables.length},null,2));
+  }
+  console.log(`PASS: ${count} checks, ${tables.length} tables.${process.env.DB_TEST_CHECK_ONLY==='1'?'':' Dictionary generated.'}`);
 } catch(error) {
   console.error(error.message, error.detail??'', error.where??'');
   process.exitCode=1;

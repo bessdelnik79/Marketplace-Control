@@ -41,6 +41,21 @@
 - `UNIQUE (provider, subject)`
 - `FOREIGN KEY (user_id) REFERENCES mc.users(id)`
 
+## auth_oauth_states
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| state_hash | text | нет | — |
+| provider | text | нет | — |
+| expires_at | timestamp with time zone | нет | — |
+| created_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `CHECK ((expires_at > created_at))`
+- `PRIMARY KEY (state_hash)`
+- `CHECK ((provider = 'yandex'::text))`
+
 ## auth_password_credentials
 
 | Поле | Тип | NULL | По умолчанию |
@@ -55,6 +70,41 @@
 - `CHECK ((password_hash ~~ 'scrypt$%'::text))`
 - `PRIMARY KEY (user_id)`
 - `FOREIGN KEY (user_id) REFERENCES mc.users(id) ON DELETE CASCADE`
+
+## auth_rate_limits
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| bucket_key | text | нет | — |
+| attempts | integer | нет | — |
+| window_started_at | timestamp with time zone | нет | — |
+| expires_at | timestamp with time zone | нет | — |
+
+Ограничения и связи:
+
+- `CHECK ((attempts > 0))`
+- `CHECK ((expires_at > window_started_at))`
+- `PRIMARY KEY (bucket_key)`
+
+## auth_registration_challenges
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| email | text | нет | — |
+| display_name | text | нет | — |
+| password_hash | text | нет | — |
+| code_hash | text | нет | — |
+| attempts | integer | нет | 0 |
+| expires_at | timestamp with time zone | нет | — |
+| created_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `CHECK (((attempts >= 0) AND (attempts <= 5)))`
+- `CHECK ((expires_at > created_at))`
+- `UNIQUE (email)`
+- `PRIMARY KEY (id)`
 
 ## auth_sessions
 
@@ -262,6 +312,28 @@
 - `CHECK ((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text])))`
 - `UNIQUE (store_id, input_fingerprint, method_version_id, period_start, period_end)`
 
+## connection_secrets
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| connection_id | uuid | нет | — |
+| ciphertext | bytea | нет | — |
+| nonce | bytea | нет | — |
+| auth_tag | bytea | нет | — |
+| key_version | text | нет | 'v1'::text |
+| created_at | timestamp with time zone | нет | now() |
+| updated_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `CHECK ((octet_length(auth_tag) = 16))`
+- `FOREIGN KEY (business_id, connection_id) REFERENCES mc.connections(business_id, id) ON DELETE CASCADE`
+- `UNIQUE (connection_id)`
+- `CHECK ((octet_length(nonce) = 12))`
+- `PRIMARY KEY (id)`
+
 ## connections
 
 | Поле | Тип | NULL | По умолчанию |
@@ -391,7 +463,7 @@
 - `UNIQUE (business_id, store_id, expense_id, id)`
 - `UNIQUE (business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, import_row_id) REFERENCES mc.import_rows(business_id, store_id, id)`
-- `CHECK ((category = ANY (ARRAY['external_promotion'::text, 'agency_services'::text, 'other_external'::text])))`
+- `CHECK ((category = ANY (ARRAY['external_promotion'::text, 'agency_services'::text, 'other_external'::text, 'packaging'::text, 'software_services'::text])))`
 - `FOREIGN KEY (changed_by) REFERENCES mc.users(id)`
 - `CHECK ((period_end >= period_start))`
 - `CHECK (((recognition_method <> 'on_date'::text) OR (period_end = period_start)))`
@@ -412,7 +484,7 @@
 | id | uuid | нет | gen_random_uuid() |
 | business_id | uuid | нет | — |
 | store_id | uuid | нет | — |
-| product_id | uuid | нет | — |
+| product_id | uuid | да | — |
 | external_entry_key | text | да | — |
 | current_version_id | uuid | да | — |
 | created_at | timestamp with time zone | нет | now() |
@@ -423,6 +495,7 @@
 - `UNIQUE (business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.product_selection_items(business_id, store_id, product_id)`
 - `PRIMARY KEY (id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
 - `UNIQUE (store_id, external_entry_key)`
 
 ## financial_categories
@@ -483,7 +556,7 @@
 - `FOREIGN KEY (business_id, store_id, document_id) REFERENCES mc.source_documents(business_id, store_id, id)`
 - `UNIQUE (business_id, store_id, id)`
 - `UNIQUE (document_id, kind)`
-- `CHECK ((kind = ANY (ARRAY['costs'::text, 'promotion_expenses'::text])))`
+- `CHECK ((kind = ANY (ARRAY['costs'::text, 'promotion_expenses'::text, 'expenses'::text])))`
 - `PRIMARY KEY (id)`
 - `CHECK ((status = ANY (ARRAY['uploaded'::text, 'validating'::text, 'ready'::text, 'applying'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])))`
 - `FOREIGN KEY (uploaded_by) REFERENCES mc.users(id)`
@@ -688,6 +761,7 @@
 | title | text | да | — |
 | status | text | нет | 'active'::text |
 | created_at | timestamp with time zone | нет | now() |
+| image_url | text | да | — |
 
 Ограничения и связи:
 
@@ -933,13 +1007,14 @@
 | id | uuid | нет | gen_random_uuid() |
 | business_id | uuid | нет | — |
 | marketplace_code | text | нет | 'wb'::text |
-| external_account_id | text | нет | — |
+| external_account_id | text | да | — |
 | name | text | нет | — |
-| status | text | нет | 'active'::text |
+| status | text | нет | 'paused'::text |
 | created_at | timestamp with time zone | нет | now() |
 
 Ограничения и связи:
 
+- `CHECK (((status <> 'active'::text) OR (external_account_id IS NOT NULL)))`
 - `FOREIGN KEY (business_id) REFERENCES mc.businesses(id)`
 - `UNIQUE (business_id, id)`
 - `UNIQUE (business_id, marketplace_code, external_account_id)`
@@ -1006,6 +1081,7 @@
 | finished_at | timestamp with time zone | да | — |
 | error_code | text | да | — |
 | created_at | timestamp with time zone | нет | now() |
+| progress | jsonb | нет | '{}'::jsonb |
 
 Ограничения и связи:
 
@@ -1038,6 +1114,57 @@
 - `CHECK ((status = ANY (ARRAY['active'::text, 'paused'::text, 'blocked'::text])))`
 - `UNIQUE (store_id, source_type)`
 
+## tax_setting_versions
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| tax_setting_id | uuid | нет | — |
+| version_no | integer | нет | — |
+| regime_code | text | нет | — |
+| usn_rate_fraction | numeric | да | — |
+| vat_mode | text | нет | — |
+| state | text | нет | 'active'::text |
+| currency | text | нет | 'RUB'::text |
+| changed_by | uuid | нет | — |
+| comment | text | да | — |
+| created_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `UNIQUE (business_id, id)`
+- `FOREIGN KEY (business_id, tax_setting_id) REFERENCES mc.tax_settings(business_id, id)`
+- `UNIQUE (business_id, tax_setting_id, id)`
+- `FOREIGN KEY (changed_by) REFERENCES mc.users(id)`
+- `CHECK ((((regime_code = ANY (ARRAY['usn_income'::text, 'usn_income_expenses'::text])) AND (usn_rate_fraction IS NOT NULL) AND ((usn_rate_fraction >= (0)::numeric) AND (usn_rate_fraction <= (1)::numeric))) OR ((regime_code = 'osno'::text) AND (usn_rate_fraction IS NULL))))`
+- `CHECK ((currency = 'RUB'::text))`
+- `PRIMARY KEY (id)`
+- `CHECK ((regime_code = ANY (ARRAY['usn_income'::text, 'usn_income_expenses'::text, 'osno'::text])))`
+- `CHECK ((state = ANY (ARRAY['active'::text, 'voided'::text])))`
+- `UNIQUE (tax_setting_id, version_no)`
+- `CHECK ((vat_mode = ANY (ARRAY['unmodeled'::text, 'exempt'::text, 'general'::text, 'special'::text])))`
+- `CHECK ((version_no > 0))`
+
+## tax_settings
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| effective_from | date | нет | — |
+| current_version_id | uuid | да | — |
+| created_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `UNIQUE (business_id, effective_from)`
+- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id)`
+- `UNIQUE (business_id, id)`
+- `FOREIGN KEY (business_id, id, current_version_id) REFERENCES mc.tax_setting_versions(business_id, tax_setting_id, id)`
+- `CHECK (isfinite(effective_from))`
+- `PRIMARY KEY (id)`
+
 ## users
 
 | Поле | Тип | NULL | По умолчанию |
@@ -1047,6 +1174,7 @@
 | email | text | да | — |
 | status | text | нет | 'active'::text |
 | created_at | timestamp with time zone | нет | now() |
+| email_verified_at | timestamp with time zone | да | — |
 
 Ограничения и связи:
 
@@ -1120,3 +1248,16 @@
 - `PRIMARY KEY (id)`
 - `CHECK ((status = ANY (ARRAY['active'::text, 'archived'::text])))`
 - `UNIQUE (store_id, product_id, external_variant_id)`
+
+## wb_api_request_slots
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| rate_key | text | нет | — |
+| next_allowed_at | timestamp with time zone | нет | — |
+| updated_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `PRIMARY KEY (rate_key)`
+- `CHECK ((length(rate_key) = 64))`
