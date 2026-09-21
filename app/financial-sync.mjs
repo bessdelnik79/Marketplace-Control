@@ -4,6 +4,7 @@ import { beginFinancialSync, completeFinancialSync, failFinancialSync, reserveFi
 import { financialDateRange, financialRequestDelaySeconds, loadWbFinancialReports } from './finance.mjs';
 import { removeFinancialDocument, storeFinancialPages } from './source-storage.mjs';
 import { assertWbFinancialToken, decodeWbToken } from './wb.mjs';
+import { scheduleFinancialCalculation } from './calculation-sync.mjs';
 
 const activeJobs = new Set();
 const knownErrors = new Set([
@@ -54,6 +55,7 @@ export function scheduleFinancialSync(userId, storeId, {
       stored = await storeFinancialPages({ businessId: job.business_id, storeId: job.store_id, documentId, pages: financial.pages, root: sourceRoot, ...(masterKey ? { masterKey } : {}) });
       const saved = await completeFinancialSync(userId, job, { documentId, reports: financial.reports, objects: stored.objects });
       console.info('[WB financial reports synced]', JSON.stringify({ time: new Date().toISOString(), userId, storeId, reports: financial.reports.length, rows: financial.rows.length, insertedReports: saved.insertedReports, unchangedReports: saved.unchangedReports, issues: saved.issues }));
+      scheduleFinancialCalculation(userId, storeId);
     } catch (error) {
       const code = safeCode(error);
       const retryDelaySeconds=code==='financial_rate_limited'?financialRequestDelaySeconds(random):70;

@@ -1,7 +1,11 @@
 import { createHash } from 'node:crypto';
 
 export const financialReportsEndpoint = 'https://finance-api.wildberries.ru/api/finance/v1/sales-reports/detailed';
-export const financialParserVersion = 'wb-finance-v1';
+export const financialParserVersion = 'wb-finance-v2';
+const unverifiedMoneyFields = [
+  'sellerPromo','installmentCoFinancingAmount','cashbackAmount','cashbackDiscount',
+  'cashbackCommissionChange','sellerPromoDiscount','loyaltyDiscount','agencyVat'
+];
 
 const calendarDate=value=>{
   if(value instanceof Date){
@@ -89,33 +93,42 @@ function hasMoney(row, fields) {
 }
 
 export function normalizeFinancialOperation(row) {
-  const label = `${row?.docTypeName ?? ''} ${row?.sellerOperName ?? ''}`.toLocaleLowerCase('ru-RU');
+  const docType = String(row?.docTypeName ?? '').trim().toLocaleLowerCase('ru-RU');
+  const operationName = String(row?.sellerOperName ?? '').trim().toLocaleLowerCase('ru-RU');
   let operationType = 'unclassified';
-  if (label.includes('возврат')) operationType = 'return';
-  else if (label.includes('продаж')) operationType = 'sale';
+  if (docType === 'возврат' && operationName === 'возврат') operationType = 'return';
+  else if (docType === 'продажа' && operationName === 'продажа') operationType = 'sale';
   else if (hasMoney(row, ['deliveryService','rebillLogisticCost','paidStorage','paidAcceptance','ppvzSalesCommission','acquiringFee'])) operationType = 'service_charge';
   else if (hasMoney(row, ['penalty','deduction','additionalPayment'])) operationType = 'adjustment';
   else if (hasMoney(row, ['forPay'])) operationType = 'settlement';
 
   const components = [];
-  const add = (field, categoryCode, sign) => {
+  const add = (field, categoryCode, direction) => {
     const raw = decimal(row?.[field]);
     if (raw === null || raw === '0') return;
-    const amountSigned = sign === 'negative' ? decimal(raw, { negative: true }) : sign === 'positive' ? decimal(raw, { absolute: true }) : raw;
+    let amountSigned=raw;
+    if(direction==='income')amountSigned=decimal(raw,{absolute:true});
+    else if(direction==='expense')amountSigned=raw.startsWith('-')?decimal(raw,{absolute:true}):decimal(raw,{negative:true});
+    else if(direction==='document')amountSigned=operationType==='return'?decimal(raw,{absolute:true}):operationType==='sale'?decimal(raw,{negative:true}):raw.startsWith('-')?decimal(raw,{absolute:true}):decimal(raw,{negative:true});
+    else if(direction==='settlement')amountSigned=operationType==='return'?decimal(raw,{negative:true}):operationType==='sale'?decimal(raw,{absolute:true}):raw;
     components.push({ componentKey: field, categoryCode, amountSigned, sourceField: field });
   };
-  if (operationType === 'sale') add('retailAmount', 'revenue', 'positive');
-  if (operationType === 'return') add('retailAmount', 'revenue_return', 'negative');
-  add('ppvzSalesCommission', 'commission', 'negative');
-  add('acquiringFee', 'acquiring', 'negative');
-  add('deliveryService', 'logistics', 'negative');
-  add('rebillLogisticCost', 'logistics', 'negative');
-  add('paidStorage', 'storage', 'negative');
-  add('paidAcceptance', 'acceptance', 'negative');
-  add('penalty', 'penalty', 'negative');
-  add('deduction', 'deduction', 'negative');
-  add('additionalPayment', 'additional_payment', 'positive');
-  add('forPay', 'payout', 'source');
+  if (operationType === 'sale') add('retailAmount', 'revenue', 'income');
+  if (operationType === 'return') add('retailAmount', 'revenue_return', 'expense');
+  add('ppvzSalesCommission', 'commission', 'document');
+  add('vw', 'wb_reward_without_vat', 'source');
+  add('vwNds', 'wb_reward_vat', 'source');
+  add('ppvzReward', 'pickup_reward', 'source');
+  add('acquiringFee', 'acquiring', 'document');
+  add('deliveryService', 'logistics', 'document');
+  add('rebillLogisticCost', 'rebill_logistic_compensation', 'source');
+  add('paidStorage', 'storage', 'expense');
+  add('paidAcceptance', 'acceptance', 'expense');
+  add('penalty', 'penalty', 'expense');
+  add('deduction', 'deduction', 'expense');
+  add('additionalPayment', 'commission_adjustment', 'expense');
+  add('forPay', 'payout', 'settlement');
+  for(const field of unverifiedMoneyFields)add(field,'unclassified_financial_field','source');
 
   let quantity = decimal(row?.quantity);
   if (quantity !== null && operationType === 'return') quantity = decimal(quantity, { negative: true });

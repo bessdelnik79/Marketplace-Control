@@ -1,0 +1,424 @@
+import { createHash } from 'node:crypto';
+
+const MONEY_SCALE = 4;
+const RESULT_CATEGORIES = new Set([
+  'revenue', 'revenue_return', 'commission', 'acquiring', 'logistics',
+  'storage', 'acceptance', 'penalty', 'deduction', 'commission_adjustment',
+  'other_adjustment'
+]);
+const NON_RESULT_CATEGORIES = new Set(['payout']);
+const EXPENSE_CATEGORIES = new Set([
+  'packaging', 'software_services', 'external_promotion', 'agency_services', 'other_external'
+]);
+const MISSING_REASON_ORDER = [
+  'cost_missing',
+  'return_original_sale_unmatched',
+  'operation_unclassified',
+  'product_link_missing',
+  'tax_setting_missing',
+  'tax_method_unsupported',
+  'vat_method_unsupported',
+  'report_coverage_incomplete',
+  'source_unreconciled'
+];
+const MISSING_REASON_RANK = new Map(MISSING_REASON_ORDER.map((reason, index) => [reason, index]));
+
+function invalid(code = 'calculation_invalid_input') {
+  throw new Error(code);
+}
+
+function parseDecimal(value, maximumScale, code = 'calculation_invalid_decimal') {
+  const text = String(value ?? '').trim();
+  const match = text.match(/^([+-]?)(\d+)(?:\.(\d+))?$/);
+  if (!match || (match[3]?.length ?? 0) > maximumScale) invalid(code);
+  const whole = match[2].replace(/^0+(?=\d)/, '');
+  const fraction = (match[3] ?? '').padEnd(maximumScale, '0');
+  let scaled = BigInt(`${whole}${fraction}` || '0');
+  if (match[1] === '-') scaled = -scaled;
+  return scaled;
+}
+
+function formatDecimal(scaled, scale = MONEY_SCALE) {
+  const negative = scaled < 0n;
+  const digits = (negative ? -scaled : scaled).toString().padStart(scale + 1, '0');
+  const value = scale === 0 ? digits : `${digits.slice(0, -scale)}.${digits.slice(-scale)}`;
+  return negative && scaled !== 0n ? `-${value}` : value;
+}
+
+function money(value) {
+  const text = String(value ?? '').trim();
+  const whole = text.match(/^[+-]?(\d+)/)?.[1]?.replace(/^0+(?=\d)/, '');
+  if (whole && whole.length > 16) invalid('calculation_money_overflow');
+  return parseDecimal(value, MONEY_SCALE, 'calculation_invalid_money');
+}
+
+export function normalizeMoney(value) {
+  return formatDecimal(money(value));
+}
+
+function validDate(value) {
+  const text = String(value ?? '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) invalid('calculation_invalid_date');
+  const [year, month, day] = text.split('-').map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) invalid('calculation_invalid_date');
+  return text;
+}
+
+function dateNumber(value) {
+  const [year, month, day] = validDate(value).split('-').map(Number);
+  return Math.trunc(Date.UTC(year, month - 1, day) / 86400000);
+}
+
+function dateFromNumber(value) {
+  return new Date(value * 86400000).toISOString().slice(0, 10);
+}
+
+function period(start, end) {
+  start = validDate(start);
+  end = validDate(end);
+  if (end < start) invalid('calculation_invalid_period');
+  return { start, end, startDay: dateNumber(start), endDay: dateNumber(end) };
+}
+
+function requiredId(value) {
+  const id = String(value ?? '').trim();
+  if (!id) invalid('calculation_source_id_missing');
+  return id;
+}
+
+function stable(value) {
+  if (Array.isArray(value)) return value.map(stable);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, stable(value[key])]));
+  }
+  return value;
+}
+
+export function canonicalJson(value) {
+  return JSON.stringify(stable(value));
+}
+
+function sortedUnique(values) {
+  return [...new Set((values ?? []).map(value => requiredId(value)))].sort();
+}
+
+export function createInputFingerprint({
+  resultMethodVersion,
+  selectedProductIds = [],
+  reportVersionIds = [],
+  reportNormalizationIds = [],
+  costVersionIds = [],
+  expenseVersionIds = [],
+  taxSettingVersionIds = [],
+  periodStart,
+  periodEnd
+}) {
+  const range = period(periodStart, periodEnd);
+  const payload = {
+    result_method_version: requiredId(resultMethodVersion),
+    selection_snapshot_product_ids_sorted: sortedUnique(selectedProductIds),
+    report_version_ids_sorted: sortedUnique(reportVersionIds),
+    report_normalization_ids_sorted: sortedUnique(reportNormalizationIds),
+    cost_version_ids_sorted: sortedUnique(costVersionIds),
+    expense_version_ids_sorted: sortedUnique(expenseVersionIds),
+    tax_setting_version_ids_sorted: sortedUnique(taxSettingVersionIds),
+    period_start: range.start,
+    period_end: range.end
+  };
+  return createHash('sha256').update(canonicalJson(payload), 'utf8').digest('hex');
+}
+
+export function periodizeExpense(expense, calculationPeriod = null) {
+  const id = requiredId(expense?.id);
+  const expensePeriod = period(expense?.periodStart, expense?.periodEnd);
+  const amount = money(expense?.amount);
+  if (amount <= 0n) invalid('calculation_invalid_expense_amount');
+  const method = expense?.recognitionMethod;
+  if (!['on_date', 'evenly_over_period'].includes(method)) invalid('calculation_invalid_recognition_method');
+  if (method === 'on_date' && expensePeriod.start !== expensePeriod.end) invalid('calculation_on_date_period_mismatch');
+
+  const numberOfDays = BigInt(expensePeriod.endDay - expensePeriod.startDay + 1);
+  const base = amount / numberOfDays;
+  const last = amount - base * (numberOfDays - 1n);
+  const window = calculationPeriod ? period(calculationPeriod.periodStart, calculationPeriod.periodEnd) : expensePeriod;
+  const firstDay = Math.max(expensePeriod.startDay, window.startDay);
+  const finalDay = Math.min(expensePeriod.endDay, window.endDay);
+  if (finalDay < firstDay) return [];
+
+  const result = [];
+  for (let day = firstDay; day <= finalDay; day += 1) {
+    const contribution = method === 'on_date' || day === expensePeriod.endDay ? last : base;
+    result.push({
+      expenseVersionId: id,
+      accountingDate: dateFromNumber(day),
+      amountSigned: formatDecimal(-contribution)
+    });
+  }
+  return result;
+}
+
+function roundedProductToMoney(leftValue, rightMoney) {
+  const leftText = String(leftValue ?? '').trim();
+  const match = leftText.match(/^([+-]?)(\d+)(?:\.(\d+))?$/);
+  if (!match || (match[3]?.length ?? 0) > 6) invalid('calculation_invalid_quantity');
+  const scale = match[3]?.length ?? 0;
+  const left = parseDecimal(leftText, scale, 'calculation_invalid_quantity');
+  const product = left * rightMoney;
+  const divisor = 10n ** BigInt(scale);
+  const absolute = product < 0n ? -product : product;
+  let quotient = absolute / divisor;
+  const remainder = absolute % divisor;
+  if (remainder * 2n >= divisor) quotient += 1n;
+  return product < 0n ? -quotient : quotient;
+}
+
+function compareEvidence(a, b) {
+  return a.sourceType.localeCompare(b.sourceType) || a.sourceId.localeCompare(b.sourceId);
+}
+
+function lineKey(line) {
+  return canonicalJson({
+    scopeCode: line.scopeCode,
+    productId: line.productId,
+    variantId: line.variantId,
+    accountingDate: line.accountingDate,
+    categoryCode: line.categoryCode
+  });
+}
+
+function addLine(lines, line, amount, evidence) {
+  if (amount === 0n) return;
+  const key = lineKey(line);
+  const current = lines.get(key) ?? { ...line, amount: 0n, evidence: [] };
+  current.amount += amount;
+  current.evidence.push(evidence);
+  lines.set(key, current);
+}
+
+function sourceInPeriod(source, range) {
+  const date = validDate(source?.accountingDate);
+  return date >= range.start && date <= range.end;
+}
+
+function validateScopeStructure(source) {
+  if (source?.scopeCode === 'store' && (source.productId != null || source.variantId != null)) {
+    invalid('calculation_store_scope_contradiction');
+  }
+}
+
+function resolveScope(source, selected, reasons) {
+  validateScopeStructure(source);
+  if (source?.scopeCode === 'store') {
+    return { scopeCode: 'store', productId: null, variantId: null };
+  }
+  if (source?.scopeCode === 'product_expected') {
+    reasons.add('product_link_missing');
+    return null;
+  }
+  if (source?.scopeCode !== 'selected_product') invalid('calculation_invalid_scope');
+  if (!source.productId) {
+    reasons.add('product_link_missing');
+    return null;
+  }
+  const productId = String(source.productId);
+  if (!selected.has(productId)) return null;
+  return { scopeCode: 'selected_product', productId, variantId: source.variantId == null ? null : String(source.variantId) };
+}
+
+function selectCost(costVersions, variantId, accountingDate) {
+  const candidates = costVersions.filter(cost =>
+    cost?.state !== 'voided' &&
+    String(cost?.variantId ?? '') === variantId &&
+    validDate(cost?.effectiveFrom) <= accountingDate
+  );
+  candidates.sort((a, b) =>
+    validDate(b.effectiveFrom).localeCompare(validDate(a.effectiveFrom)) ||
+    requiredId(b.id).localeCompare(requiredId(a.id))
+  );
+  if (candidates.length > 1 && validDate(candidates[0].effectiveFrom) === validDate(candidates[1].effectiveFrom)) {
+    invalid('calculation_ambiguous_cost_version');
+  }
+  return candidates[0] ?? null;
+}
+
+function uniqueSource(seen, value, sourceType) {
+  const id = requiredId(value);
+  const key = `${sourceType}:${id}`;
+  if (seen.has(key)) invalid('calculation_duplicate_source');
+  seen.add(key);
+  return id;
+}
+
+function orderedReasons(reasons) {
+  return [...reasons].sort((a, b) =>
+    (MISSING_REASON_RANK.get(a) ?? Number.MAX_SAFE_INTEGER) - (MISSING_REASON_RANK.get(b) ?? Number.MAX_SAFE_INTEGER) || a.localeCompare(b)
+  );
+}
+
+function totalsFor(lines) {
+  let selected = 0n, store = 0n;
+  for (const line of lines) {
+    const amount = money(line.amountSigned);
+    if (line.scopeCode === 'selected_product') selected += amount;
+    else if (line.scopeCode === 'store') store += amount;
+  }
+  return {
+    selectedProductsResultBeforeTax: formatDecimal(selected),
+    storeLevelResultBeforeTax: formatDecimal(store),
+    availableResultBeforeTax: formatDecimal(selected + store),
+    availableResultAfterTax: null,
+    netProfit: null
+  };
+}
+
+export function calculateFinancialResult({
+  periodStart,
+  periodEnd,
+  selectedProductIds = [],
+  financialComponents = [],
+  operations = [],
+  costVersions = [],
+  expenses = [],
+  taxSetting = null,
+  reportCoverageComplete = true
+}) {
+  const range = period(periodStart, periodEnd);
+  const selected = new Set(selectedProductIds.map(value => requiredId(value)));
+  const reasons = new Set();
+  const lines = new Map();
+  const seenSources = new Set();
+
+  for (const component of financialComponents) {
+    if (component?.state === 'withdrawn' || !sourceInPeriod(component, range)) continue;
+    const componentId = uniqueSource(seenSources, component?.id, 'financial_component');
+    validateScopeStructure(component);
+    if (component?.classificationStatus !== 'confirmed') {
+      reasons.add('operation_unclassified');
+      continue;
+    }
+    if (component?.reconciliationStatus === 'failed') {
+      reasons.add('source_unreconciled');
+      continue;
+    }
+    if (!RESULT_CATEGORIES.has(component?.categoryCode)) {
+      if (!NON_RESULT_CATEGORIES.has(component?.categoryCode)) reasons.add('operation_unclassified');
+      continue;
+    }
+    const scope = resolveScope(component, selected, reasons);
+    if (!scope) continue;
+    const amount = money(component.amountSigned);
+    addLine(lines, {
+      ...scope,
+      accountingDate: validDate(component.accountingDate),
+      categoryCode: component.categoryCode
+    }, amount, {
+      sourceType: 'financial_component',
+      sourceId: componentId,
+      contributionAmount: formatDecimal(amount)
+    });
+  }
+
+  for (const operation of operations) {
+    if (operation?.state === 'withdrawn' || !sourceInPeriod(operation, range)) continue;
+    const operationId = uniqueSource(seenSources, operation?.id, 'operation');
+    if (operation?.operationType === 'unclassified') {
+      reasons.add('operation_unclassified');
+      continue;
+    }
+    if (!['sale', 'return'].includes(operation?.operationType)) continue;
+    const scope = resolveScope({ ...operation, scopeCode: operation.scopeCode ?? 'selected_product' }, selected, reasons);
+    if (!scope) continue;
+    if (operation.operationType === 'return') {
+      reasons.add('return_original_sale_unmatched');
+      continue;
+    }
+    if (!scope.variantId) {
+      reasons.add('product_link_missing');
+      continue;
+    }
+    const accountingDate = validDate(operation.accountingDate);
+    const cost = selectCost(costVersions, scope.variantId, accountingDate);
+    if (!cost) {
+      reasons.add('cost_missing');
+      continue;
+    }
+    const unitCost = money(cost.unitCost);
+    if (unitCost < 0n) invalid('calculation_invalid_cost');
+    let cogs = roundedProductToMoney(operation.quantity, unitCost);
+    if (cogs < 0n) cogs = -cogs;
+    cogs = -cogs;
+    addLine(lines, {
+      ...scope,
+      accountingDate,
+      categoryCode: 'cost_of_goods'
+    }, cogs, {
+      sourceType: 'sale_cost',
+      sourceId: operationId,
+      costVersionId: requiredId(cost.id),
+      quantity: String(operation.quantity),
+      unitCost: formatDecimal(unitCost),
+      contributionAmount: formatDecimal(cogs)
+    });
+  }
+
+  for (const expense of expenses) {
+    if (expense?.state === 'voided') continue;
+    const expenseCategory = String(expense?.category ?? '');
+    if (!EXPENSE_CATEGORIES.has(expenseCategory)) invalid('calculation_invalid_expense_category');
+    const dailyRows = periodizeExpense(expense, { periodStart: range.start, periodEnd: range.end });
+    if (dailyRows.length === 0) continue;
+    uniqueSource(seenSources, expense?.id, 'expense_version');
+    const scope = resolveScope(expense, selected, reasons);
+    if (!scope) continue;
+    for (const daily of dailyRows) {
+      const amount = money(daily.amountSigned);
+      addLine(lines, {
+        ...scope,
+        accountingDate: daily.accountingDate,
+        categoryCode: expenseCategory
+      }, amount, {
+        sourceType: 'expense_version',
+        sourceId: requiredId(expense.id),
+        contributionAmount: formatDecimal(amount)
+      });
+    }
+  }
+
+  if (!reportCoverageComplete) reasons.add('report_coverage_incomplete');
+  if (!taxSetting) reasons.add('tax_setting_missing');
+  else {
+    reasons.add('tax_method_unsupported');
+    if (taxSetting.vatMode !== 'exempt') reasons.add('vat_method_unsupported');
+  }
+
+  const resultLines = [...lines.values()]
+    .filter(line => line.amount !== 0n)
+    .map(line => ({
+      scopeCode: line.scopeCode,
+      productId: line.productId,
+      variantId: line.variantId,
+      accountingDate: line.accountingDate,
+      categoryCode: line.categoryCode,
+      amountSigned: formatDecimal(line.amount),
+      evidence: line.evidence.sort(compareEvidence)
+    }))
+    .sort((a, b) =>
+      a.accountingDate.localeCompare(b.accountingDate) ||
+      a.scopeCode.localeCompare(b.scopeCode) ||
+      String(a.productId ?? '').localeCompare(String(b.productId ?? '')) ||
+      String(a.variantId ?? '').localeCompare(String(b.variantId ?? '')) ||
+      a.categoryCode.localeCompare(b.categoryCode)
+    );
+
+  const missingReasons = orderedReasons(reasons);
+  if (resultLines.length === 0) {
+    return { quality: 'unavailable', missingReasons, lines: [], totals: null };
+  }
+  return {
+    quality: missingReasons.length ? 'partial' : 'complete',
+    missingReasons,
+    lines: resultLines,
+    totals: totalsFor(resultLines)
+  };
+}

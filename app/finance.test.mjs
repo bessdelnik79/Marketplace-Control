@@ -78,9 +78,10 @@ test('financial operation creates signed components without counting payout as r
   assert.equal(operation.operationType, 'sale');
   assert.deepEqual(Object.fromEntries(operation.components.map(component => [component.componentKey, component.amountSigned])), {
     retailAmount: '1000', ppvzSalesCommission: '-200', acquiringFee: '-12.5', deliveryService: '-70', paidStorage: '-5',
-    paidAcceptance: '-3', penalty: '-10', deduction: '-4', additionalPayment: '20', forPay: '715.5'
+    paidAcceptance: '-3', penalty: '-10', deduction: '-4', additionalPayment: '-20', forPay: '715.5'
   });
   assert.equal(operation.components.find(component => component.componentKey === 'forPay').categoryCode, 'payout');
+  assert.equal(operation.components.find(component => component.componentKey === 'additionalPayment').categoryCode, 'commission_adjustment');
 });
 
 test('return quantity and revenue are negative', () => {
@@ -88,4 +89,26 @@ test('return quantity and revenue are negative', () => {
   assert.equal(operation.operationType, 'return');
   assert.equal(operation.quantity, '-2');
   assert.equal(operation.components.find(component => component.categoryCode === 'revenue_return').amountSigned, '-500');
+});
+
+test('financial corrections preserve reversal direction and names containing return are not product returns', () => {
+  const correction=normalizeFinancialOperation(row({docTypeName:'Продажа',sellerOperName:'Корректировка вознаграждения',deduction:'-4',additionalPayment:'-20'}));
+  assert.equal(correction.operationType,'adjustment');
+  assert.deepEqual(Object.fromEntries(correction.components.map(component=>[component.componentKey,component.amountSigned])),{deduction:'4',additionalPayment:'20'});
+  const compensation=normalizeFinancialOperation(row({docTypeName:'Продажа',sellerOperName:'Добровольная компенсация при возврате',additionalPayment:'10'}));
+  assert.equal(compensation.operationType,'adjustment');
+  assert.equal(compensation.quantity,'1');
+});
+
+test('unverified WB remuneration fields remain separate informational components',()=>{
+  const operation=normalizeFinancialOperation(row({vw:'12.5',vwNds:'2.5',ppvzReward:'3',rebillLogisticCost:'4',cashbackAmount:'5'}));
+  assert.deepEqual(operation.components.filter(component=>['vw','vwNds','ppvzReward','rebillLogisticCost'].includes(component.componentKey)).map(({componentKey,categoryCode,amountSigned})=>({componentKey,categoryCode,amountSigned})),[
+    {componentKey:'vw',categoryCode:'wb_reward_without_vat',amountSigned:'12.5'},
+    {componentKey:'vwNds',categoryCode:'wb_reward_vat',amountSigned:'2.5'},
+    {componentKey:'ppvzReward',categoryCode:'pickup_reward',amountSigned:'3'},
+    {componentKey:'rebillLogisticCost',categoryCode:'rebill_logistic_compensation',amountSigned:'4'}
+  ]);
+  assert.deepEqual(operation.components.find(component=>component.componentKey==='cashbackAmount'),{
+    componentKey:'cashbackAmount',categoryCode:'unclassified_financial_field',amountSigned:'5',sourceField:'cashbackAmount'
+  });
 });

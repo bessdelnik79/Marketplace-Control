@@ -269,18 +269,119 @@
 | cost_version_id | uuid | да | — |
 | expense_version_id | uuid | да | — |
 | created_at | timestamp with time zone | нет | now() |
+| report_normalization_id | uuid | да | — |
+| tax_setting_version_id | uuid | да | — |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id, report_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id)`
+- `CHECK ((num_nonnulls(report_version_id, report_normalization_id, cost_version_id, expense_version_id, tax_setting_version_id) = 1))`
+- `FOREIGN KEY (business_id, tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id)`
+- `FOREIGN KEY (business_id, store_id, cost_version_id) REFERENCES mc.cost_versions(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, expense_version_id) REFERENCES mc.expense_versions(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, run_id) REFERENCES mc.calculation_runs(business_id, store_id, id)`
+- `PRIMARY KEY (id)`
+- `UNIQUE (run_id, cost_version_id)`
+- `UNIQUE (run_id, expense_version_id)`
+- `UNIQUE (run_id, report_version_id)`
+
+## calculation_invalidations
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| store_id | uuid | нет | — |
+| business_id | uuid | нет | — |
+| requested_by | uuid | да | — |
+| reason | text | нет | — |
+| generation_token | uuid | нет | gen_random_uuid() |
+| invalidated_at | timestamp with time zone | нет | clock_timestamp() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `UNIQUE (business_id, store_id)`
+- `PRIMARY KEY (store_id)`
+- `FOREIGN KEY (requested_by) REFERENCES mc.users(id)`
+
+## calculation_request_inputs
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| request_id | uuid | нет | — |
+| report_normalization_id | uuid | да | — |
+| cost_version_id | uuid | да | — |
+| expense_version_id | uuid | да | — |
+| tax_setting_version_id | uuid | да | — |
+| created_at | timestamp with time zone | нет | now() |
 
 Ограничения и связи:
 
 - `FOREIGN KEY (business_id, store_id, cost_version_id) REFERENCES mc.cost_versions(business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, expense_version_id) REFERENCES mc.expense_versions(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, run_id) REFERENCES mc.calculation_runs(business_id, store_id, id)`
-- `CHECK ((num_nonnulls(report_version_id, cost_version_id, expense_version_id) = 1))`
+- `UNIQUE (business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, report_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, request_id) REFERENCES mc.calculation_requests(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id)`
+- `CHECK ((num_nonnulls(report_normalization_id, cost_version_id, expense_version_id, tax_setting_version_id) = 1))`
 - `PRIMARY KEY (id)`
-- `UNIQUE (run_id, cost_version_id)`
-- `UNIQUE (run_id, expense_version_id)`
-- `UNIQUE (run_id, report_version_id)`
+- `UNIQUE NULLS NOT DISTINCT (request_id, report_normalization_id, cost_version_id, expense_version_id, tax_setting_version_id)`
+
+## calculation_request_products
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| request_id | uuid | нет | — |
+| product_id | uuid | нет | — |
+| created_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `UNIQUE (business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.product_selection_items(business_id, store_id, product_id)`
+- `FOREIGN KEY (business_id, store_id, request_id) REFERENCES mc.calculation_requests(business_id, store_id, id)`
+- `PRIMARY KEY (id)`
+- `UNIQUE (request_id, product_id)`
+
+## calculation_requests
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| generation_no | bigint | нет | — |
+| selection_id | uuid | нет | — |
+| method_version_id | uuid | нет | — |
+| period_start | date | нет | — |
+| period_end | date | нет | — |
+| input_fingerprint | text | нет | — |
+| status | text | нет | 'pending'::text |
+| is_latest | boolean | нет | true |
+| last_error_code | text | да | — |
+| requested_at | timestamp with time zone | нет | now() |
+| updated_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `UNIQUE (business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, selection_id) REFERENCES mc.product_selections(business_id, store_id, id)`
+- `CHECK ((period_end >= period_start))`
+- `CHECK ((generation_no > 0))`
+- `CHECK ((input_fingerprint <> ''::text))`
+- `FOREIGN KEY (method_version_id) REFERENCES mc.method_versions(id)`
+- `CHECK (isfinite(period_end))`
+- `CHECK (isfinite(period_start))`
+- `PRIMARY KEY (id)`
+- `CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'published'::text, 'failed'::text, 'superseded'::text])))`
+- `UNIQUE (store_id, generation_no)`
 
 ## calculation_runs
 
@@ -299,9 +400,13 @@
 | missing_reasons | jsonb | нет | '[]'::jsonb |
 | finished_at | timestamp with time zone | да | — |
 | created_at | timestamp with time zone | нет | now() |
+| request_id | uuid | да | — |
+| attempt_no | integer | да | — |
 
 Ограничения и связи:
 
+- `CHECK ((((request_id IS NULL) AND (attempt_no IS NULL)) OR ((request_id IS NOT NULL) AND (attempt_no IS NOT NULL) AND (attempt_no > 0))))`
+- `FOREIGN KEY (business_id, store_id, request_id) REFERENCES mc.calculation_requests(business_id, store_id, id)`
 - `UNIQUE (business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, selection_id) REFERENCES mc.product_selections(business_id, store_id, id)`
 - `CHECK ((period_end >= period_start))`
@@ -310,7 +415,6 @@
 - `PRIMARY KEY (id)`
 - `CHECK ((quality = ANY (ARRAY['complete'::text, 'partial'::text, 'unavailable'::text])))`
 - `CHECK ((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text])))`
-- `UNIQUE (store_id, input_fingerprint, method_version_id, period_start, period_end)`
 
 ## connection_secrets
 
@@ -526,6 +630,7 @@
 | method_version_id | uuid | нет | — |
 | source_field | text | да | — |
 | created_at | timestamp with time zone | нет | now() |
+| result_scope_classification | text | нет | 'unclassified'::text |
 
 Ограничения и связи:
 
@@ -535,6 +640,7 @@
 - `FOREIGN KEY (method_version_id) REFERENCES mc.method_versions(id)`
 - `UNIQUE (operation_version_id, method_version_id, component_key)`
 - `PRIMARY KEY (id)`
+- `CHECK ((result_scope_classification = ANY (ARRAY['selected_product'::text, 'store'::text, 'product_expected'::text, 'unclassified'::text, 'reconciliation'::text])))`
 
 ## import_batches
 
@@ -648,6 +754,33 @@
 - `PRIMARY KEY (id)`
 - `CHECK ((version_no > 0))`
 
+## operation_links
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| from_operation_version_id | uuid | нет | — |
+| to_operation_version_id | uuid | нет | — |
+| link_type | text | нет | — |
+| status | text | нет | — |
+| method_version_id | uuid | нет | — |
+| evidence | jsonb | нет | '{}'::jsonb |
+| created_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id, from_operation_version_id) REFERENCES mc.operation_versions(business_id, store_id, id)`
+- `UNIQUE (business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, to_operation_version_id) REFERENCES mc.operation_versions(business_id, store_id, id)`
+- `CHECK ((from_operation_version_id <> to_operation_version_id))`
+- `UNIQUE (from_operation_version_id, link_type, method_version_id)`
+- `CHECK ((link_type = 'return_to_original_sale'::text))`
+- `FOREIGN KEY (method_version_id) REFERENCES mc.method_versions(id)`
+- `PRIMARY KEY (id)`
+- `CHECK ((status = ANY (ARRAY['confirmed'::text, 'rejected'::text, 'ambiguous'::text])))`
+
 ## operation_versions
 
 | Поле | Тип | NULL | По умолчанию |
@@ -668,9 +801,11 @@
 | currency | text | нет | 'RUB'::text |
 | state | text | нет | 'active'::text |
 | created_at | timestamp with time zone | нет | now() |
+| report_normalization_id | uuid | да | — |
 
 Ограничения и связи:
 
+- `FOREIGN KEY (business_id, store_id, report_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id)`
 - `UNIQUE (business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, operation_id) REFERENCES mc.operations(business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.products(business_id, store_id, id)`
@@ -813,6 +948,30 @@
 - `PRIMARY KEY (id)`
 - `CHECK ((status = ANY (ARRAY['passed'::text, 'failed'::text, 'not_checkable'::text])))`
 
+## report_normalizations
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| report_version_id | uuid | нет | — |
+| method_version_id | uuid | нет | — |
+| normalization_key | text | нет | — |
+| status | text | нет | — |
+| normalized_at | timestamp with time zone | нет | now() |
+| created_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `UNIQUE (business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id)`
+- `FOREIGN KEY (method_version_id) REFERENCES mc.method_versions(id)`
+- `PRIMARY KEY (id)`
+- `UNIQUE (report_version_id, method_version_id)`
+- `CHECK ((status = ANY (ARRAY['succeeded'::text, 'failed'::text])))`
+- `UNIQUE (store_id, normalization_key)`
+
 ## report_rows
 
 | Поле | Тип | NULL | По умолчанию |
@@ -902,6 +1061,8 @@
 | quantity | numeric(20,6) | да | — |
 | contribution_amount | numeric(20,4) | нет | — |
 | created_at | timestamp with time zone | нет | now() |
+| source_operation_version_id | uuid | да | — |
+| tax_computation_id | uuid | да | — |
 
 Ограничения и связи:
 
@@ -909,8 +1070,11 @@
 - `FOREIGN KEY (business_id, store_id, expense_version_id) REFERENCES mc.expense_versions(business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, financial_component_id) REFERENCES mc.financial_components(business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, result_line_id) REFERENCES mc.result_lines(business_id, store_id, id)`
-- `CHECK ((num_nonnulls(financial_component_id, cost_version_id, expense_version_id) = 1))`
+- `CHECK ((num_nonnulls(financial_component_id, cost_version_id, expense_version_id, tax_computation_id) = 1))`
+- `CHECK (((source_operation_version_id IS NULL) OR (cost_version_id IS NOT NULL)))`
 - `PRIMARY KEY (id)`
+- `FOREIGN KEY (business_id, store_id, source_operation_version_id) REFERENCES mc.operation_versions(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, tax_computation_id) REFERENCES mc.tax_computations(business_id, store_id, id)`
 
 ## result_lines
 
@@ -920,7 +1084,7 @@
 | business_id | uuid | нет | — |
 | store_id | uuid | нет | — |
 | run_id | uuid | нет | — |
-| product_id | uuid | нет | — |
+| product_id | uuid | да | — |
 | variant_id | uuid | да | — |
 | accounting_date | date | нет | — |
 | category_code | text | нет | — |
@@ -928,9 +1092,11 @@
 | currency | text | нет | 'RUB'::text |
 | quality | text | нет | — |
 | created_at | timestamp with time zone | нет | now() |
+| result_scope | text | нет | 'selected_product'::text |
 
 Ограничения и связи:
 
+- `CHECK ((((result_scope = 'selected_product'::text) AND (product_id IS NOT NULL)) OR ((result_scope = 'store'::text) AND (product_id IS NULL) AND (variant_id IS NULL))))`
 - `UNIQUE (business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.product_selection_items(business_id, store_id, product_id)`
 - `FOREIGN KEY (business_id, store_id, product_id, variant_id) REFERENCES mc.variants(business_id, store_id, product_id, id)`
@@ -939,6 +1105,7 @@
 - `CHECK ((currency = 'RUB'::text))`
 - `PRIMARY KEY (id)`
 - `CHECK ((quality = ANY (ARRAY['complete'::text, 'partial'::text, 'unavailable'::text])))`
+- `CHECK ((result_scope = ANY (ARRAY['selected_product'::text, 'store'::text])))`
 
 ## schema_migrations
 
@@ -1113,6 +1280,91 @@
 - `CHECK ((source_type = ANY (ARRAY['catalog'::text, 'financial_reports'::text])))`
 - `CHECK ((status = ANY (ARRAY['active'::text, 'paused'::text, 'blocked'::text])))`
 - `UNIQUE (store_id, source_type)`
+
+## tax_basis_evidence
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| tax_segment_id | uuid | нет | — |
+| financial_component_id | uuid | нет | — |
+| taxable_contribution | numeric(20,4) | нет | — |
+| recognition_date | date | нет | — |
+| created_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id, financial_component_id) REFERENCES mc.financial_components(business_id, store_id, id)`
+- `UNIQUE (business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, tax_segment_id) REFERENCES mc.tax_computation_segments(business_id, store_id, id)`
+- `PRIMARY KEY (id)`
+- `CHECK (isfinite(recognition_date))`
+- `UNIQUE (tax_segment_id, financial_component_id)`
+
+## tax_computation_segments
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| tax_computation_id | uuid | нет | — |
+| tax_setting_version_id | uuid | нет | — |
+| segment_start | date | нет | — |
+| segment_end | date | нет | — |
+| taxable_base | numeric(20,4) | нет | — |
+| rate_fraction | numeric | нет | — |
+| tax_amount | numeric(20,4) | нет | — |
+| created_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `UNIQUE (business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, tax_computation_id) REFERENCES mc.tax_computations(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id)`
+- `CHECK ((segment_end >= segment_start))`
+- `PRIMARY KEY (id)`
+- `CHECK (((rate_fraction >= (0)::numeric) AND (rate_fraction <= (1)::numeric)))`
+- `CHECK (isfinite(segment_end))`
+- `CHECK (isfinite(segment_start))`
+- `CHECK ((tax_amount >= (0)::numeric))`
+- `UNIQUE (tax_computation_id, segment_start, segment_end, tax_setting_version_id)`
+
+## tax_computations
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| run_id | uuid | нет | — |
+| tax_setting_version_id | uuid | нет | — |
+| tax_year | integer | нет | — |
+| period_start | date | нет | — |
+| period_end | date | нет | — |
+| taxable_base | numeric(20,4) | нет | — |
+| rate_fraction | numeric | нет | — |
+| tax_amount | numeric(20,4) | нет | — |
+| method_version_id | uuid | нет | — |
+| created_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `UNIQUE (business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, run_id) REFERENCES mc.calculation_runs(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id)`
+- `CHECK ((period_end >= period_start))`
+- `CHECK (((EXTRACT(year FROM period_start) = (tax_year)::numeric) AND (EXTRACT(year FROM period_end) = (tax_year)::numeric)))`
+- `FOREIGN KEY (method_version_id) REFERENCES mc.method_versions(id)`
+- `CHECK (isfinite(period_end))`
+- `CHECK (isfinite(period_start))`
+- `PRIMARY KEY (id)`
+- `CHECK (((rate_fraction >= (0)::numeric) AND (rate_fraction <= (1)::numeric)))`
+- `UNIQUE (run_id, tax_year)`
+- `CHECK ((tax_amount >= (0)::numeric))`
+- `CHECK (((tax_year >= 2000) AND (tax_year <= 9999)))`
 
 ## tax_setting_versions
 
