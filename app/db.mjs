@@ -1055,8 +1055,8 @@ async function executeFinancialCalculation(userId,requestId){
     )).rows.map(row=>({id:row.id,operationType:row.operation_type,productId:row.product_id,variantId:row.variant_id,accountingDate:row.accounting_date,quantity:row.quantity,state:row.state,scopeCode:'selected_product'}));
     const costIds=inputs.map(row=>row.cost_version_id).filter(Boolean);
     const costs=costIds.length?(await client.query(
-      `select v.id,c.variant_id,c.effective_from::text,v.unit_cost::text,v.state from mc.cost_versions v join mc.variant_costs c on c.id=v.cost_id where v.id=any($1::uuid[]) order by v.id`,[costIds]
-    )).rows.map(row=>({id:row.id,variantId:row.variant_id,effectiveFrom:row.effective_from,unitCost:row.unit_cost,state:row.state})):[];
+      `select v.id,c.variant_id,c.effective_from::text,v.unit_cost::text from mc.cost_versions v join mc.variant_costs c on c.id=v.cost_id where v.id=any($1::uuid[]) order by v.id`,[costIds]
+    )).rows.map(row=>({id:row.id,variantId:row.variant_id,effectiveFrom:row.effective_from,unitCost:row.unit_cost})):[];
     const expenseIds=inputs.map(row=>row.expense_version_id).filter(Boolean);
     const expenses=expenseIds.length?(await client.query(
       `select v.id,e.product_id,v.category,v.amount::text,v.period_start::text,v.period_end::text,v.recognition_method,v.state
