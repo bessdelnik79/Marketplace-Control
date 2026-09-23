@@ -1,10 +1,10 @@
 import { randomUUID } from 'node:crypto';
-import { decryptSecret } from './secrets.mjs';
-import { beginFinancialSync, completeFinancialSync, failFinancialSync, reserveFinancialRequestSlot, updateFinancialSyncProgress } from './db.mjs';
+import { decryptSecret } from '../../infrastructure/security/secrets.mjs';
+import { beginFinancialSync, completeFinancialSync, failFinancialSync, reserveFinancialRequestSlot, updateFinancialSyncProgress } from '../../db.mjs';
 import { financialDateRange, financialRequestDelaySeconds, loadWbFinancialReports } from './finance.mjs';
-import { removeFinancialDocument, storeFinancialPages } from './source-storage.mjs';
-import { assertWbFinancialToken, decodeWbToken } from './wb.mjs';
-import { scheduleFinancialCalculation } from './calculation-sync.mjs';
+import { removeFinancialDocument, storeFinancialPages } from '../../infrastructure/storage/source-storage.mjs';
+import { assertWbFinancialToken, decodeWbToken } from '../stores/wb.mjs';
+import { scheduleFinancialCalculation } from '../calculation/calculation-sync.mjs';
 
 const activeJobs = new Set();
 const knownErrors = new Set([
