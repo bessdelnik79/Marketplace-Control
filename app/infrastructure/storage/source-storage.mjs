@@ -3,7 +3,7 @@ import { gzip, gunzip } from 'node:zlib';
 import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { loadEncryptionKey } from './secrets.mjs';
+import { loadEncryptionKey } from '../security/secrets.mjs';
 
 const zip = promisify(gzip);
 const unzip = promisify(gunzip);

@@ -1,5 +1,5 @@
-import{decryptSecret}from'./secrets.mjs';
-import{beginCatalogSync,completeCatalogSync,failCatalogSync}from'./db.mjs';
+import{decryptSecret}from'../../infrastructure/security/secrets.mjs';
+import{beginCatalogSync,completeCatalogSync,failCatalogSync}from'../../db.mjs';
 import{loadWbCatalog}from'./catalog.mjs';
 
 const activeJobs=new Set();

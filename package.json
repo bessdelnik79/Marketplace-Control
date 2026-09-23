@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "start": "node app/server.mjs",
-    "test": "node --test app/*.test.mjs"
+    "test": "node scripts/test.mjs"
   },
   "dependencies": {
     "exceljs": "4.4.0",

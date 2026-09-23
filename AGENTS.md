@@ -17,16 +17,18 @@
 
 | Область | Код / документация |
 |---|---|
-| HTTP и страницы | `app/server.mjs`, `app/ui.mjs`, `app/views.mjs`, `app/public/`; `outputs/ui-site.md` |
-| Авторизация | `app/auth.mjs`, методы `app/db.mjs`; `outputs/onboarding-flow.md` |
-| WB и каталог | `app/wb.mjs`, `app/catalog.mjs`, `app/catalog-sync.mjs`; `outputs/wb-integration.md`, `outputs/catalog-sync.md` |
-| Финансовые отчёты | `app/finance.mjs`, `app/financial-sync.mjs`, `app/source-storage.mjs`; `outputs/financial-reports.md` |
-| Себестоимость, расходы, налоги | `app/cost-import.mjs`, `app/expense-import.mjs`, методы `app/db.mjs`; `outputs/cost-import.md`, `outputs/user-financial-inputs.md` |
-| Расчёт | `app/calculation.mjs`, `app/calculation-sync.mjs`; `outputs/financial-formulas.md`, `outputs/p0.3-plan.md` |
-| БД | `app/db.mjs`, все `db/migrations/` начиная с `001_initial.sql`; `db/README.md`, `outputs/database-v1.md`, нужные таблицы `outputs/database-v1-dictionary.md` |
+| HTTP и интерфейс | `app/server.mjs`, `app/frontend/`; `outputs/ui-site.md` |
+| Авторизация | `app/modules/auth/`, `app/infrastructure/email/`; `outputs/onboarding-flow.md` |
+| Магазины и WB | `app/modules/stores/`, `app/infrastructure/security/`; `outputs/wb-integration.md` |
+| Каталог и товары | `app/modules/catalog/`; `outputs/catalog-sync.md` |
+| Себестоимость | `app/modules/costs/`, страница `app/frontend/costs.page.mjs`; `outputs/cost-import.md` |
+| Расходы и налоги | `app/modules/expenses/`, `app/modules/taxes/`; `outputs/user-financial-inputs.md` |
+| Отчёты и исходники | `app/modules/reports/`, `app/infrastructure/storage/`; `outputs/financial-reports.md` |
+| Финансовый расчёт | `app/modules/calculation/`; `outputs/financial-formulas.md`, `outputs/p0.3-plan.md` |
+| БД | `app/infrastructure/database/`, совместимый фасад `app/db.mjs`, миграции и интеграционные проверки `db/`; `db/README.md` |
 | План / VM | `outputs/mvp-status.md`, `outputs/marketplace-control-concept.md` / `outputs/vm-access.md` |
 
-Тесты: `app/*.test.mjs`, `db/tests/`. SQL и транзакции разных функций пока сосредоточены в `app/db.mjs`.
+Тесты лежат рядом с модулями в `app/`; `npm test` находит вложенные `*.test.mjs`. Подробная карта ответственности: `app/README.md`.
 
 ## Оркестрация
 
@@ -44,7 +46,7 @@
 
 ## Проверки
 
-- Сначала целевые тесты, затем применимые общие проверки. Команды: `node --test app/<имя>.test.mjs`, `npm test`, `npm --prefix db test`. Отдельных lint/typecheck/build scripts сейчас нет.
+- Сначала целевые тесты, затем применимые общие проверки. Команды: `node --test <путь-к-тесту>`, `npm test`, `npm --prefix db test`. Отдельных lint/typecheck/build scripts сейчас нет.
 - PostgreSQL-интеграция P0.2/P0.3 и отдельная тестовая БД описаны в `db/README.md`. Проверка схемы также генерирует словарь БД: проверяй его diff.
 - Для схемы БД, расчётов и целостности — полный набор тестов приложения и БД. Не повторяй успешные тяжёлые проверки без влияющих изменений, ошибок или нерешённых рисков.
 - Итоговые тесты/развёртывания — на VM `marketplacecontrol`, напрямую, без Docker. Локальные прогоны вспомогательные; Docker-файлы сохраняй, Docker Desktop не используй.
@@ -58,3 +60,16 @@
 - Только оркестратор проверяет staging и делает коммит/push. Включай лишь изменения задачи, без force push. При конфликте/отсутствии доступа сохрани локальный результат и сообщи, что не отправлено.
 - На VM приложение и PostgreSQL работают напрямую; проверенные обновления `main` поступают автоматически из GitHub.
 - Итог: кратко сделано, проверено, короткий commit ID; ограничения — если остались. Без повторения хода работы и полного списка файлов без необходимости.
+
+## graphify
+
+This project has a knowledge graph at graphify-out/ with god nodes, community structure, and cross-file relationships.
+
+When the user types `/graphify`, use the installed graphify skill or instructions before doing anything else.
+
+Rules:
+- For codebase questions, first run `graphify query "<question>"` when graphify-out/graph.json exists. Use `graphify path "<A>" "<B>"` for relationships and `graphify explain "<concept>"` for focused concepts. These return a scoped subgraph, usually much smaller than GRAPH_REPORT.md or raw grep output.
+- Dirty graphify-out/ files are expected after hooks or incremental updates; dirty graph files are not a reason to skip graphify. Only skip graphify if the task is about stale or incorrect graph output, or the user explicitly says not to use it.
+- If graphify-out/wiki/index.md exists, use it for broad navigation instead of raw source browsing.
+- Read graphify-out/GRAPH_REPORT.md only for broad architecture review or when query/path/explain do not surface enough context.
+- After modifying code, run `graphify update .` to keep the graph current (AST-only, no API cost).
