@@ -13,7 +13,7 @@ ssh -p 2222 codex@127.0.0.1
 ```bash
 cd /home/codex/marketplace-control
 git log -1 --oneline
-node --test app/*.test.mjs
+npm test
 systemctl --no-pager --full status marketplace-control.service
 curl -fsS http://127.0.0.1:3000/health
 ```

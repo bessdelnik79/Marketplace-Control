@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
-import { createCostCsvTemplate, parseCostFile } from './cost-import.mjs';
+import { createCostCsvTemplate, parseCostFile } from './costs.import.mjs';
 
 test('cost CSV accepts Russian headers, decimal comma and date',async()=>{
   const csv='Артикул WB;ID варианта;Штрихкод;Себестоимость, ₽;Действует с\r\n123456;size-1;460000000001;1 234,50;16.09.2026\r\n';

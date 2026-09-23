@@ -17,16 +17,17 @@
 
 | Область | Код / документация |
 |---|---|
-| HTTP и страницы | `app/server.mjs`, `app/ui.mjs`, `app/views.mjs`, `app/public/`; `outputs/ui-site.md` |
+| HTTP и страницы | `app/server.mjs`, `app/frontend/pages.mjs`, `app/frontend/auth-pages.mjs`, `app/frontend/public/`; `outputs/ui-site.md` |
 | Авторизация | `app/auth.mjs`, методы `app/db.mjs`; `outputs/onboarding-flow.md` |
 | WB и каталог | `app/wb.mjs`, `app/catalog.mjs`, `app/catalog-sync.mjs`; `outputs/wb-integration.md`, `outputs/catalog-sync.md` |
 | Финансовые отчёты | `app/finance.mjs`, `app/financial-sync.mjs`, `app/source-storage.mjs`; `outputs/financial-reports.md` |
-| Себестоимость, расходы, налоги | `app/cost-import.mjs`, `app/expense-import.mjs`, методы `app/db.mjs`; `outputs/cost-import.md`, `outputs/user-financial-inputs.md` |
+| Себестоимость | `app/modules/costs/` (import, repository, routes и тесты); страница — `app/frontend/costs.page.mjs`; `outputs/cost-import.md` |
+| Расходы, налоги | `app/expense-import.mjs`, методы `app/db.mjs`; `outputs/user-financial-inputs.md` |
 | Расчёт | `app/calculation.mjs`, `app/calculation-sync.mjs`; `outputs/financial-formulas.md`, `outputs/p0.3-plan.md` |
 | БД | `app/db.mjs`, все `db/migrations/` начиная с `001_initial.sql`; `db/README.md`, `outputs/database-v1.md`, нужные таблицы `outputs/database-v1-dictionary.md` |
 | План / VM | `outputs/mvp-status.md`, `outputs/marketplace-control-concept.md` / `outputs/vm-access.md` |
 
-Тесты: `app/*.test.mjs`, `db/tests/`. SQL и транзакции разных функций пока сосредоточены в `app/db.mjs`.
+Тесты: `app/**/*.test.mjs` (включая корневые), `db/tests/`. Себестоимость выделена в `app/modules/costs/`; SQL остальных функций пока в `app/db.mjs`.
 
 ## Оркестрация
 
@@ -44,7 +45,7 @@
 
 ## Проверки
 
-- Сначала целевые тесты, затем применимые общие проверки. Команды: `node --test app/<имя>.test.mjs`, `npm test`, `npm --prefix db test`. Отдельных lint/typecheck/build scripts сейчас нет.
+- Сначала целевые тесты, затем применимые общие проверки. Команды: `node --test <путь-к-тесту>`, `npm test`, `npm --prefix db test`. Отдельных lint/typecheck/build scripts сейчас нет.
 - PostgreSQL-интеграция P0.2/P0.3 и отдельная тестовая БД описаны в `db/README.md`. Проверка схемы также генерирует словарь БД: проверяй его diff.
 - Для схемы БД, расчётов и целостности — полный набор тестов приложения и БД. Не повторяй успешные тяжёлые проверки без влияющих изменений, ошибок или нерешённых рисков.
 - Итоговые тесты/развёртывания — на VM `marketplacecontrol`, напрямую, без Docker. Локальные прогоны вспомогательные; Docker-файлы сохраняй, Docker Desktop не используй.
