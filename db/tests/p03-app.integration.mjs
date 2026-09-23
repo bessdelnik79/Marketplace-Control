@@ -8,7 +8,7 @@ const databaseName=new URL(integrationUrl).pathname.slice(1);
 if(!databaseName.toLowerCase().includes('test'))throw new Error('Refusing to run P0.3 integration tests outside a database whose name contains "test".');
 process.env.DATABASE_URL=integrationUrl;
 
-const {migrate,pool,runFinancialCalculation}=await import('../../app/db.mjs');
+const {migrate,pool,runFinancialCalculation,completeFinancialSync}=await import('../../app/db.mjs');
 const ids={user:randomUUID(),business:randomUUID(),store:randomUUID()};
 
 await migrate();
@@ -68,6 +68,71 @@ test('P0.3 creates a reproducible partial result and idempotently keeps one publ
   assert.deepEqual(saved.missing_reasons,['tax_setting_missing']);
   assert.equal(saved.publications,1);
   assert.equal(saved.total,'60.0000');
+});
+
+test('financial sync reselects a previously accepted checksum without duplicating its version',async()=>{
+  const fixture=await context(async client=>{
+    const stream=(await client.query(
+      `insert into mc.sync_streams(business_id,store_id,source_type) values($1,$2,'financial_reports') returning id`,
+      [ids.business,ids.store]
+    )).rows[0];
+    const document=(await client.query(
+      `insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness)
+       values($1,$2,'wb_api','weekly_realization','p03-reselect-source','complete') returning id`,
+      [ids.business,ids.store]
+    )).rows[0];
+    const report=(await client.query(
+      `insert into mc.reports(business_id,store_id,external_report_id,report_type,period_start,period_end)
+       values($1,$2,'p03-reselect','weekly_realization','2026-08-10','2026-08-16') returning id`,
+      [ids.business,ids.store]
+    )).rows[0];
+    const versions=[];
+    for(const [number,checksum] of [[1,'p03-old-checksum'],[2,'p03-new-checksum']]){
+      const version=(await client.query(
+        `insert into mc.report_versions(business_id,store_id,report_id,document_id,version_no,checksum,parser_version)
+         values($1,$2,$3,$4,$5,$6,'wb-finance-v2') returning id`,
+        [ids.business,ids.store,report.id,document.id,number,checksum]
+      )).rows[0];
+      await client.query(`update mc.report_versions set status='validated' where id=$1`,[version.id]);
+      await client.query(`update mc.report_versions set status='accepted',accepted_at=now() where id=$1`,[version.id]);
+      versions.push(version.id);
+    }
+    const method=(await client.query(
+      `select id from mc.method_versions where code='wb_finance_import' and implementation_version='wb-finance-v2'`
+    )).rows[0];
+    await client.query(
+      `insert into mc.report_normalizations(business_id,store_id,report_version_id,method_version_id,normalization_key,status)
+       values($1,$2,$3,$4,$5,'succeeded')`,
+      [ids.business,ids.store,versions[0],method.id,`wb-finance-v2:${versions[0]}`]
+    );
+    await client.query(`update mc.reports set current_version_id=$1 where id=$2`,[versions[1],report.id]);
+    return {streamId:stream.id,reportId:report.id,oldVersionId:versions[0]};
+  });
+  const source={externalReportId:'p03-reselect',periodStart:'2026-08-10',periodEnd:'2026-08-16',checksum:'p03-old-checksum'};
+  const run=async()=>{
+    const runId=await context(async client=>(await client.query(
+      `insert into mc.sync_runs(business_id,store_id,stream_id,requested_from,requested_to,status,started_at)
+       values($1,$2,$3,'2026-08-10','2026-08-16','running',now()) returning id`,
+      [ids.business,ids.store,fixture.streamId]
+    )).rows[0].id);
+    return completeFinancialSync(ids.user,{
+      business_id:ids.business,store_id:ids.store,stream_id:fixture.streamId,run_id:runId,
+      date_from:'2026-08-10',date_to:'2026-08-16'
+    },{documentId:randomUUID(),reports:[source]});
+  };
+  const first=await run();
+  assert.equal(first.reselectedReports,1);
+  assert.equal(first.insertedReports,0);
+  const second=await run();
+  assert.equal(second.reselectedReports,0);
+  assert.equal(second.unchangedReports,1);
+  const saved=await context(async client=>(await client.query(
+    `select r.current_version_id,count(v.id)::int as versions
+       from mc.reports r join mc.report_versions v on v.report_id=r.id
+      where r.id=$1 group by r.current_version_id`,[fixture.reportId]
+  )).rows[0]);
+  assert.equal(saved.current_version_id,fixture.oldVersionId);
+  assert.equal(saved.versions,2);
 });
 
 test.after(async()=>{await pool.end();});

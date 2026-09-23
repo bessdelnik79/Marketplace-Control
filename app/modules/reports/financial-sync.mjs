@@ -54,7 +54,7 @@ export function scheduleFinancialSync(userId, storeId, {
       documentId = randomUUID();
       stored = await storeFinancialPages({ businessId: job.business_id, storeId: job.store_id, documentId, pages: financial.pages, root: sourceRoot, ...(masterKey ? { masterKey } : {}) });
       const saved = await completeFinancialSync(userId, job, { documentId, reports: financial.reports, objects: stored.objects });
-      console.info('[WB financial reports synced]', JSON.stringify({ time: new Date().toISOString(), userId, storeId, reports: financial.reports.length, rows: financial.rows.length, insertedReports: saved.insertedReports, unchangedReports: saved.unchangedReports, issues: saved.issues }));
+      console.info('[WB financial reports synced]', JSON.stringify({ time: new Date().toISOString(), userId, storeId, reports: financial.reports.length, rows: financial.rows.length, insertedReports: saved.insertedReports, reselectedReports: saved.reselectedReports, unchangedReports: saved.unchangedReports, issues: saved.issues }));
       scheduleFinancialCalculation(userId, storeId);
     } catch (error) {
       const code = safeCode(error);

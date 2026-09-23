@@ -36,9 +36,9 @@
     "semantic_hash": "046d962d54c9fcbf381f9a22721660d5"
   },
   "db/tests/p03-app.integration.mjs": {
-    "mtime": 1790160521.3347645,
-    "seen": 1790160629.6569967,
-    "ast_hash": "19b89d0a2bc34ca083207a0673b34695",
+    "mtime": 1790179691.5205476,
+    "seen": 1790179801.3863826,
+    "ast_hash": "9f9f3b26c72db1185c8079b7dca77c1a",
     "semantic_hash": ""
   },
   "db/tests/schema.test.mjs": {
@@ -354,15 +354,15 @@
     "semantic_hash": ""
   },
   "app/modules/reports/financial-sync.mjs": {
-    "mtime": 1790160521.3294291,
-    "seen": 1790160629.6566844,
-    "ast_hash": "14a89e1dff26b622dbe62228a6014cd5",
+    "mtime": 1790179765.4568248,
+    "seen": 1790179801.385299,
+    "ast_hash": "e81b9cf60f83dce30229184e38214d27",
     "semantic_hash": ""
   },
   "app/modules/reports/reports.repository.mjs": {
-    "mtime": 1790160521.3294291,
-    "seen": 1790160629.6566854,
-    "ast_hash": "280e999c976592b6eb8d10445b15b9ff",
+    "mtime": 1790179621.6474166,
+    "seen": 1790179801.3853014,
+    "ast_hash": "c3ef31fc5a45d7d98571ec3a15a1cf79",
     "semantic_hash": ""
   },
   "app/modules/stores/stores.repository.mjs": {
@@ -528,8 +528,8 @@
     "semantic_hash": ""
   },
   "outputs/database-v1-dictionary.md": {
-    "mtime": 1789969681.6201851,
-    "seen": 1790160629.6586666,
+    "mtime": 1790160707.7478046,
+    "seen": 1790179801.39041,
     "ast_hash": "6dfdf11a63b0eec70234d5d00e3a8bdd",
     "semantic_hash": ""
   },
@@ -540,9 +540,9 @@
     "semantic_hash": ""
   },
   "outputs/design/README.md": {
-    "mtime": 1790160572.3228328,
-    "seen": 1790160629.6586683,
-    "ast_hash": "5b44262d232dad984db9f7a9a23255ac",
+    "mtime": 1790161216.8414114,
+    "seen": 1790179801.3905158,
+    "ast_hash": "761b969d397ab3154d3d2d6aa1c8682e",
     "semantic_hash": ""
   },
   "outputs/design/SCRIPTER-RECOVERY.md": {
@@ -582,15 +582,15 @@
     "semantic_hash": ""
   },
   "outputs/financial-formulas.md": {
-    "mtime": 1789969048.3667302,
-    "seen": 1790160629.6586747,
-    "ast_hash": "b4d2e553d8ee1a147fb35b562d937c1e",
+    "mtime": 1790177803.649285,
+    "seen": 1790179801.391169,
+    "ast_hash": "2d0845d2ca6d3f915edbf80c3e6c40c5",
     "semantic_hash": ""
   },
   "outputs/financial-reports.md": {
-    "mtime": 1789921970.9984312,
-    "seen": 1790160629.6586754,
-    "ast_hash": "eb7630f8aed78c32d1e97d440f9bb761",
+    "mtime": 1790163044.4410782,
+    "seen": 1790179801.3911703,
+    "ast_hash": "d6bfe6946c29f95a0aad6695be3308f9",
     "semantic_hash": ""
   },
   "outputs/marketplace-control-concept-v0.1.md": {
@@ -606,9 +606,9 @@
     "semantic_hash": ""
   },
   "outputs/mvp-status.md": {
-    "mtime": 1789969465.906689,
-    "seen": 1790160629.658678,
-    "ast_hash": "674184647b0646bc0f70a93dd39ec538",
+    "mtime": 1790163101.1109147,
+    "seen": 1790179801.391381,
+    "ast_hash": "72be05fce8861e3176e55b0c5b4a64cd",
     "semantic_hash": ""
   },
   "outputs/onboarding-flow.md": {
@@ -624,9 +624,9 @@
     "semantic_hash": ""
   },
   "outputs/p0.3-plan.md": {
-    "mtime": 1790160521.3357434,
-    "seen": 1790160629.658681,
-    "ast_hash": "b0e099e4def1aeefb15696991cbfbf6f",
+    "mtime": 1790177789.025421,
+    "seen": 1790179801.3916354,
+    "ast_hash": "74d4cc6d0300dc620196ad108e0e7f48",
     "semantic_hash": ""
   },
   "outputs/ui-site.md": {
@@ -801,6 +801,12 @@
     "mtime": 1789319763.4341433,
     "seen": 1790160629.6587071,
     "ast_hash": "41082f47c5b453c32138d9582a706ff8",
+    "semantic_hash": ""
+  },
+  "outputs/wb-api-reconciliation.md": {
+    "mtime": 1790177789.780974,
+    "seen": 1790179801.3919528,
+    "ast_hash": "e0c16d72845a77116276ffa8e6422dd3",
     "semantic_hash": ""
   }
 }

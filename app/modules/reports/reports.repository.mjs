@@ -73,20 +73,28 @@ export async function completeFinancialSync(userId,job,{documentId,reports,objec
     );
     const method=(await client.query(`select id from mc.method_versions where code='wb_finance_import' and implementation_version=$1 order by version_no desc limit 1`,[financialParserVersion])).rows[0];
     if(!method)throw new Error('financial_method_missing');
-    let insertedReports=0,unchangedReports=0,normalizedReports=0,insertedRows=0,issues=0;
+    let insertedReports=0,unchangedReports=0,normalizedReports=0,reselectedReports=0,insertedRows=0,issues=0;
     for(const source of reports){
-      let report=(await client.query(`select id,period_start,period_end from mc.reports where store_id=$1 and report_type='weekly_realization' and external_report_id=$2`,[job.store_id,source.externalReportId])).rows[0];
+      let report=(await client.query(`select id,period_start,period_end,current_version_id from mc.reports where store_id=$1 and report_type='weekly_realization' and external_report_id=$2`,[job.store_id,source.externalReportId])).rows[0];
       if(report&&!financialReportPeriodMatches(report,source))throw new Error('financial_report_period_mismatch');
       if(!report)report=(await client.query(
         `insert into mc.reports(business_id,store_id,external_report_id,report_type,period_start,period_end)
-         values($1,$2,$3,'weekly_realization',$4,$5) returning id,period_start,period_end`,
+         values($1,$2,$3,'weekly_realization',$4,$5) returning id,period_start,period_end,current_version_id`,
         [businessId,job.store_id,source.externalReportId,source.periodStart,source.periodEnd]
       )).rows[0];
       const same=(await client.query(`select id,status from mc.report_versions where report_id=$1 and checksum=$2`,[report.id,source.checksum])).rows[0];
       let version,reuseRows=false;
       if(same){
         const existingNormalization=(await client.query(`select id from mc.report_normalizations where report_version_id=$1 and method_version_id=$2`,[same.id,method.id])).rows[0];
-        if(existingNormalization){unchangedReports++;continue;}
+        if(existingNormalization){
+          if(report.current_version_id===same.id)unchangedReports++;
+          else{
+            if(same.status!=='accepted')throw new Error('financial_report_version_not_accepted');
+            await client.query(`update mc.reports set current_version_id=$1 where id=$2`,[same.id,report.id]);
+            reselectedReports++;
+          }
+          continue;
+        }
         version=same;reuseRows=true;
       }else{
         const versionNo=(await client.query(`select coalesce(max(version_no),0)+1 as n from mc.report_versions where report_id=$1`,[report.id])).rows[0].n;
@@ -155,23 +163,30 @@ export async function completeFinancialSync(userId,job,{documentId,reports,objec
         await client.query(`update mc.report_versions set status='accepted',accepted_at=now() where id=$1`,[version.id]);
         await client.query(`update mc.reports set current_version_id=$1 where id=$2`,[version.id,report.id]);
         insertedReports++;
-      }else normalizedReports++;
+      }else{
+        normalizedReports++;
+        if(report.current_version_id!==version.id){
+          if(same.status!=='accepted')throw new Error('financial_report_version_not_accepted');
+          await client.query(`update mc.reports set current_version_id=$1 where id=$2`,[version.id,report.id]);
+          reselectedReports++;
+        }
+      }
     }
     await client.query(
       `insert into mc.coverage_intervals(business_id,store_id,stream_id,source_document_id,date_from,date_to,status)
        values($1,$2,$3,$4,$5,$6,'complete')`,
       [businessId,job.store_id,job.stream_id,documentId,job.date_from,job.date_to]
     );
-    if(insertedReports||normalizedReports)await client.query(
+    if(insertedReports||normalizedReports||reselectedReports)await client.query(
       `insert into mc.calculation_invalidations(business_id,store_id,requested_by,reason,invalidated_at)
        values($1,$2,$3,'financial_normalization_changed',clock_timestamp())
        on conflict(store_id) do update set requested_by=excluded.requested_by,
          reason=excluded.reason,generation_token=gen_random_uuid(),invalidated_at=excluded.invalidated_at`,[businessId,job.store_id,userId]
     );
-    const progress={stage:'complete',reports:reports.length,insertedReports,normalizedReports,unchangedReports,rows:insertedRows,issues};
+    const progress={stage:'complete',reports:reports.length,insertedReports,normalizedReports,reselectedReports,unchangedReports,rows:insertedRows,issues};
     await client.query(`update mc.sync_runs set status='succeeded',finished_at=now(),error_code=null,progress=$2::jsonb where id=$1 and status='running'`,[job.run_id,JSON.stringify(progress)]);
     await client.query(`update mc.sync_streams set cursor=$2::jsonb,last_success_at=now(),next_run_at=now()+interval '24 hours' where id=$1`,[job.stream_id,JSON.stringify({dateTo:job.date_to,reports:reports.length,rows:insertedRows})]);
-    return {documentId,insertedReports,normalizedReports,unchangedReports,insertedRows,issues};
+    return {documentId,insertedReports,normalizedReports,reselectedReports,unchangedReports,insertedRows,issues};
   });
 }
 
