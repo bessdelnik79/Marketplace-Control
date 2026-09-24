@@ -246,3 +246,24 @@ export function financialDateRange(now = new Date(), days = 91) {
   const start = new Date(end.getTime() - days * 86400000);
   return { dateFrom: start.toISOString().slice(0, 10), dateTo: end.toISOString().slice(0, 10) };
 }
+
+export function financialHistoricalWeekRange(earliestDate, recentFrom, lastCheckedWeek) {
+  const monday = value => {
+    const date = dateValue(value);
+    const day = new Date(`${date}T00:00:00Z`);
+    if (day.toISOString().slice(0, 10) !== date) throw new Error('financial_invalid_request');
+    day.setUTCDate(day.getUTCDate() - (day.getUTCDay() + 6) % 7);
+    return day;
+  };
+  if (!earliestDate) return null;
+  const first = monday(earliestDate);
+  const recent = monday(recentFrom);
+  const latest = new Date(recent.getTime() - 7 * 86400000);
+  if (first > latest) return null;
+  let next = first;
+  if (lastCheckedWeek) {
+    const previous = monday(lastCheckedWeek);
+    if (previous >= first && previous < latest) next = new Date(previous.getTime() + 7 * 86400000);
+  }
+  return { dateFrom: next.toISOString().slice(0, 10), dateTo: new Date(next.getTime() + 6 * 86400000).toISOString().slice(0, 10) };
+}

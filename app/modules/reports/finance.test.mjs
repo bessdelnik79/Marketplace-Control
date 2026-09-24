@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decimal, financialDateRange, financialReportPeriodMatches, financialRequestDelaySeconds, loadWbFinancialReports, normalizeFinancialOperation, normalizeFinancialReports, parseFinancialJson } from './finance.mjs';
+import { decimal, financialDateRange, financialHistoricalWeekRange, financialReportPeriodMatches, financialRequestDelaySeconds, loadWbFinancialReports, normalizeFinancialOperation, normalizeFinancialReports, parseFinancialJson } from './finance.mjs';
 
 const row = (overrides = {}) => ({
   reportId: '90071992547409931', dateFrom: '2026-09-01', dateTo: '2026-09-07', createDate: '2026-09-08', currency: 'RUB',
@@ -68,6 +68,14 @@ test('financial decimals are canonical and never use floating point', () => {
 
 test('financial date range uses a deterministic Moscow calendar date', () => {
   assert.deepEqual(financialDateRange(new Date('2026-09-15T22:30:00Z'), 7), { dateFrom: '2026-09-09', dateTo: '2026-09-16' });
+});
+
+test('historical deep check rotates complete Monday-Sunday weeks before recent overlap',()=>{
+  assert.deepEqual(financialHistoricalWeekRange('2026-07-15','2026-09-16'),{dateFrom:'2026-07-13',dateTo:'2026-07-19'});
+  assert.deepEqual(financialHistoricalWeekRange('2026-07-15','2026-09-16','2026-07-13'),{dateFrom:'2026-07-20',dateTo:'2026-07-26'});
+  assert.deepEqual(financialHistoricalWeekRange('2026-07-15','2026-09-16','2026-09-07'),{dateFrom:'2026-07-13',dateTo:'2026-07-19'});
+  assert.equal(financialHistoricalWeekRange('2026-09-15','2026-09-16'),null);
+  assert.equal(financialHistoricalWeekRange(null,'2026-09-16'),null);
 });
 
 test('financial operation creates signed components without counting payout as revenue', () => {

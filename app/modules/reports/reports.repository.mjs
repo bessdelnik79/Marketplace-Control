@@ -1,11 +1,11 @@
 import { createHash } from 'node:crypto';
 import { withOwnedBusinessContext } from '../../infrastructure/database/client.mjs';
-import { financialParserVersion, financialReportPeriodMatches, normalizeFinancialOperation, stableJson } from './finance.mjs';
+import { financialHistoricalWeekRange, financialParserVersion, financialReportPeriodMatches, normalizeFinancialOperation, stableJson } from './finance.mjs';
 
-export async function beginFinancialSync(userId,storeId,{force=false,initialRange,recentRange}={}){
+export async function beginFinancialSync(userId,storeId,{force=false,historical=false,initialRange,recentRange}={}){
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
     const row=(await client.query(
-      `select ss.id as stream_id,ss.next_run_at,ss.last_success_at,cs.ciphertext,cs.nonce,cs.auth_tag,s.external_account_id as seller_id,
+      `select ss.id as stream_id,ss.next_run_at,ss.last_success_at,ss.cursor,cs.ciphertext,cs.nonce,cs.auth_tag,s.external_account_id as seller_id,
               exists(select 1 from mc.product_selections ps where ps.business_id=s.business_id and ps.store_id=s.id and ps.status='confirmed') as selected
          from mc.stores s
          join mc.connections c on c.business_id=s.business_id and c.store_id=s.id and c.status='active'
@@ -20,15 +20,24 @@ export async function beginFinancialSync(userId,storeId,{force=false,initialRang
     const running=(await client.query(`select id,started_at from mc.sync_runs where stream_id=$1 and status='running'`,[row.stream_id])).rows[0];
     if(running&&new Date(running.started_at)>new Date(Date.now()-3*60*60*1000))return {started:false,reason:'running'};
     if(running)await client.query(`update mc.sync_runs set status='failed',finished_at=now(),error_code='financial_interrupted' where id=$1`,[running.id]);
-    const range=row.last_success_at?recentRange:initialRange;
+    let range=row.last_success_at?recentRange:initialRange;
+    if(historical){
+      const earliest=(await client.query(
+        `select min(date_from)::text as earliest from mc.coverage_intervals
+          where business_id=$1 and store_id=$2 and stream_id=$3 and status='complete'`,
+        [businessId,storeId,row.stream_id]
+      )).rows[0]?.earliest;
+      range=financialHistoricalWeekRange(earliest,recentRange?.dateFrom,row.cursor?.historicalWeekStart);
+      if(!range)return {started:false,reason:'no_historical_week'};
+    }
     if(!range?.dateFrom||!range?.dateTo)throw new Error('financial_invalid_request');
     const run=(await client.query(
       `insert into mc.sync_runs(business_id,store_id,stream_id,requested_from,requested_to,status,started_at,progress)
        values($1,$2,$3,$4,$5,'running',now(),'{"stage":"loading","pages":0,"rows":0}') returning id`,
       [businessId,storeId,row.stream_id,range.dateFrom,range.dateTo]
     )).rows[0];
-    await client.query(`update mc.sync_streams set next_run_at=null where id=$1`,[row.stream_id]);
-    return {started:true,business_id:businessId,store_id:storeId,stream_id:row.stream_id,run_id:run.id,date_from:range.dateFrom,date_to:range.dateTo,seller_id:row.seller_id,ciphertext:row.ciphertext,nonce:row.nonce,auth_tag:row.auth_tag};
+    if(!historical)await client.query(`update mc.sync_streams set next_run_at=null where id=$1`,[row.stream_id]);
+    return {started:true,historical,business_id:businessId,store_id:storeId,stream_id:row.stream_id,run_id:run.id,date_from:range.dateFrom,date_to:range.dateTo,seller_id:row.seller_id,ciphertext:row.ciphertext,nonce:row.nonce,auth_tag:row.auth_tag};
   });
 }
 
@@ -60,6 +69,16 @@ export async function updateFinancialSyncProgress(userId,job,progress){
 export async function completeFinancialSync(userId,job,{documentId,reports,objects=[]}){
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
     if(businessId!==job.business_id)throw new Error('financial_context_mismatch');
+    // Match beginFinancialSync lock order so an interrupted run cannot commit after its replacement starts.
+    const stream=(await client.query(
+      `select id from mc.sync_streams where id=$1 and business_id=$2 and store_id=$3 for update`,
+      [job.stream_id,businessId,job.store_id]
+    )).rows[0];
+    const run=stream&&(await client.query(
+      `select status from mc.sync_runs where id=$1 and business_id=$2 and store_id=$3 and stream_id=$4 for update`,
+      [job.run_id,businessId,job.store_id,job.stream_id]
+    )).rows[0];
+    if(run?.status!=='running')throw new Error('financial_sync_superseded');
     const documentChecksum=createHash('sha256').update(stableJson(reports.map(report=>({id:report.externalReportId,checksum:report.checksum})))).digest('hex');
     await client.query(
       `insert into mc.source_documents(id,business_id,store_id,sync_run_id,origin,document_type,external_document_id,checksum,completeness)
@@ -185,7 +204,13 @@ export async function completeFinancialSync(userId,job,{documentId,reports,objec
     );
     const progress={stage:'complete',reports:reports.length,insertedReports,normalizedReports,reselectedReports,unchangedReports,rows:insertedRows,issues};
     await client.query(`update mc.sync_runs set status='succeeded',finished_at=now(),error_code=null,progress=$2::jsonb where id=$1 and status='running'`,[job.run_id,JSON.stringify(progress)]);
-    await client.query(`update mc.sync_streams set cursor=$2::jsonb,last_success_at=now(),next_run_at=now()+interval '24 hours' where id=$1`,[job.stream_id,JSON.stringify({dateTo:job.date_to,reports:reports.length,rows:insertedRows})]);
+    const cursor=job.historical
+      ?{historicalWeekStart:job.date_from}
+      :{dateTo:job.date_to,reports:reports.length,rows:insertedRows};
+    await client.query(
+      `update mc.sync_streams set cursor=coalesce(cursor,'{}'::jsonb)||$2::jsonb,last_success_at=now(),next_run_at=now()+interval '24 hours' where id=$1`,
+      [job.stream_id,JSON.stringify(cursor)]
+    );
     return {documentId,insertedReports,normalizedReports,reselectedReports,unchangedReports,insertedRows,issues};
   });
 }
@@ -194,8 +219,15 @@ export async function failFinancialSync(userId,job,errorCode,{retryDelaySeconds=
   if(!Number.isInteger(retryDelaySeconds)||retryDelaySeconds<65||retryDelaySeconds>75)throw new Error('financial_invalid_rate_delay');
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
     const code=String(errorCode).slice(0,100);
-    await client.query(`update mc.sync_runs set status='failed',finished_at=now(),error_code=$2,progress=jsonb_set(progress,'{stage}','"failed"') where id=$1 and business_id=$3 and status='running'`,[job.run_id,code,businessId]);
-    if(['financial_unauthorized','financial_payment_required','financial_invalid_request','financial_token_type_unsupported'].includes(code))await client.query(`update mc.sync_streams set status='blocked',next_run_at=null where id=$1 and business_id=$2`,[job.stream_id,businessId]);
+    const stream=(await client.query(
+      `select id from mc.sync_streams where id=$1 and business_id=$2 and store_id=$3 for update`,
+      [job.stream_id,businessId,job.store_id]
+    )).rows[0];
+    if(!stream)return;
+    const failed=await client.query(`update mc.sync_runs set status='failed',finished_at=now(),error_code=$2,progress=jsonb_set(progress,'{stage}','"failed"') where id=$1 and business_id=$3 and status='running'`,[job.run_id,code,businessId]);
+    if(!failed.rowCount)return;
+    if(['financial_unauthorized','financial_payment_required','financial_token_type_unsupported'].includes(code)||(!job.historical&&code==='financial_invalid_request'))await client.query(`update mc.sync_streams set status='blocked',next_run_at=null where id=$1 and business_id=$2`,[job.stream_id,businessId]);
+    else if(job.historical)await client.query(`update mc.sync_streams set next_run_at=greatest(coalesce(next_run_at,now()),now()+interval '24 hours') where id=$1 and business_id=$2`,[job.stream_id,businessId]);
     else if(code==='financial_rate_limited')await client.query(`update mc.sync_streams set next_run_at=now()+make_interval(secs=>$3) where id=$1 and business_id=$2`,[job.stream_id,businessId,retryDelaySeconds]);
     else await client.query(`update mc.sync_streams set next_run_at=now()+interval '15 minutes' where id=$1 and business_id=$2`,[job.stream_id,businessId]);
   });

@@ -8,7 +8,7 @@ const databaseName=new URL(integrationUrl).pathname.slice(1);
 if(!databaseName.toLowerCase().includes('test'))throw new Error('Refusing to run P0.3 integration tests outside a database whose name contains "test".');
 process.env.DATABASE_URL=integrationUrl;
 
-const {migrate,pool,runFinancialCalculation,completeFinancialSync}=await import('../../app/db.mjs');
+const {migrate,pool,runFinancialCalculation,beginFinancialSync,completeFinancialSync,failFinancialSync}=await import('../../app/db.mjs');
 const ids={user:randomUUID(),business:randomUUID(),store:randomUUID()};
 
 await migrate();
@@ -133,6 +133,67 @@ test('financial sync reselects a previously accepted checksum without duplicatin
   )).rows[0]);
   assert.equal(saved.current_version_id,fixture.oldVersionId);
   assert.equal(saved.versions,2);
+});
+
+test('historical check advances only after a complete weekly sync and preserves recent cursor',async()=>{
+  await context(async client=>{
+    const connection=(await client.query(
+      `insert into mc.connections(business_id,store_id,secret_ref,status) values($1,$2,'p03-history','active') returning id`,
+      [ids.business,ids.store]
+    )).rows[0];
+    await client.query(
+      `insert into mc.connection_secrets(business_id,connection_id,ciphertext,nonce,auth_tag)
+       values($1,$2,decode('00','hex'),decode(repeat('00',12),'hex'),decode(repeat('00',16),'hex'))`,
+      [ids.business,connection.id]
+    );
+  });
+  const ranges={initialRange:{dateFrom:'2026-06-01',dateTo:'2026-09-21'},recentRange:{dateFrom:'2026-09-21',dateTo:'2026-09-24'}};
+  const first=await beginFinancialSync(ids.user,ids.store,{force:true,historical:true,...ranges});
+  assert.equal(first.started,true);
+  assert.deepEqual([first.date_from,first.date_to],['2026-08-10','2026-08-16']);
+  await completeFinancialSync(ids.user,first,{documentId:randomUUID(),reports:[]});
+  const second=await beginFinancialSync(ids.user,ids.store,{force:true,historical:true,...ranges});
+  assert.deepEqual([second.date_from,second.date_to],['2026-08-17','2026-08-23']);
+  await failFinancialSync(ids.user,second,'financial_invalid_request');
+  const third=await beginFinancialSync(ids.user,ids.store,{force:true,historical:true,...ranges});
+  assert.deepEqual([third.date_from,third.date_to],['2026-08-17','2026-08-23']);
+  await completeFinancialSync(ids.user,third,{documentId:randomUUID(),reports:[]});
+  const cursor=await context(async client=>(await client.query(
+    `select cursor from mc.sync_streams where business_id=$1 and store_id=$2 and source_type='financial_reports'`,
+    [ids.business,ids.store]
+  )).rows[0].cursor);
+  assert.equal(cursor.historicalWeekStart,'2026-08-17');
+  assert.equal(cursor.dateTo,'2026-08-16');
+});
+
+test('superseded financial run cannot change versions, coverage, or historical cursor',async()=>{
+  const ranges={initialRange:{dateFrom:'2026-06-01',dateTo:'2026-09-21'},recentRange:{dateFrom:'2026-09-21',dateTo:'2026-09-24'}};
+  const old=await beginFinancialSync(ids.user,ids.store,{force:true,historical:true,...ranges});
+  assert.equal(old.started,true);
+  await context(client=>client.query(`update mc.sync_runs set started_at=now()-interval '4 hours' where id=$1`,[old.run_id]));
+  const replacement=await beginFinancialSync(ids.user,ids.store,{force:true,historical:true,...ranges});
+  assert.equal(replacement.started,true);
+  assert.deepEqual([replacement.date_from,replacement.date_to],[old.date_from,old.date_to]);
+  const state=()=>context(async client=>(await client.query(
+    `select (select current_version_id from mc.reports where store_id=$1 and external_report_id='p03-reselect') as version_id,
+            (select count(*)::int from mc.report_versions where report_id=(select id from mc.reports where store_id=$1 and external_report_id='p03-reselect')) as version_count,
+            (select count(*)::int from mc.source_documents where store_id=$1 and sync_run_id=$4) as source_count,
+            (select count(*)::int from mc.coverage_intervals where store_id=$1 and stream_id=$2) as coverage_count,
+            (select cursor from mc.sync_streams where id=$2) as cursor,
+            (select status from mc.sync_streams where id=$2) as stream_status,
+            (select status from mc.sync_runs where id=$3) as replacement_status`,
+    [ids.store,old.stream_id,replacement.run_id,old.run_id]
+  )).rows[0]);
+  const before=await state();
+  await assert.rejects(
+    ()=>completeFinancialSync(ids.user,old,{documentId:randomUUID(),reports:[{
+      externalReportId:'p03-reselect',periodStart:'2026-08-10',periodEnd:'2026-08-16',checksum:'p03-new-checksum',rows:[]
+    }]}),
+    /financial_sync_superseded/
+  );
+  await failFinancialSync(ids.user,old,'financial_unauthorized');
+  assert.deepEqual(await state(),before);
+  await failFinancialSync(ids.user,replacement,'financial_unavailable');
 });
 
 test.after(async()=>{await pool.end();});
