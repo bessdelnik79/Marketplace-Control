@@ -8,7 +8,7 @@ const databaseName=new URL(integrationUrl).pathname.slice(1);
 if(!databaseName.toLowerCase().includes('test'))throw new Error('Refusing to run P0.3 integration tests outside a database whose name contains "test".');
 process.env.DATABASE_URL=integrationUrl;
 
-const {migrate,pool,runFinancialCalculation,beginFinancialSync,completeFinancialSync,failFinancialSync,getFinancialBankReconciliationState}=await import('../../app/db.mjs');
+const {migrate,pool,runFinancialCalculation,beginFinancialSync,completeFinancialSync,failFinancialSync,getFinancialBankReconciliationState,getCurrentFinancialResult}=await import('../../app/db.mjs');
 const ids={user:randomUUID(),business:randomUUID(),store:randomUUID()};
 
 await migrate();
@@ -39,7 +39,7 @@ await context(async client=>{
   const document=(await client.query(`insert into mc.source_documents(business_id,store_id,origin,document_type,external_document_id,checksum,completeness) values($1,$2,'wb_api','weekly_realization','p03-report','p03-report','complete') returning id`,[ids.business,ids.store])).rows[0];
   const report=(await client.query(`insert into mc.reports(business_id,store_id,external_report_id,period_start,period_end) values($1,$2,'785995400','2026-07-13','2026-07-19') returning id`,[ids.business,ids.store])).rows[0];
   const reportVersion=(await client.query(`insert into mc.report_versions(business_id,store_id,report_id,document_id,version_no,checksum,parser_version) values($1,$2,$3,$4,1,'p03-v1','wb-finance-v2') returning id`,[ids.business,ids.store,report.id,document.id])).rows[0];
-  const reportRow=(await client.query(`insert into mc.report_rows(business_id,store_id,report_version_id,external_row_key,row_number,raw_data,row_checksum) values($1,$2,$3,'1',1,$4::jsonb,'p03-row') returning id`,[ids.business,ids.store,reportVersion.id,JSON.stringify({docTypeName:'Продажа',sellerOperName:'Продажа',retailAmount:'100'})])).rows[0];
+  const reportRow=(await client.query(`insert into mc.report_rows(business_id,store_id,report_version_id,external_row_key,row_number,raw_data,row_checksum) values($1,$2,$3,'1',1,$4::jsonb,'p03-row') returning id`,[ids.business,ids.store,reportVersion.id,JSON.stringify({docTypeName:'Продажа',sellerOperName:'Продажа',rrDate:'2026-07-15',nmId:700001,sku:'4600000000001',quantity:1,retailAmount:'100',forPay:'100'})])).rows[0];
   await client.query(`update mc.report_versions set status='validated' where id=$1`,[reportVersion.id]);
   await client.query(`update mc.report_versions set status='accepted',accepted_at=now() where id=$1`,[reportVersion.id]);
   await client.query(`update mc.reports set current_version_id=$1 where id=$2`,[reportVersion.id,report.id]);
@@ -106,7 +106,7 @@ test('financial sync reselects a previously accepted checksum without duplicatin
     await client.query(`update mc.reports set current_version_id=$1 where id=$2`,[versions[1],report.id]);
     return {streamId:stream.id,reportId:report.id,oldVersionId:versions[0]};
   });
-  const source={externalReportId:'p03-reselect',periodStart:'2026-08-10',periodEnd:'2026-08-16',checksum:'p03-old-checksum'};
+  const source={externalReportId:'p03-reselect',periodStart:'2026-08-10',periodEnd:'2026-08-16',checksum:'p03-old-checksum',rows:[]};
   const run=async()=>{
     const runId=await context(async client=>(await client.query(
       `insert into mc.sync_runs(business_id,store_id,stream_id,requested_from,requested_to,status,started_at)
@@ -201,12 +201,16 @@ test('bank control stores a versioned summary without changing product profit',a
     return {business_id:ids.business,store_id:ids.store,stream_id:stream.id,run_id:run.id,date_from:'2026-07-13',date_to:'2026-07-19'};
   });
   const summary={reportId:785995400,reportType:1,currency:'RUB',dateFrom:'2026-07-13',dateTo:'2026-07-19',forPaySum:'100',deliveryServiceSum:'0',paidStorageSum:'0',paidAcceptanceSum:'0',deductionSum:'0',penaltySum:'0',additionalPaymentSum:'0',cashbackAmountSum:'0',cashbackDiscountSum:'0',cashbackCommissionChangeSum:'0',bankPaymentSum:'100'};
-  const source={externalReportId:'785995400',periodStart:'2026-07-13',periodEnd:'2026-07-19',checksum:'p03-v1',rows:[{rawData:{docTypeName:'Продажа',sellerOperName:'Продажа',forPay:'100'}}]};
+  const source={externalReportId:'785995400',periodStart:'2026-07-13',periodEnd:'2026-07-19',checksum:'p03-v1',rows:[{externalRowKey:'1',rowChecksum:'p03-row',rawData:{docTypeName:'Продажа',sellerOperName:'Продажа',rrDate:'2026-07-15',nmId:700001,sku:'4600000000001',quantity:1,retailAmount:'100',forPay:'100'}}]};
   const saved=await completeFinancialSync(ids.user,sync,{documentId:randomUUID(),reports:[source],summaries:new Map([['785995400',{rawData:summary,checksum:'p03-summary-v1'}]])});
   assert.equal(saved.bankChecks.passed,1);
   const state=await getFinancialBankReconciliationState(ids.user,ids.store);
   assert.equal(state.passed,1);
   await runFinancialCalculation(ids.user,ids.store);
+  const current=await getCurrentFinancialResult(ids.user,ids.store);
+  assert.equal(current.taxReference.scope,'selected_products');
+  assert.ok(current.taxReference.missingReasons.includes('tax_setting_missing'));
+  assert.ok(!current.taxReference.missingReasons.includes('tax_source_unlinked'));
   const profit=await context(async client=>(await client.query(`select sum(l.amount_signed)::text as amount from mc.publications p join mc.result_lines l on l.run_id=p.run_id where p.store_id=$1 and p.is_current`,[ids.store])).rows[0].amount);
   assert.equal(profit,'60.0000');
   const snapshot=await context(async client=>(await client.query(`select s.id,s.raw_data->>'bankPaymentSum' as bank_payment from mc.financial_report_summary_versions s where s.store_id=$1`,[ids.store])).rows[0]);

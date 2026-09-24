@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export const financialReportsEndpoint = 'https://finance-api.wildberries.ru/api/finance/v1/sales-reports/detailed';
-export const financialParserVersion = 'wb-finance-v2';
+export const financialParserVersion = 'wb-finance-v3';
 const unverifiedMoneyFields = [
   'sellerPromo','installmentCoFinancingAmount','cashbackAmount','cashbackDiscount',
   'cashbackCommissionChange','sellerPromoDiscount','loyaltyDiscount','agencyVat'
@@ -24,6 +24,14 @@ export function financialReportPeriodMatches(existing,incoming){
 const identifierFields = ['reportId','rrdId','giId','nmId','shkId','ppvzOfficeId','orderId','trbxId','loyaltyId'];
 const identifierPattern = new RegExp(`("(?:${identifierFields.join('|')})"\\s*:\\s*)(-?\\d+)(?=\\s*[,}])`, 'g');
 const decimalPattern = /^-?\d+(?:\.\d+)?$/;
+const itemIdentifierFields = ['nmId', 'sku', 'saName', 'srid', 'shkId', 'barcode'];
+const storeServiceFields = new Map([
+  ['deliveryService', { category: 'logistics', operation: 'service_charge', names: new Set(['логистика', 'доставка', 'коррекция стоимости доставки']) }],
+  ['paidStorage', { category: 'storage', operation: 'service_charge', names: new Set(['хранение', 'коррекция хранения']) }],
+  ['paidAcceptance', { category: 'acceptance', operation: 'service_charge', names: new Set(['обработка товара']) }],
+  ['penalty', { category: 'penalty', operation: 'adjustment', names: new Set(['штраф']) }],
+  ['deduction', { category: 'deduction', operation: 'adjustment', names: new Set(['удержание']) }]
+]);
 
 function apiError(message, response, retryAfterMs) {
   const error = new Error(message);
@@ -245,6 +253,19 @@ export function financialDateRange(now = new Date(), days = 91) {
   const end = new Date(`${parts.year}-${parts.month}-${parts.day}T00:00:00Z`);
   const start = new Date(end.getTime() - days * 86400000);
   return { dateFrom: start.toISOString().slice(0, 10), dateTo: end.toISOString().slice(0, 10) };
+}
+
+export function financialComponentScope(row, operation, component, productMatched = false) {
+  if (productMatched) return 'selected_product';
+  const rule = storeServiceFields.get(component.sourceField);
+  const raw = decimal(row?.[component.sourceField]);
+  const hasItemIdentifier = itemIdentifierFields.some(field => row?.[field] !== null && row?.[field] !== undefined && String(row[field]).trim() !== '');
+  const document = String(row?.docTypeName ?? '').trim().toLocaleLowerCase('ru-RU');
+  const name = String(row?.sellerOperName ?? '').trim().toLocaleLowerCase('ru-RU');
+  if (rule && !hasItemIdentifier && document === '' && rule.names.has(name) &&
+      operation.operationType === rule.operation && component.categoryCode === rule.category &&
+      raw !== null && raw !== '0' && !raw.startsWith('-')) return 'store';
+  return 'product_expected';
 }
 
 export function financialHistoricalWeekRange(earliestDate, recentFrom, lastCheckedWeek) {

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   calculateFinancialResult,
+  calculateStoreTaxReference,
   canonicalJson,
   createInputFingerprint,
   isVerifiedWbResultComponent,
@@ -94,7 +95,7 @@ test('even periodization truncates to four places and puts the exact remainder o
   assert.deepEqual(periodizeExpense(expense, { periodStart: '2026-07-14', periodEnd: '2026-07-15' }).map(row => row.amountSigned), ['-3.3333', '-3.3334']);
 });
 
-test('calculation aggregates only confirmed selected and explicitly store-scoped components', () => {
+test('calculation excludes unallocated store charges from selected SKU result', () => {
   const result = calculateFinancialResult({
     periodStart: '2026-07-13',
     periodEnd: '2026-07-19',
@@ -108,15 +109,15 @@ test('calculation aggregates only confirmed selected and explicitly store-scoped
     ]
   });
   assert.equal(result.quality, 'partial');
-  assert.deepEqual(result.missingReasons, ['tax_setting_missing']);
+  assert.deepEqual(result.missingReasons, ['store_component_unallocated', 'tax_setting_missing']);
   assert.deepEqual(result.totals, {
     selectedProductsResultBeforeTax: '87.5000',
-    storeLevelResultBeforeTax: '-5.1250',
-    availableResultBeforeTax: '82.3750',
+    storeLevelResultBeforeTax: '0.0000',
+    availableResultBeforeTax: '87.5000',
     availableResultAfterTax: null,
     netProfit: null
   });
-  assert.equal(result.lines.length, 3);
+  assert.equal(result.lines.length, 2);
 });
 
 test('calculation sums values beyond Number safe precision exactly', () => {
@@ -180,7 +181,7 @@ test('sales COGS uses the latest effective version and exact rounded multiplicat
   assert.equal(cogs[1].evidence[0].costVersionId, 'cost-new');
 });
 
-test('product and store expenses remain separate and partial overlap includes only daily shares', () => {
+test('only selected product expenses enter result; unallocated store expense is explicit', () => {
   const result = calculateFinancialResult({
     periodStart: '2026-07-14', periodEnd: '2026-07-15', selectedProductIds: ['product-1'],
     expenses: [
@@ -189,11 +190,11 @@ test('product and store expenses remain separate and partial overlap includes on
     ]
   });
   assert.equal(result.totals.selectedProductsResultBeforeTax, '-6.0000');
-  assert.equal(result.totals.storeLevelResultBeforeTax, '-2.5000');
-  assert.deepEqual(result.lines.map(line => line.categoryCode), ['packaging', 'software_services', 'packaging']);
+  assert.equal(result.totals.storeLevelResultBeforeTax, '0.0000');
+  assert.ok(result.missingReasons.includes('store_expense_unallocated'));
+  assert.deepEqual(result.lines.map(line => line.categoryCode), ['packaging', 'packaging']);
   assert.deepEqual(result.lines.map(line => [line.scopeCode, line.accountingDate, line.amountSigned]), [
     ['selected_product', '2026-07-14', '-3.0000'],
-    ['store', '2026-07-14', '-2.5000'],
     ['selected_product', '2026-07-15', '-3.0000']
   ]);
 });
@@ -241,7 +242,7 @@ test('missing cost, unsupported return COGS, unclassified and lost product links
   ]);
 });
 
-test('tax is never approximated and VAT adds its own stable reason', () => {
+test('selected-SKU tax reference does not silently enter profit, and VAT stays unsupported', () => {
   const result = calculateFinancialResult({
     periodStart: '2026-07-13', periodEnd: '2026-07-19', selectedProductIds: ['product-1'],
     financialComponents: [
@@ -250,10 +251,54 @@ test('tax is never approximated and VAT adds its own stable reason', () => {
     taxSetting: { regimeCode: 'usn_income', usnRateFraction: '0.06', vatMode: 'standard' }
   });
   assert.equal(result.quality, 'partial');
-  assert.deepEqual(result.missingReasons, ['tax_method_unsupported', 'vat_method_unsupported']);
+  assert.deepEqual(result.missingReasons, ['tax_selected_reference_only', 'vat_method_unsupported']);
   assert.equal(result.totals.availableResultBeforeTax, '10.0000');
   assert.equal(result.totals.availableResultAfterTax, null);
   assert.equal(result.totals.netProfit, null);
+});
+
+test('seller-defined USN reference uses selected SKU sale less return and effective-dated rates', () => {
+  const sourceRows = [
+    { id:'a', productId:'sku-1', accountingDate:'2026-09-14', docTypeName:'Продажа', sellerOperName:'Продажа', retailAmount:'100.00' },
+    { id:'b', productId:'sku-1', accountingDate:'2026-09-15', docTypeName:'Возврат', sellerOperName:'Возврат', retailAmount:'20.00' },
+    { id:'c', productId:'sku-2', accountingDate:'2026-09-16', docTypeName:'Продажа', sellerOperName:'Продажа', retailAmount:'50.00' },
+    { id:'d', productId:'unselected', accountingDate:'2026-09-16', docTypeName:'Продажа', sellerOperName:'Продажа', retailAmount:'999.00' }
+  ];
+  const taxSettings = [
+    { id:'rate-6', effectiveFrom:'2026-01-01', regimeCode:'usn_income', usnRateFraction:'0.06' },
+    { id:'rate-5', effectiveFrom:'2026-09-16', regimeCode:'usn_income', usnRateFraction:'0.05' }
+  ];
+  const selectedProductIds=['sku-1','sku-2'];
+  const result = calculateStoreTaxReference({periodStart:'2026-09-14',periodEnd:'2026-09-20',selectedProductIds,sourceRows,taxSettings});
+  assert.equal(result.scope,'selected_products');
+  assert.equal(result.quality,'complete');
+  assert.equal(result.taxableBase,'130.0000');
+  assert.equal(result.estimatedTax,'7.3000');
+  assert.deepEqual(result.products.map(row=>[row.productId,row.taxableBase,row.estimatedTax]),[['sku-1','80.0000','4.8000'],['sku-2','50.0000','2.5000']]);
+  assert.deepEqual(result.segments.map(row=>[row.taxSettingVersionId,row.taxableBase]),[['rate-6','80.0000'],['rate-5','50.0000']]);
+  assert.deepEqual(calculateStoreTaxReference({periodStart:'2026-09-14',periodEnd:'2026-09-20',selectedProductIds:[...selectedProductIds].reverse(),sourceRows:[...sourceRows].reverse(),taxSettings:[...taxSettings].reverse()}),result);
+});
+
+test('unsupported rows, missing rates and incomplete coverage prevent a misleading tax amount', () => {
+  const base = {periodStart:'2026-09-14',periodEnd:'2026-09-20',selectedProductIds:['sku-1'],taxSettings:[{id:'r',effectiveFrom:'2026-09-15',regimeCode:'usn_income',usnRateFraction:'0.06'}]};
+  const result=calculateStoreTaxReference({...base,sourceRows:[
+    {id:'early',productId:'sku-1',accountingDate:'2026-09-14',docTypeName:'Продажа',sellerOperName:'Продажа',retailAmount:'100'},
+    {id:'other',productId:'sku-1',accountingDate:'2026-09-16',docTypeName:'Иное',sellerOperName:'Иное',retailAmount:'20'}
+  ],reportCoverageComplete:false});
+  assert.equal(result.quality,'partial');
+  assert.equal(result.estimatedTax,null);
+  assert.deepEqual(result.missingReasons,['report_coverage_incomplete','tax_base_missing','tax_setting_missing','tax_source_unverified']);
+});
+
+test('selected sale with missing amount and unlinked sale suppress tax estimate', () => {
+  const base={periodStart:'2026-09-14',periodEnd:'2026-09-20',selectedProductIds:['sku-1'],taxSettings:[{id:'r',effectiveFrom:'2026-01-01',regimeCode:'usn_income',usnRateFraction:'0.06'}]};
+  const valid={id:'sale',productId:'sku-1',accountingDate:'2026-09-14',docTypeName:'Продажа',sellerOperName:'Продажа',retailAmount:'100'};
+  const missing=calculateStoreTaxReference({...base,sourceRows:[valid,{...valid,id:'missing',retailAmount:null}]});
+  assert.equal(missing.estimatedTax,null);
+  assert.ok(missing.missingReasons.includes('tax_source_unverified'));
+  const unlinked=calculateStoreTaxReference({...base,sourceRows:[valid,{...valid,id:'unlinked',productId:null,retailAmount:'10'}]});
+  assert.equal(unlinked.estimatedTax,null);
+  assert.ok(unlinked.missingReasons.includes('tax_source_unlinked'));
 });
 
 test('output is deterministic regardless of source order and aggregates evidence', () => {

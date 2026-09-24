@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decimal, financialDateRange, financialHistoricalWeekRange, financialReportPeriodMatches, financialRequestDelaySeconds, loadWbFinancialReports, normalizeFinancialOperation, normalizeFinancialReports, parseFinancialJson } from './finance.mjs';
+import { decimal, financialComponentScope, financialDateRange, financialHistoricalWeekRange, financialParserVersion, financialReportPeriodMatches, financialRequestDelaySeconds, loadWbFinancialReports, normalizeFinancialOperation, normalizeFinancialReports, parseFinancialJson } from './finance.mjs';
 
 const row = (overrides = {}) => ({
   reportId: '90071992547409931', dateFrom: '2026-09-01', dateTo: '2026-09-07', createDate: '2026-09-08', currency: 'RUB',
@@ -119,4 +119,41 @@ test('unverified WB remuneration fields remain separate informational components
   assert.deepEqual(operation.components.find(component=>component.componentKey==='cashbackAmount'),{
     componentKey:'cashbackAmount',categoryCode:'unclassified_financial_field',amountSigned:'5',sourceField:'cashbackAmount'
   });
+});
+
+test('verified non-product WB charges have store scope only for exact field, document, operation and positive value', () => {
+  assert.equal(financialParserVersion, 'wb-finance-v3');
+  const cases = [
+    ['deliveryService', 'Логистика', 'logistics'],
+    ['deliveryService', 'Доставка', 'logistics'],
+    ['deliveryService', 'Коррекция стоимости доставки', 'logistics'],
+    ['paidStorage', 'Хранение', 'storage'],
+    ['paidStorage', 'Коррекция хранения', 'storage'],
+    ['paidAcceptance', 'Обработка товара', 'acceptance'],
+    ['penalty', 'Штраф', 'penalty'],
+    ['deduction', 'Удержание', 'deduction']
+  ];
+  for (const [field, name, category] of cases) {
+    const source = row({ nmId: null, retailAmount: null, docTypeName: '', sellerOperName: name, [field]: '10' });
+    const operation = normalizeFinancialOperation(source);
+    const component = operation.components.find(value => value.sourceField === field);
+    assert.equal(component.categoryCode, category);
+    assert.equal(financialComponentScope(source, operation, component), 'store', `${field}/${name}`);
+    assert.equal(financialComponentScope(source, operation, component, true), 'selected_product');
+    for (const itemField of ['nmId', 'sku', 'saName', 'srid', 'shkId', 'barcode']) {
+      assert.equal(financialComponentScope({ ...source, [itemField]: '123' }, operation, component), 'product_expected', itemField);
+    }
+    assert.equal(financialComponentScope({ ...source, docTypeName: 'Продажа' }, operation, component), 'product_expected');
+    assert.equal(financialComponentScope({ ...source, sellerOperName: 'Новая услуга' }, operation, component), 'product_expected');
+    assert.equal(financialComponentScope({ ...source, [field]: '-10' }, operation, component), 'product_expected');
+    assert.equal(financialComponentScope({ ...source, [field]: '0' }, operation, component), 'product_expected');
+    assert.equal(financialComponentScope(source, { operationType: 'sale' }, component), 'product_expected');
+    assert.equal(financialComponentScope(source, operation, { ...component, categoryCode: 'unclassified_financial_field' }), 'product_expected');
+  }
+});
+
+test('unverified PVZ, loyalty and unrelated fields cannot become store expenses', () => {
+  const source = row({ nmId: null, retailAmount: null, docTypeName: '', sellerOperName: 'Штраф', penalty: '10', ppvzReward: '2', cashbackDiscount: '3' });
+  const operation = normalizeFinancialOperation(source);
+  assert.deepEqual(operation.components.filter(component => financialComponentScope(source, operation, component) === 'store').map(component => component.sourceField), ['penalty']);
 });

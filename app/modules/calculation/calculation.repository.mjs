@@ -1,6 +1,6 @@
 import { pool, withOwnedBusinessContext } from '../../infrastructure/database/client.mjs';
 import { financialParserVersion } from '../reports/finance.mjs';
-import { calculateFinancialResult, createInputFingerprint, isVerifiedWbResultComponent } from './calculation.mjs';
+import { calculateFinancialResult, calculateStoreTaxReference, createInputFingerprint, isVerifiedWbResultComponent } from './calculation.mjs';
 
 export async function getFinancialCalculationState(userId,storeId){
   return withOwnedBusinessContext(userId,async(client,businessId)=>(await client.query(
@@ -42,8 +42,8 @@ export async function acknowledgeFinancialCalculationInvalidation(userId,storeId
 export async function getCurrentFinancialResult(userId,storeId){
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
     const publication=(await client.query(
-      `select p.id as publication_id,p.created_at as published_at,r.id as run_id,
-              r.period_start,r.period_end,r.quality,r.missing_reasons,
+      `select p.id as publication_id,p.created_at as published_at,r.id as run_id,r.request_id,
+              r.period_start::text as period_start,r.period_end::text as period_end,r.quality,r.missing_reasons,
               m.code as method_code,m.implementation_version as method_version
          from mc.publications p join mc.calculation_runs r on r.id=p.run_id
          join mc.method_versions m on m.id=r.method_version_id
@@ -57,7 +57,26 @@ export async function getCurrentFinancialResult(userId,storeId){
          from mc.result_lines where run_id=$1
         order by accounting_date,result_scope,product_id nulls last,variant_id nulls last,category_code,id`,[publication.run_id]
     )).rows;
-    return{...publication,lines};
+    if (publication.method_version !== 'financial-result-v3') return{...publication,lines,taxReference:null};
+    const selectedProductIds=(await client.query(
+      `select product_id from mc.calculation_request_products where request_id=$1 order by product_id`,[publication.request_id]
+    )).rows.map(row=>row.product_id);
+    const sourceRows=(await client.query(
+      `select o.id,o.product_id,o.accounting_date::text,rr.raw_data->>'retailAmount' as retail_amount,
+              rr.raw_data->>'docTypeName' as doc_type_name,rr.raw_data->>'sellerOperName' as seller_oper_name,o.state
+         from mc.calculation_inputs i join mc.operation_versions o on o.report_normalization_id=i.report_normalization_id
+         join mc.report_rows rr on rr.id=o.report_row_id
+        where i.run_id=$1 and i.report_normalization_id is not null order by o.id`,[publication.run_id]
+    )).rows.map(row=>({id:row.id,productId:row.product_id,accountingDate:row.accounting_date,retailAmount:row.retail_amount,docTypeName:row.doc_type_name,sellerOperName:row.seller_oper_name,state:row.state}));
+    const taxSettings=(await client.query(
+      `select v.id,s.effective_from::text,v.regime_code,v.usn_rate_fraction::text
+         from mc.calculation_inputs i join mc.tax_setting_versions v on v.id=i.tax_setting_version_id
+         join mc.tax_settings s on s.id=v.tax_setting_id
+        where i.run_id=$1 and i.tax_setting_version_id is not null order by s.effective_from,v.id`,[publication.run_id]
+    )).rows.map(row=>({id:row.id,effectiveFrom:row.effective_from,regimeCode:row.regime_code,usnRateFraction:row.usn_rate_fraction}));
+    const reportCoverageComplete=!publication.missing_reasons.includes('report_coverage_incomplete');
+    const taxReference=calculateStoreTaxReference({periodStart:publication.period_start,periodEnd:publication.period_end,selectedProductIds,sourceRows,taxSettings,reportCoverageComplete});
+    return{...publication,lines,taxReference};
   });
 }
 
@@ -73,8 +92,8 @@ export async function prepareFinancialCalculation(userId,storeId){
          from mc.reports r join mc.report_versions rv on rv.id=r.current_version_id
          left join lateral (
            select n.id from mc.report_normalizations n join mc.method_versions m on m.id=n.method_version_id
-            where n.report_version_id=rv.id and n.status='succeeded' and m.implementation_version=$3
-            order by m.version_no desc limit 1
+            where n.report_version_id=rv.id and n.status='succeeded' and m.implementation_version in ($3,'wb-finance-v2')
+            order by (m.implementation_version=$3) desc,m.version_no desc limit 1
          ) rn on true
         where r.business_id=$1 and r.store_id=$2
         order by r.period_start,r.external_report_id`,[businessId,storeId,financialParserVersion]
@@ -95,7 +114,7 @@ export async function prepareFinancialCalculation(userId,storeId){
       `select v.id from mc.tax_settings s join mc.tax_setting_versions v on v.id=s.current_version_id
         where s.business_id=$1 and s.effective_from<=$2 and v.state='active' order by s.effective_from,v.id`,[businessId,periodEnd]
     )).rows.map(row=>row.id);
-    const method=(await client.query(`select id,implementation_version from mc.method_versions where code='financial_result' and version_no=2`)).rows[0];
+    const method=(await client.query(`select id,implementation_version from mc.method_versions where code='financial_result' and version_no=3`)).rows[0];
     if(!method)throw new Error('calculation_method_missing');
     const fingerprint=createInputFingerprint({resultMethodVersion:`${method.id}:${method.implementation_version}`,selectedProductIds:products,reportVersionIds:normalized.map(row=>row.report_version_id),reportNormalizationIds:normalized.map(row=>row.normalization_id),costVersionIds:costs,expenseVersionIds:expenses,taxSettingVersionIds:taxes,periodStart,periodEnd});
     const current=(await client.query(`select id,input_fingerprint,status from mc.calculation_requests where business_id=$1 and store_id=$2 and is_latest for update`,[businessId,storeId])).rows[0];

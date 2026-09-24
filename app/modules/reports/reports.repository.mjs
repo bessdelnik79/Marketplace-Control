@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { withOwnedBusinessContext } from '../../infrastructure/database/client.mjs';
-import { financialHistoricalWeekRange, financialParserVersion, financialReportPeriodMatches, normalizeFinancialOperation, stableJson } from './finance.mjs';
+import { financialComponentScope, financialHistoricalWeekRange, financialParserVersion, financialReportPeriodMatches, normalizeFinancialOperation, stableJson } from './finance.mjs';
 import { reconcileBankPayment } from './bank-reconciliation.mjs';
 
 async function recordBankCheck(client, businessId, job, source, versionId, summary, summaryError) {
@@ -192,7 +192,7 @@ export async function completeFinancialSync(userId,job,{documentId,reports,summa
         for(const component of normalized.components)await client.query(
           `insert into mc.financial_components(business_id,store_id,operation_version_id,component_key,category_code,amount_signed,method_version_id,source_field,result_scope_classification)
            values($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-          [businessId,job.store_id,operationVersion.id,component.componentKey,component.categoryCode,component.amountSigned,method.id,component.sourceField,product?'selected_product':'product_expected']
+          [businessId,job.store_id,operationVersion.id,component.componentKey,component.categoryCode,component.amountSigned,method.id,component.sourceField,financialComponentScope(sourceRow.rawData,normalized,component,Boolean(product))]
         );
         insertedRows++;
       }
