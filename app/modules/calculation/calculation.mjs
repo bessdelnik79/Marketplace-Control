@@ -7,6 +7,14 @@ const RESULT_CATEGORIES = new Set([
   'other_adjustment'
 ]);
 const NON_RESULT_CATEGORIES = new Set(['payout']);
+const VERIFIED_WB_COMPONENTS = new Map([
+  ['acquiringFee', { category: 'acquiring', operation: 'sale', document: 'продажа', names: new Set(['продажа']) }],
+  ['deliveryService', { category: 'logistics', operation: 'service_charge', document: '', names: new Set(['логистика', 'доставка', 'коррекция стоимости доставки']) }],
+  ['paidStorage', { category: 'storage', operation: 'service_charge', document: '', names: new Set(['хранение', 'коррекция хранения']) }],
+  ['paidAcceptance', { category: 'acceptance', operation: 'service_charge', document: '', names: new Set(['обработка товара']) }],
+  ['penalty', { category: 'penalty', operation: 'adjustment', document: '', names: new Set(['штраф']) }],
+  ['deduction', { category: 'deduction', operation: 'adjustment', document: '', names: new Set(['удержание']) }]
+]);
 const EXPENSE_CATEGORIES = new Set([
   'packaging', 'software_services', 'external_promotion', 'agency_services', 'other_external'
 ]);
@@ -54,6 +62,20 @@ function money(value) {
 
 export function normalizeMoney(value) {
   return formatDecimal(money(value));
+}
+
+export function isVerifiedWbResultComponent({ categoryCode, sourceField, operationType, docTypeName, sellerOperName, rawValue }) {
+  const value=String(rawValue??'').trim().replace(',', '.');
+  if(!/^\d+(?:\.\d+)?$/.test(value)||!/[1-9]/.test(value))return false;
+  if (sourceField === 'retailAmount') {
+    return (categoryCode === 'revenue' && operationType === 'sale') ||
+      (categoryCode === 'revenue_return' && operationType === 'return');
+  }
+  const rule = VERIFIED_WB_COMPONENTS.get(sourceField);
+  if (!rule || rule.category !== categoryCode || rule.operation !== operationType) return false;
+  const document = String(docTypeName ?? '').trim().toLocaleLowerCase('ru-RU');
+  const name = String(sellerOperName ?? '').trim().toLocaleLowerCase('ru-RU');
+  return document === rule.document && rule.names.has(name);
 }
 
 function validDate(value) {

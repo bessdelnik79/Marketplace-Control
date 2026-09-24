@@ -5,6 +5,7 @@ import { financialDateRange, financialRequestDelaySeconds, loadWbFinancialReport
 import { removeFinancialDocument, storeFinancialPages } from '../../infrastructure/storage/source-storage.mjs';
 import { assertWbFinancialToken, decodeWbToken } from '../stores/wb.mjs';
 import { scheduleFinancialCalculation } from '../calculation/calculation-sync.mjs';
+import { loadWbFinancialSummaries } from './bank-reconciliation.mjs';
 
 const activeJobs = new Set();
 const knownErrors = new Set([
@@ -49,11 +50,26 @@ export function scheduleFinancialSync(userId, storeId, {
           onPage:progress=>updateFinancialSyncProgress(userId,job,{stage:'loading',pages:progress.pageCount,rows:progress.rowCount,rrdId:progress.rrdId})
         });
         if(historical&&financial.reports.some(report=>report.periodStart<job.date_from||report.periodEnd>job.date_to))throw new Error('financial_report_period_mismatch');
+        let summaries = new Map(), summaryError = null;
+        if(financial.reports.length){
+          try {
+            summaries = await loadWbFinancialSummaries(token, {
+              dateFrom: job.date_from, dateTo: job.date_to, fetchImpl,
+              beforeRequest: async () => {
+                const slot = await reserveFinancialRequestSlot(userId, job, financialRequestDelaySeconds(random));
+                if(slot.waitMs > 0)await wait(slot.waitMs);
+              }
+            });
+          } catch(error) {
+            summaryError = String(error?.message ?? '').startsWith('financial_') ? error.message : 'financial_summary_unavailable';
+            console.warn('[WB financial summary unavailable]', JSON.stringify({ time: new Date().toISOString(), userId, storeId, error: summaryError }));
+          }
+        }
         await updateFinancialSyncProgress(userId,job,{stage:'saving',pages:financial.pageCount,rows:financial.rows.length,reports:financial.reports.length});
         documentId=randomUUID();
         stored=await storeFinancialPages({businessId:job.business_id,storeId:job.store_id,documentId,pages:financial.pages,root:sourceRoot,...(masterKey?{masterKey}:{})});
-        const saved=await completeFinancialSync(userId,job,{documentId,reports:financial.reports,objects:stored.objects});
-        console.info('[WB financial reports synced]',JSON.stringify({time:new Date().toISOString(),userId,storeId,historical,reports:financial.reports.length,rows:financial.rows.length,insertedReports:saved.insertedReports,reselectedReports:saved.reselectedReports,unchangedReports:saved.unchangedReports,issues:saved.issues}));
+        const saved=await completeFinancialSync(userId,job,{documentId,reports:financial.reports,summaries,summaryError,objects:stored.objects});
+        console.info('[WB financial reports synced]',JSON.stringify({time:new Date().toISOString(),userId,storeId,historical,reports:financial.reports.length,rows:financial.rows.length,insertedReports:saved.insertedReports,reselectedReports:saved.reselectedReports,unchangedReports:saved.unchangedReports,issues:saved.issues,bankChecks:saved.bankChecks}));
         stored=undefined;
         documentId=undefined;
         job=undefined;

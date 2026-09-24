@@ -1,6 +1,23 @@
 import { createHash } from 'node:crypto';
 import { withOwnedBusinessContext } from '../../infrastructure/database/client.mjs';
 import { financialHistoricalWeekRange, financialParserVersion, financialReportPeriodMatches, normalizeFinancialOperation, stableJson } from './finance.mjs';
+import { reconcileBankPayment } from './bank-reconciliation.mjs';
+
+async function recordBankCheck(client, businessId, job, source, versionId, summary, summaryError) {
+  if(summary)await client.query(
+    `insert into mc.financial_report_summary_versions(business_id,store_id,report_version_id,sync_run_id,checksum,raw_data)
+     values($1,$2,$3,$4,$5,$6::jsonb) on conflict(report_version_id,checksum) do nothing`,
+    [businessId,job.store_id,versionId,job.run_id,summary.checksum,JSON.stringify(summary.rawData)]
+  );
+  const result = reconcileBankPayment(source, summary?.rawData);
+  const reason = summaryError && !summary ? summaryError : result.reason;
+  await client.query(
+    `insert into mc.reconciliation_checks(business_id,store_id,report_version_id,check_code,expected_amount,actual_amount,status,details)
+     values($1,$2,$3,'wb_bank_payment_sum_v1',$4,$5,$6,$7::jsonb)`,
+    [businessId,job.store_id,versionId,result.expectedAmount,result.actualAmount,result.status,JSON.stringify({reason,summaryChecksum:summary?.checksum??null,syncRunId:job.run_id})]
+  );
+  return result.status;
+}
 
 export async function beginFinancialSync(userId,storeId,{force=false,historical=false,initialRange,recentRange}={}){
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
@@ -66,7 +83,7 @@ export async function updateFinancialSyncProgress(userId,job,progress){
   });
 }
 
-export async function completeFinancialSync(userId,job,{documentId,reports,objects=[]}){
+export async function completeFinancialSync(userId,job,{documentId,reports,summaries=new Map(),summaryError=null,objects=[]}){
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
     if(businessId!==job.business_id)throw new Error('financial_context_mismatch');
     // Match beginFinancialSync lock order so an interrupted run cannot commit after its replacement starts.
@@ -93,6 +110,7 @@ export async function completeFinancialSync(userId,job,{documentId,reports,objec
     const method=(await client.query(`select id from mc.method_versions where code='wb_finance_import' and implementation_version=$1 order by version_no desc limit 1`,[financialParserVersion])).rows[0];
     if(!method)throw new Error('financial_method_missing');
     let insertedReports=0,unchangedReports=0,normalizedReports=0,reselectedReports=0,insertedRows=0,issues=0;
+    const bankChecks={passed:0,failed:0,not_checkable:0};
     for(const source of reports){
       let report=(await client.query(`select id,period_start,period_end,current_version_id from mc.reports where store_id=$1 and report_type='weekly_realization' and external_report_id=$2`,[job.store_id,source.externalReportId])).rows[0];
       if(report&&!financialReportPeriodMatches(report,source))throw new Error('financial_report_period_mismatch');
@@ -112,6 +130,7 @@ export async function completeFinancialSync(userId,job,{documentId,reports,objec
             await client.query(`update mc.reports set current_version_id=$1 where id=$2`,[same.id,report.id]);
             reselectedReports++;
           }
+          bankChecks[await recordBankCheck(client,businessId,job,source,same.id,summaries.get(source.externalReportId),summaryError)]++;
           continue;
         }
         version=same;reuseRows=true;
@@ -190,6 +209,7 @@ export async function completeFinancialSync(userId,job,{documentId,reports,objec
           reselectedReports++;
         }
       }
+      bankChecks[await recordBankCheck(client,businessId,job,source,version.id,summaries.get(source.externalReportId),summaryError)]++;
     }
     await client.query(
       `insert into mc.coverage_intervals(business_id,store_id,stream_id,source_document_id,date_from,date_to,status)
@@ -202,7 +222,7 @@ export async function completeFinancialSync(userId,job,{documentId,reports,objec
        on conflict(store_id) do update set requested_by=excluded.requested_by,
          reason=excluded.reason,generation_token=gen_random_uuid(),invalidated_at=excluded.invalidated_at`,[businessId,job.store_id,userId]
     );
-    const progress={stage:'complete',reports:reports.length,insertedReports,normalizedReports,reselectedReports,unchangedReports,rows:insertedRows,issues};
+    const progress={stage:'complete',reports:reports.length,insertedReports,normalizedReports,reselectedReports,unchangedReports,rows:insertedRows,issues,bankChecks};
     await client.query(`update mc.sync_runs set status='succeeded',finished_at=now(),error_code=null,progress=$2::jsonb where id=$1 and status='running'`,[job.run_id,JSON.stringify(progress)]);
     const cursor=job.historical
       ?{historicalWeekStart:job.date_from}
@@ -211,7 +231,7 @@ export async function completeFinancialSync(userId,job,{documentId,reports,objec
       `update mc.sync_streams set cursor=coalesce(cursor,'{}'::jsonb)||$2::jsonb,last_success_at=now(),next_run_at=now()+interval '24 hours' where id=$1`,
       [job.stream_id,JSON.stringify(cursor)]
     );
-    return {documentId,insertedReports,normalizedReports,reselectedReports,unchangedReports,insertedRows,issues};
+    return {documentId,insertedReports,normalizedReports,reselectedReports,unchangedReports,insertedRows,issues,bankChecks};
   });
 }
 
@@ -245,4 +265,24 @@ export async function getFinancialSyncState(userId,storeId){
        left join lateral (select status,error_code,started_at,finished_at,requested_from,requested_to,progress from mc.sync_runs where stream_id=ss.id order by created_at desc limit 1) r on true
       where ss.business_id=$1 and ss.store_id=$2 and ss.source_type='financial_reports'`,[businessId,storeId]
   )).rows[0]??null);
+}
+
+export async function getFinancialBankReconciliationState(userId,storeId){
+  return withOwnedBusinessContext(userId,async(client,businessId)=>(await client.query(
+    `select count(*)::int as "reportCount",
+            count(*) filter(where rc.status='passed')::int as passed,
+            count(*) filter(where rc.status='failed')::int as failed,
+            count(*) filter(where rc.status='not_checkable')::int as "notCheckable",
+            count(*) filter(where rc.id is null)::int as unchecked,
+            count(*) filter(where rc.details->>'reason' in ('summary_missing','financial_summary_unavailable','financial_summary_unauthorized','financial_summary_rate_limited','financial_invalid_summary','financial_duplicate_summary_conflict','financial_summary_too_large'))::int as "missingSummary"
+       from mc.reports r
+       left join lateral (
+         select c.id,c.status,c.details from mc.reconciliation_checks c
+          where c.business_id=r.business_id and c.store_id=r.store_id and c.report_version_id=r.current_version_id
+            and c.check_code='wb_bank_payment_sum_v1'
+          order by c.created_at desc,c.id desc limit 1
+       ) rc on true
+      where r.business_id=$1 and r.store_id=$2 and r.report_type='weekly_realization' and r.current_version_id is not null`,
+    [businessId,storeId]
+  )).rows[0]);
 }

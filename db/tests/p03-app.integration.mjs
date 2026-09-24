@@ -8,7 +8,7 @@ const databaseName=new URL(integrationUrl).pathname.slice(1);
 if(!databaseName.toLowerCase().includes('test'))throw new Error('Refusing to run P0.3 integration tests outside a database whose name contains "test".');
 process.env.DATABASE_URL=integrationUrl;
 
-const {migrate,pool,runFinancialCalculation,beginFinancialSync,completeFinancialSync,failFinancialSync}=await import('../../app/db.mjs');
+const {migrate,pool,runFinancialCalculation,beginFinancialSync,completeFinancialSync,failFinancialSync,getFinancialBankReconciliationState}=await import('../../app/db.mjs');
 const ids={user:randomUUID(),business:randomUUID(),store:randomUUID()};
 
 await migrate();
@@ -39,7 +39,7 @@ await context(async client=>{
   const document=(await client.query(`insert into mc.source_documents(business_id,store_id,origin,document_type,external_document_id,checksum,completeness) values($1,$2,'wb_api','weekly_realization','p03-report','p03-report','complete') returning id`,[ids.business,ids.store])).rows[0];
   const report=(await client.query(`insert into mc.reports(business_id,store_id,external_report_id,period_start,period_end) values($1,$2,'785995400','2026-07-13','2026-07-19') returning id`,[ids.business,ids.store])).rows[0];
   const reportVersion=(await client.query(`insert into mc.report_versions(business_id,store_id,report_id,document_id,version_no,checksum,parser_version) values($1,$2,$3,$4,1,'p03-v1','wb-finance-v2') returning id`,[ids.business,ids.store,report.id,document.id])).rows[0];
-  const reportRow=(await client.query(`insert into mc.report_rows(business_id,store_id,report_version_id,external_row_key,row_number,raw_data,row_checksum) values($1,$2,$3,'1',1,'{}','p03-row') returning id`,[ids.business,ids.store,reportVersion.id])).rows[0];
+  const reportRow=(await client.query(`insert into mc.report_rows(business_id,store_id,report_version_id,external_row_key,row_number,raw_data,row_checksum) values($1,$2,$3,'1',1,$4::jsonb,'p03-row') returning id`,[ids.business,ids.store,reportVersion.id,JSON.stringify({docTypeName:'Продажа',sellerOperName:'Продажа',retailAmount:'100'})])).rows[0];
   await client.query(`update mc.report_versions set status='validated' where id=$1`,[reportVersion.id]);
   await client.query(`update mc.report_versions set status='accepted',accepted_at=now() where id=$1`,[reportVersion.id]);
   await client.query(`update mc.reports set current_version_id=$1 where id=$2`,[reportVersion.id,report.id]);
@@ -72,10 +72,8 @@ test('P0.3 creates a reproducible partial result and idempotently keeps one publ
 
 test('financial sync reselects a previously accepted checksum without duplicating its version',async()=>{
   const fixture=await context(async client=>{
-    const stream=(await client.query(
-      `insert into mc.sync_streams(business_id,store_id,source_type) values($1,$2,'financial_reports') returning id`,
-      [ids.business,ids.store]
-    )).rows[0];
+    await client.query(`insert into mc.sync_streams(business_id,store_id,source_type) values($1,$2,'financial_reports') on conflict(store_id,source_type) do nothing`,[ids.business,ids.store]);
+    const stream=(await client.query(`select id from mc.sync_streams where store_id=$1 and source_type='financial_reports'`,[ids.store])).rows[0];
     const document=(await client.query(
       `insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness)
        values($1,$2,'wb_api','weekly_realization','p03-reselect-source','complete') returning id`,
@@ -194,6 +192,26 @@ test('superseded financial run cannot change versions, coverage, or historical c
   await failFinancialSync(ids.user,old,'financial_unauthorized');
   assert.deepEqual(await state(),before);
   await failFinancialSync(ids.user,replacement,'financial_unavailable');
+});
+
+test('bank control stores a versioned summary without changing product profit',async()=>{
+  const sync=await context(async client=>{
+    const stream=(await client.query(`select id from mc.sync_streams where store_id=$1 and source_type='financial_reports'`,[ids.store])).rows[0];
+    const run=(await client.query(`insert into mc.sync_runs(business_id,store_id,stream_id,requested_from,requested_to,status,started_at) values($1,$2,$3,'2026-07-13','2026-07-19','running',now()) returning id`,[ids.business,ids.store,stream.id])).rows[0];
+    return {business_id:ids.business,store_id:ids.store,stream_id:stream.id,run_id:run.id,date_from:'2026-07-13',date_to:'2026-07-19'};
+  });
+  const summary={reportId:785995400,reportType:1,currency:'RUB',dateFrom:'2026-07-13',dateTo:'2026-07-19',forPaySum:'100',deliveryServiceSum:'0',paidStorageSum:'0',paidAcceptanceSum:'0',deductionSum:'0',penaltySum:'0',additionalPaymentSum:'0',cashbackAmountSum:'0',cashbackDiscountSum:'0',cashbackCommissionChangeSum:'0',bankPaymentSum:'100'};
+  const source={externalReportId:'785995400',periodStart:'2026-07-13',periodEnd:'2026-07-19',checksum:'p03-v1',rows:[{rawData:{docTypeName:'Продажа',sellerOperName:'Продажа',forPay:'100'}}]};
+  const saved=await completeFinancialSync(ids.user,sync,{documentId:randomUUID(),reports:[source],summaries:new Map([['785995400',{rawData:summary,checksum:'p03-summary-v1'}]])});
+  assert.equal(saved.bankChecks.passed,1);
+  const state=await getFinancialBankReconciliationState(ids.user,ids.store);
+  assert.equal(state.passed,1);
+  await runFinancialCalculation(ids.user,ids.store);
+  const profit=await context(async client=>(await client.query(`select sum(l.amount_signed)::text as amount from mc.publications p join mc.result_lines l on l.run_id=p.run_id where p.store_id=$1 and p.is_current`,[ids.store])).rows[0].amount);
+  assert.equal(profit,'60.0000');
+  const snapshot=await context(async client=>(await client.query(`select s.id,s.raw_data->>'bankPaymentSum' as bank_payment from mc.financial_report_summary_versions s where s.store_id=$1`,[ids.store])).rows[0]);
+  assert.equal(snapshot.bank_payment,'100');
+  await assert.rejects(()=>context(client=>client.query(`update mc.financial_report_summary_versions set raw_data='{}' where id=$1`,[snapshot.id])),/immutable/);
 });
 
 test.after(async()=>{await pool.end();});

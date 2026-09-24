@@ -1,6 +1,6 @@
 import { pool, withOwnedBusinessContext } from '../../infrastructure/database/client.mjs';
 import { financialParserVersion } from '../reports/finance.mjs';
-import { calculateFinancialResult, createInputFingerprint } from './calculation.mjs';
+import { calculateFinancialResult, createInputFingerprint, isVerifiedWbResultComponent } from './calculation.mjs';
 
 export async function getFinancialCalculationState(userId,storeId){
   return withOwnedBusinessContext(userId,async(client,businessId)=>(await client.query(
@@ -95,7 +95,7 @@ export async function prepareFinancialCalculation(userId,storeId){
       `select v.id from mc.tax_settings s join mc.tax_setting_versions v on v.id=s.current_version_id
         where s.business_id=$1 and s.effective_from<=$2 and v.state='active' order by s.effective_from,v.id`,[businessId,periodEnd]
     )).rows.map(row=>row.id);
-    const method=(await client.query(`select id,implementation_version from mc.method_versions where code='financial_result' and version_no=1`)).rows[0];
+    const method=(await client.query(`select id,implementation_version from mc.method_versions where code='financial_result' and version_no=2`)).rows[0];
     if(!method)throw new Error('calculation_method_missing');
     const fingerprint=createInputFingerprint({resultMethodVersion:`${method.id}:${method.implementation_version}`,selectedProductIds:products,reportVersionIds:normalized.map(row=>row.report_version_id),reportNormalizationIds:normalized.map(row=>row.normalization_id),costVersionIds:costs,expenseVersionIds:expenses,taxSettingVersionIds:taxes,periodStart,periodEnd});
     const current=(await client.query(`select id,input_fingerprint,status from mc.calculation_requests where business_id=$1 and store_id=$2 and is_latest for update`,[businessId,storeId])).rows[0];
@@ -136,10 +136,14 @@ async function executeFinancialCalculation(userId,requestId){
     const selected=(await client.query(`select product_id from mc.calculation_request_products where request_id=$1 order by product_id`,[request.id])).rows.map(row=>row.product_id);
     const normalizationIds=inputs.map(row=>row.report_normalization_id).filter(Boolean);
     const components=(await client.query(
-      `select f.id,f.category_code,f.amount_signed::text,f.result_scope_classification,o.product_id,o.variant_id,o.accounting_date::text,o.state
+      `select f.id,f.category_code,f.source_field,f.amount_signed::text,f.result_scope_classification,
+              o.product_id,o.variant_id,o.accounting_date::text,o.state,o.operation_type,
+              rr.raw_data->>'docTypeName' as doc_type_name,rr.raw_data->>'sellerOperName' as seller_oper_name,
+              rr.raw_data->>f.source_field as raw_value
          from mc.operation_versions o join mc.financial_components f on f.operation_version_id=o.id
+         join mc.report_rows rr on rr.id=o.report_row_id
         where o.report_normalization_id=any($1::uuid[]) order by f.id`,[normalizationIds]
-    )).rows.map(row=>({id:row.id,categoryCode:row.category_code,amountSigned:row.amount_signed,productId:row.product_id,variantId:row.variant_id,accountingDate:row.accounting_date,state:row.state,classificationStatus:['revenue','revenue_return'].includes(row.category_code)?'confirmed':'unclassified',scopeCode:row.result_scope_classification}));
+    )).rows.map(row=>({id:row.id,categoryCode:row.category_code,amountSigned:row.amount_signed,productId:row.product_id,variantId:row.variant_id,accountingDate:row.accounting_date,state:row.state,classificationStatus:isVerifiedWbResultComponent({categoryCode:row.category_code,sourceField:row.source_field,operationType:row.operation_type,docTypeName:row.doc_type_name,sellerOperName:row.seller_oper_name,rawValue:row.raw_value})?'confirmed':'unclassified',scopeCode:row.result_scope_classification}));
     const operations=(await client.query(
       `select id,operation_type,product_id,variant_id,accounting_date::text,quantity::text,state
          from mc.operation_versions where report_normalization_id=any($1::uuid[]) and operation_type in ('sale','return') order by id`,[normalizationIds]

@@ -4,9 +4,44 @@ import {
   calculateFinancialResult,
   canonicalJson,
   createInputFingerprint,
+  isVerifiedWbResultComponent,
   normalizeMoney,
   periodizeExpense
 } from './calculation.mjs';
+
+test('only verified WB field, operation and document combinations enter the result', () => {
+  const verified = [
+    ['retailAmount', 'revenue', 'sale', 'Продажа', 'Продажа'],
+    ['retailAmount', 'revenue_return', 'return', 'Возврат', 'Возврат'],
+    ['acquiringFee', 'acquiring', 'sale', 'Продажа', 'Продажа'],
+    ['deliveryService', 'logistics', 'service_charge', '', 'Логистика'],
+    ['deliveryService', 'logistics', 'service_charge', '', 'Доставка'],
+    ['deliveryService', 'logistics', 'service_charge', '', 'Коррекция стоимости доставки'],
+    ['paidStorage', 'storage', 'service_charge', '', 'Хранение'],
+    ['paidStorage', 'storage', 'service_charge', '', 'Коррекция хранения'],
+    ['paidAcceptance', 'acceptance', 'service_charge', '', 'Обработка товара'],
+    ['penalty', 'penalty', 'adjustment', '', 'Штраф'],
+    ['deduction', 'deduction', 'adjustment', '', 'Удержание']
+  ];
+  for (const [sourceField, categoryCode, operationType, docTypeName, sellerOperName] of verified) {
+    assert.equal(isVerifiedWbResultComponent({ sourceField, categoryCode, operationType, docTypeName, sellerOperName, rawValue: '10' }), true, sourceField);
+  }
+  const unknown = [
+    ['acquiringFee', 'acquiring', 'return', 'Возврат', 'Возврат'],
+    ['deliveryService', 'logistics', 'service_charge', '', 'Новая услуга'],
+    ['deliveryService', 'logistics', 'service_charge', 'Продажа', 'Логистика'],
+    ['ppvzReward', 'pickup_reward', 'unclassified', 'Продажа', 'Возмещение за выдачу и возврат товаров на ПВЗ'],
+    ['vw', 'wb_reward_without_vat', 'sale', 'Продажа', 'Продажа'],
+    ['vwNds', 'wb_reward_vat', 'sale', 'Продажа', 'Продажа'],
+    ['cashbackDiscount', 'unclassified_financial_field', 'unclassified', 'Продажа', 'Компенсация скидки по программе лояльности'],
+    ['additionalPayment', 'commission_adjustment', 'adjustment', '', 'Удержание']
+  ];
+  for (const [sourceField, categoryCode, operationType, docTypeName, sellerOperName] of unknown) {
+    assert.equal(isVerifiedWbResultComponent({ sourceField, categoryCode, operationType, docTypeName, sellerOperName, rawValue: '10' }), false, sourceField);
+  }
+  assert.equal(isVerifiedWbResultComponent({sourceField:'acquiringFee',categoryCode:'acquiring',operationType:'sale',docTypeName:'Продажа',sellerOperName:'Продажа',rawValue:'-10'}),false);
+  assert.equal(isVerifiedWbResultComponent({sourceField:'deliveryService',categoryCode:'logistics',operationType:'service_charge',docTypeName:'',sellerOperName:'Логистика',rawValue:'-10'}),false);
+});
 
 test('money normalization preserves four decimal places without Number precision loss', () => {
   assert.equal(normalizeMoney('9007199254740991.1234'), '9007199254740991.1234');
@@ -108,6 +143,23 @@ test('signed commission adjustment is included while legacy additional payment i
   assert.equal(result.lines[0].categoryCode, 'commission_adjustment');
   assert.equal(result.lines[0].amountSigned, '-3.2500');
   assert.deepEqual(result.missingReasons, ['operation_unclassified', 'tax_setting_missing']);
+});
+
+test('verified charges affect partial result once while PVZ and WB reward fields remain excluded', () => {
+  const result = calculateFinancialResult({
+    periodStart: '2026-09-14', periodEnd: '2026-09-20', selectedProductIds: ['product-1'],
+    financialComponents: [
+      { id: 'sale', classificationStatus: 'confirmed', scopeCode: 'selected_product', productId: 'product-1', accountingDate: '2026-09-14', categoryCode: 'revenue', amountSigned: '100.0000' },
+      { id: 'delivery', classificationStatus: 'confirmed', scopeCode: 'selected_product', productId: 'product-1', accountingDate: '2026-09-14', categoryCode: 'logistics', amountSigned: '-10.0000' },
+      { id: 'delivery-reversal', classificationStatus: 'confirmed', scopeCode: 'selected_product', productId: 'product-1', accountingDate: '2026-09-15', categoryCode: 'logistics', amountSigned: '2.0000' },
+      { id: 'pickup', classificationStatus: 'unclassified', scopeCode: 'selected_product', productId: 'product-1', accountingDate: '2026-09-14', categoryCode: 'pickup_reward', amountSigned: '3.0000' },
+      { id: 'reward', classificationStatus: 'unclassified', scopeCode: 'selected_product', productId: 'product-1', accountingDate: '2026-09-14', categoryCode: 'wb_reward_without_vat', amountSigned: '-3.0000' }
+    ]
+  });
+  assert.equal(result.quality, 'partial');
+  assert.deepEqual(result.missingReasons, ['operation_unclassified', 'tax_setting_missing']);
+  assert.equal(result.totals.availableResultBeforeTax, '92.0000');
+  assert.deepEqual(result.lines.map(line => line.categoryCode), ['logistics', 'revenue', 'logistics']);
 });
 
 test('sales COGS uses the latest effective version and exact rounded multiplication', () => {
