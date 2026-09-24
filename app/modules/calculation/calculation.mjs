@@ -204,7 +204,9 @@ export function calculateStoreTaxReference({ periodStart, periodEnd, selectedPro
     const setting = settings.filter(item => item.effectiveFrom <= accountingDate).at(-1);
     if (!setting) { reasons.add('tax_setting_missing'); continue; }
     if (setting.regimeCode !== 'usn_income') { reasons.add('tax_method_unsupported'); continue; }
-    const rate = parseDecimal(setting.usnRateFraction, 8, 'calculation_invalid_tax_rate');
+    const rateText = String(setting.usnRateFraction ?? '').trim();
+    const canonicalRate = rateText.includes('.') ? rateText.replace(/0+$/, '').replace(/\.$/, '') : rateText;
+    const rate = parseDecimal(canonicalRate, 8, 'calculation_invalid_tax_rate');
     if (rate < 0n || rate > 100000000n) invalid('calculation_invalid_tax_rate');
     const key = `${productId}:${setting.id}:${accountingDate.slice(0, 4)}`;
     const segment = segments.get(key) ?? { productId, taxSettingVersionId: setting.id, effectiveFrom: setting.effectiveFrom, taxYear: Number(accountingDate.slice(0, 4)), rateFraction: formatDecimal(rate, 8), base: 0n, evidence: [] };

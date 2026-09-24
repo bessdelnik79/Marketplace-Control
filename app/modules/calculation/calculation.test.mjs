@@ -265,7 +265,7 @@ test('seller-defined USN reference uses selected SKU sale less return and effect
     { id:'d', productId:'unselected', accountingDate:'2026-09-16', docTypeName:'Продажа', sellerOperName:'Продажа', retailAmount:'999.00' }
   ];
   const taxSettings = [
-    { id:'rate-6', effectiveFrom:'2026-01-01', regimeCode:'usn_income', usnRateFraction:'0.06' },
+    { id:'rate-6', effectiveFrom:'2026-01-01', regimeCode:'usn_income', usnRateFraction:'0.06000000000000000000' },
     { id:'rate-5', effectiveFrom:'2026-09-16', regimeCode:'usn_income', usnRateFraction:'0.05' }
   ];
   const selectedProductIds=['sku-1','sku-2'];
@@ -277,6 +277,14 @@ test('seller-defined USN reference uses selected SKU sale less return and effect
   assert.deepEqual(result.products.map(row=>[row.productId,row.taxableBase,row.estimatedTax]),[['sku-1','80.0000','4.8000'],['sku-2','50.0000','2.5000']]);
   assert.deepEqual(result.segments.map(row=>[row.taxSettingVersionId,row.taxableBase]),[['rate-6','80.0000'],['rate-5','50.0000']]);
   assert.deepEqual(calculateStoreTaxReference({periodStart:'2026-09-14',periodEnd:'2026-09-20',selectedProductIds:[...selectedProductIds].reverse(),sourceRows:[...sourceRows].reverse(),taxSettings:[...taxSettings].reverse()}),result);
+});
+
+test('PostgreSQL-padded tax rates keep exact bounds and reject significant extra precision', () => {
+  const input={periodStart:'2026-09-14',periodEnd:'2026-09-20',selectedProductIds:['sku-1'],sourceRows:[{id:'sale',productId:'sku-1',accountingDate:'2026-09-14',docTypeName:'Продажа',sellerOperName:'Продажа',retailAmount:'100'}]};
+  const atRate=rate=>calculateStoreTaxReference({...input,taxSettings:[{id:'rate',effectiveFrom:'2026-01-01',regimeCode:'usn_income',usnRateFraction:rate}]});
+  assert.equal(atRate('0.00000000000000000000').estimatedTax,'0.0000');
+  assert.equal(atRate('1.00000000000000000000').estimatedTax,'100.0000');
+  assert.throws(()=>atRate('0.06000000000000000001'),/calculation_invalid_tax_rate/);
 });
 
 test('unsupported rows, missing rates and incomplete coverage prevent a misleading tax amount', () => {
