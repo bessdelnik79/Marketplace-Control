@@ -158,7 +158,8 @@ test('selection change rejects an obsolete snapshot and makes the stream due imm
     await client.query(`select mc.add_products_to_selection($1,$2::uuid[])`,[ids.store,[secondProduct]]);
   });
   const snapshotId=randomUUID();
-  await assert.rejects(()=>completeOperationalSync(ids.user,job,{documentId:randomUUID(),snapshotId,objects:[await storedObject('{"batch":"obsolete"}',snapshotId)],metrics:metrics(),storage}),{message:'operational_selection_changed'});
+  const object=await storedObject('{"batch":"obsolete"}',snapshotId);
+  await assert.rejects(()=>completeOperationalSync(ids.user,job,{documentId:randomUUID(),snapshotId,objects:[object],metrics:metrics(),storage}),{message:'operational_selection_changed'});
   await failOperationalSync(ids.user,job,'operational_selection_changed');
   const state=await getOperationalSyncState(ids.user,ids.store);
   assert.equal(state.run_status,'failed');
