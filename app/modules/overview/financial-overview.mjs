@@ -93,12 +93,30 @@ export function previousCalendarWeek(period) {
   return { start: dateFromDay(start), end: dateFromDay(start + 6), timezone: normalized.timezone };
 }
 
-export function validateCalendarWeek(period) {
+export function validateCalendarPeriod(period) {
   if (!period || typeof period !== 'object') invalid('overview_invalid_period');
   const start = validateCalendarDate(period.start);
   const end = validateCalendarDate(period.end);
-  const expected = calendarWeekForDate(start, { timezone: period.timezone ?? 'Europe/Moscow' });
-  if (start !== expected.start || end !== expected.end) invalid('overview_invalid_period');
+  const durationDays = dayNumber(end) - dayNumber(start) + 1;
+  if (durationDays < 1 || durationDays > 366) invalid('overview_invalid_period');
+  return { start, end, timezone: timezoneMetadata(period.timezone ?? 'Europe/Moscow') };
+}
+
+export function previousCalendarPeriod(period) {
+  const normalized = validateCalendarPeriod(period);
+  const durationDays = dayNumber(normalized.end) - dayNumber(normalized.start) + 1;
+  const end = dayNumber(normalized.start) - 1;
+  return {
+    start: dateFromDay(end - durationDays + 1),
+    end: dateFromDay(end),
+    timezone: normalized.timezone
+  };
+}
+
+export function validateCalendarWeek(period) {
+  const normalized = validateCalendarPeriod(period);
+  const expected = calendarWeekForDate(normalized.start, { timezone: normalized.timezone });
+  if (normalized.start !== expected.start || normalized.end !== expected.end) invalid('overview_invalid_period');
   return expected;
 }
 
@@ -208,7 +226,7 @@ function normalizeTax(taxReference, totals, taxLineTotal, hasTaxLines) {
 
 export function buildFinancialPeriodOverview(envelope, { timezone = 'Europe/Moscow' } = {}) {
   if (!envelope || typeof envelope !== 'object') invalid('overview_invalid_envelope');
-  const period = validateCalendarWeek({
+  const period = validateCalendarPeriod({
     start: valueFrom(envelope, 'periodStart', 'period_start'),
     end: valueFrom(envelope, 'periodEnd', 'period_end'),
     timezone
@@ -289,7 +307,7 @@ function comparisonReason(current, previous) {
 
 export function compareFinancialPeriods(current, previous) {
   const reason = comparisonReason(current, previous);
-  const period = previous?.period ?? previousCalendarWeek(current.period);
+  const period = previous?.period ?? previousCalendarPeriod(current.period);
   if (reason) return { period, quality: previous?.quality ?? 'unavailable', amount: previous?.displayResult?.amount ?? null, changeAmount: null, changePercent: null, comparable: false, reason };
   const currentAmount = parseScale4Money(current.displayResult.amount);
   const previousAmount = parseScale4Money(previous.displayResult.amount);
@@ -308,7 +326,7 @@ export function compareFinancialPeriods(current, previous) {
 
 export function buildFinancialOverview({ current, previous = null, timezone = 'Europe/Moscow' }) {
   const currentOverview = buildFinancialPeriodOverview(current, { timezone });
-  const expectedPrevious = previousCalendarWeek(currentOverview.period);
+  const expectedPrevious = previousCalendarPeriod(currentOverview.period);
   const previousOverview = previous === null ? null : buildFinancialPeriodOverview(previous, { timezone });
   if (previousOverview && (previousOverview.period.start !== expectedPrevious.start || previousOverview.period.end !== expectedPrevious.end)) {
     invalid('overview_previous_period_mismatch');

@@ -1,3 +1,5 @@
+import { calendarWeekForDate, validateCalendarPeriod } from './financial-overview.mjs';
+
 function requestedWeek(url) {
   const value = url.searchParams.get('week');
   if (value === null || value === '') return null;
@@ -8,6 +10,22 @@ function requestedWeek(url) {
   const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
   if (month < 1 || month > 12 || day < 1 || day > days[month - 1]) return undefined;
   return value;
+}
+
+function requestedPeriod(url) {
+  const start = url.searchParams.get('periodStart');
+  const end = url.searchParams.get('periodEnd');
+  if (start !== null || end !== null) {
+    if (!start || !end) return undefined;
+    try {
+      return validateCalendarPeriod({ start, end, timezone: 'Europe/Moscow' });
+    } catch {
+      return undefined;
+    }
+  }
+  const week = requestedWeek(url);
+  if (week === undefined) return undefined;
+  return week === null ? null : calendarWeekForDate(week, { timezone: 'Europe/Moscow' });
 }
 
 export function createOverviewRoutes({
@@ -36,26 +54,37 @@ export function createOverviewRoutes({
       send(res, 404, 'Магазин не найден.');
       return true;
     }
-    const week = requestedWeek(url);
-    if (week === undefined) {
-      send(res, 400, 'Неделя должна быть указана в формате ГГГГ-ММ-ДД.');
+    const period = requestedPeriod(url);
+    if (period === undefined) {
+      send(res, 400, 'Период должен содержать корректные даты, не более 366 дней.');
       return true;
     }
+    const week = url.searchParams.get('week') || null;
+    const pageOptions = {
+      selectedStoreId: store.id,
+      selectedWeek: week,
+      selectedPeriodStart: period?.start ?? null,
+      selectedPeriodEnd: period?.end ?? null
+    };
     if (store.demo === true) {
-      send(res, 200, overviewPage(current, stores, null, { selectedStoreId: store.id, selectedWeek: week }));
+      send(res, 200, overviewPage(current, stores, null, pageOptions));
       return true;
     }
     if (!store.connected) {
-      send(res, 200, overviewPage(current, stores, null, { selectedStoreId: store.id, selectedWeek: week }));
+      send(res, 200, overviewPage(current, stores, null, pageOptions));
       return true;
     }
     scheduleOperationalSync(current.user_id, store.id);
-    const state = await getOverviewState(current.user_id, { storeId: store.id, financialPeriodStart: week });
+    const state = await getOverviewState(current.user_id, {
+      storeId: store.id,
+      financialPeriodStart: period?.start ?? null,
+      financialPeriodEnd: period?.end ?? null
+    });
     if (!state) {
       send(res, 404, 'Магазин не найден.');
       return true;
     }
-    send(res, 200, overviewPage(current, stores, state, { selectedStoreId: store.id, selectedWeek: week }));
+    send(res, 200, overviewPage(current, stores, state, pageOptions));
     return true;
   };
 }

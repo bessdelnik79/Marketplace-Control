@@ -1,6 +1,6 @@
 import { getPublishedFinancialPeriodPair } from '../calculation/calculation.repository.mjs';
 import { getOperationalOverviewData } from '../operational/operational.repository.mjs';
-import { buildFinancialOverview, calendarWeekForDate, previousCalendarWeek } from './financial-overview.mjs';
+import { buildFinancialOverview, calendarWeekForDate, previousCalendarPeriod, validateCalendarPeriod } from './financial-overview.mjs';
 import { buildOperationalOverview } from './operational-overview.mjs';
 import { buildSituations } from './situations.mjs';
 
@@ -29,6 +29,10 @@ function comparisonKey(scope) {
   return `${scope.type}:${scope.productIds.join(',')}`;
 }
 
+function envelopeMatchesPeriod(envelope, period) {
+  return envelope?.period_start === period.start && envelope?.period_end === period.end;
+}
+
 function decoratePeriod(period, pair, scope) {
   if (!period) return null;
   return {
@@ -46,22 +50,34 @@ function decoratePeriod(period, pair, scope) {
   };
 }
 
-export async function getFinancialOverview(userId, storeId, selectedDate, {
-  loadPeriodPair = getPublishedFinancialPeriodPair
-} = {}) {
+export async function getFinancialOverview(userId, storeId, selectedDate, selectedEndOrDependencies = null, dependencies = {}) {
+  const selectedEnd = typeof selectedEndOrDependencies === 'string' ? selectedEndOrDependencies : null;
+  const { loadPeriodPair = getPublishedFinancialPeriodPair } =
+    selectedEndOrDependencies && typeof selectedEndOrDependencies === 'object' ? selectedEndOrDependencies : dependencies;
   const normalizedUserId = requiredId(userId);
   const normalizedStoreId = requiredId(storeId);
   const timezone = 'Europe/Moscow';
   let period,previousPeriod,pair;
+  if ((selectedDate === null || selectedDate === undefined || selectedDate === '') && selectedEnd) {
+    throw new Error('overview_invalid_period');
+  }
   if(selectedDate===null||selectedDate===undefined||selectedDate===''){
     pair=await loadPeriodPair(normalizedUserId,normalizedStoreId,{});
     if(pair?.current){
-      period=calendarWeekForDate(pair.current.period_start,{timezone});
-      previousPeriod=previousCalendarWeek(period);
+      period=validateCalendarPeriod({start:pair.current.period_start,end:pair.current.period_end,timezone});
+      previousPeriod=previousCalendarPeriod(period);
+      if (!envelopeMatchesPeriod(pair.previous, previousPeriod)) {
+        pair=await loadPeriodPair(normalizedUserId,normalizedStoreId,{
+          periodStart:period.start,periodEnd:period.end,
+          previousPeriodStart:previousPeriod.start,previousPeriodEnd:previousPeriod.end
+        });
+      }
     }
   }else{
-    period=calendarWeekForDate(selectedDate,{timezone});
-    previousPeriod=previousCalendarWeek(period);
+    period=selectedEnd
+      ?validateCalendarPeriod({start:selectedDate,end:selectedEnd,timezone})
+      :calendarWeekForDate(selectedDate,{timezone});
+    previousPeriod=previousCalendarPeriod(period);
     pair=await loadPeriodPair(normalizedUserId,normalizedStoreId,{
       periodStart:period.start,periodEnd:period.end,
       previousPeriodStart:previousPeriod.start,previousPeriodEnd:previousPeriod.end
@@ -120,20 +136,24 @@ export async function getFinancialOverview(userId, storeId, selectedDate, {
   };
 }
 
-export async function getOverviewState(userId,{storeId,financialPeriodStart},{
+export async function getOverviewState(userId,{storeId,financialPeriodStart,financialPeriodEnd=null},{
   loadPeriodPair=getPublishedFinancialPeriodPair,
   loadOperationalData=getOperationalOverviewData
 }={}){
   const normalizedUserId=requiredId(userId),normalizedStoreId=requiredId(storeId);
   const operationalData=await loadOperationalData(normalizedUserId,normalizedStoreId);
   if(!operationalData)return null;
-  const financial=await getFinancialOverview(normalizedUserId,normalizedStoreId,financialPeriodStart,{loadPeriodPair});
-  const requestedFinancialPeriod=financialPeriodStart?calendarWeekForDate(financialPeriodStart,{timezone:'Europe/Moscow'}):null;
+  const financial=await getFinancialOverview(normalizedUserId,normalizedStoreId,financialPeriodStart,financialPeriodEnd,{loadPeriodPair});
+  const requestedFinancialPeriod=financialPeriodStart
+    ?financialPeriodEnd
+      ?validateCalendarPeriod({start:financialPeriodStart,end:financialPeriodEnd,timezone:'Europe/Moscow'})
+      :calendarWeekForDate(financialPeriodStart,{timezone:'Europe/Moscow'})
+    :null;
   const financialState=financial??{
     status:'unavailable',publicationId:null,methodVersion:null,publishedAt:null,sourceFreshness:null,scope:null,
     quality:'unavailable',missingReasons:['published_financial_result_missing'],totals:null,displayResult:null,situationEvidence:null,
     crossBorderBuyout:{present:null,reportCount:null},requestedPeriod:requestedFinancialPeriod,coveredPeriod:null,
-    comparison:{period:requestedFinancialPeriod?previousCalendarWeek(requestedFinancialPeriod):null,quality:'unavailable',amount:null,changeAmount:null,changePercent:null,comparable:false,reason:'current_period_unavailable'}
+    comparison:{period:requestedFinancialPeriod?previousCalendarPeriod(requestedFinancialPeriod):null,quality:'unavailable',amount:null,changeAmount:null,changePercent:null,comparable:false,reason:'current_period_unavailable'}
   };
   return {
     store:{

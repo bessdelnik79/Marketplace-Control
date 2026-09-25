@@ -58,6 +58,21 @@ test('service reads adjacent weeks atomically and exposes publication provenance
   assert.deepEqual(overview.crossBorderBuyout,{present:false,reportCount:0});
 });
 
+test('service reads only exact arbitrary published envelopes and compares the immediately preceding equal range', async () => {
+  let request;
+  const current = period('2026-08-19', '2026-09-25');
+  const previous = period('2026-07-12', '2026-08-18');
+  const overview = await getFinancialOverview('user-1', 'store-1', '2026-08-19', '2026-09-25', {
+    loadPeriodPair: async (...args) => { request = args; return pair({ current, previous }); }
+  });
+  assert.deepEqual(request, ['user-1', 'store-1', {
+    periodStart: '2026-08-19', periodEnd: '2026-09-25',
+    previousPeriodStart: '2026-07-12', previousPeriodEnd: '2026-08-18'
+  }]);
+  assert.deepEqual(overview.period, { start: '2026-08-19', end: '2026-09-25', timezone: 'Europe/Moscow' });
+  assert.deepEqual(overview.comparison.period, { start: '2026-07-12', end: '2026-08-18', timezone: 'Europe/Moscow' });
+});
+
 test('partial periods never show a percentage without proven comparable coverage', async () => {
   const partial = period('2026-09-14', '2026-09-20', { quality: 'partial', missingReasons: ['cost_missing'] });
   const previous = period('2026-09-07', '2026-09-13', { quality: 'partial', missingReasons: ['cost_missing'] });
@@ -90,16 +105,44 @@ test('missing persisted week returns an explicit unavailable model without recal
 });
 
 test('missing selected week loads the latest published week and its previous period',async()=>{
-  let request;
-  const overview=await getFinancialOverview('user-1','store-1',null,{loadPeriodPair:async(...args)=>{request=args;return pair();}});
-  assert.deepEqual(request,['user-1','store-1',{}]);
+  const requests=[];
+  const overview=await getFinancialOverview('user-1','store-1',null,{loadPeriodPair:async(...args)=>{requests.push(args);return pair();}});
+  assert.deepEqual(requests,[['user-1','store-1',{}]]);
   assert.deepEqual(overview.period,{start:'2026-09-14',end:'2026-09-20',timezone:'Europe/Moscow'});
   assert.equal(overview.comparison.comparable,true);
+});
+
+test('latest arbitrary period reloads its exact equal-length predecessor', async () => {
+  const requests = [];
+  const current = period('2026-08-19', '2026-09-25');
+  const previous = period('2026-07-12', '2026-08-18');
+  const overview = await getFinancialOverview('user-1', 'store-1', null, {
+    loadPeriodPair: async (...args) => {
+      requests.push(args);
+      return requests.length === 1
+        ? pair({ current, previous: period('2026-08-12', '2026-09-18') })
+        : pair({ current, previous });
+    }
+  });
+  assert.deepEqual(requests.at(-1), ['user-1', 'store-1', {
+    periodStart: '2026-08-19', periodEnd: '2026-09-25',
+    previousPeriodStart: '2026-07-12', previousPeriodEnd: '2026-08-18'
+  }]);
+  assert.deepEqual(overview.comparison.period, { start: '2026-07-12', end: '2026-08-18', timezone: 'Europe/Moscow' });
 });
 
 test('service rejects invalid date and foreign or missing publication stays absent', async () => {
   await assert.rejects(() => getFinancialOverview('user-1', 'store-1', '2026-02-29', { loadPeriodPair: async () => pair() }), { message: 'overview_invalid_date' });
   assert.equal(await getFinancialOverview('user-1', 'foreign-store', '2026-09-14', { loadPeriodPair: async () => null }), null);
+});
+
+test('service rejects reversed and overlong explicit periods before repository access', async () => {
+  let reads = 0;
+  const loadPeriodPair = async () => { reads += 1; return pair(); };
+  await assert.rejects(() => getFinancialOverview('user-1', 'store-1', '2026-09-20', '2026-09-19', { loadPeriodPair }), { message: 'overview_invalid_period' });
+  await assert.rejects(() => getFinancialOverview('user-1', 'store-1', '2025-09-01', '2026-09-02', { loadPeriodPair }), { message: 'overview_invalid_period' });
+  await assert.rejects(() => getFinancialOverview('user-1', 'store-1', null, '2026-09-02', { loadPeriodPair }), { message: 'overview_invalid_period' });
+  assert.equal(reads, 0);
 });
 
 test('unified overview keeps independent periods and stable empty situations',async()=>{

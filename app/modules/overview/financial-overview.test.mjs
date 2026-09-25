@@ -8,7 +8,9 @@ import {
   formatScale4Money,
   parseScale4Money,
   previousCalendarWeek,
-  validateCalendarDate
+  previousCalendarPeriod,
+  validateCalendarDate,
+  validateCalendarPeriod
 } from './financial-overview.mjs';
 
 function envelope({
@@ -77,6 +79,20 @@ test('calendar dates and Monday-Sunday weeks use UTC calendar arithmetic with ti
   assert.throws(() => validateCalendarDate('2026-2-09'), { message: 'overview_invalid_date' });
 });
 
+test('calendar periods accept 1..366 days and previous period has the same length', () => {
+  const period = validateCalendarPeriod({ start: '2026-08-19', end: '2026-09-25', timezone: 'Europe/Moscow' });
+  assert.deepEqual(period, { start: '2026-08-19', end: '2026-09-25', timezone: 'Europe/Moscow' });
+  assert.deepEqual(previousCalendarPeriod(period), {
+    start: '2026-07-12', end: '2026-08-18', timezone: 'Europe/Moscow'
+  });
+  assert.deepEqual(validateCalendarPeriod({ start: '2026-09-25', end: '2026-09-25' }), {
+    start: '2026-09-25', end: '2026-09-25', timezone: 'Europe/Moscow'
+  });
+  assert.doesNotThrow(() => validateCalendarPeriod({ start: '2024-01-01', end: '2024-12-31' }));
+  assert.throws(() => validateCalendarPeriod({ start: '2026-09-26', end: '2026-09-25' }), { message: 'overview_invalid_period' });
+  assert.throws(() => validateCalendarPeriod({ start: '2024-01-01', end: '2025-01-01' }), { message: 'overview_invalid_period' });
+});
+
 test('scale-4 money stays exact beyond Number safe precision', () => {
   const value = parseScale4Money('9007199254740991.1234') + parseScale4Money('0.0001');
   assert.equal(formatScale4Money(value), '9007199254740991.1235');
@@ -136,6 +152,15 @@ test('overview compares adjacent weeks from one publication and uses absolute pr
   const lossCurrent = buildFinancialPeriodOverview(envelope({ revenue: '-100.0000', expenseLine: '-10.0000', beforeTax: '-110.0000', tax: '0.0000', afterTax: '-110.0000' }));
   const lossPrevious = buildFinancialPeriodOverview(envelope({ revenue: '-80.0000', expenseLine: '-20.0000', beforeTax: '-100.0000', tax: '0.0000', afterTax: '-100.0000' }));
   assert.equal(compareFinancialPeriods(lossCurrent, lossPrevious).changePercent, '-10.0000');
+});
+
+test('overview compares adjacent arbitrary periods without slicing persisted lines', () => {
+  const current = envelope({ periodStart: '2026-08-19', periodEnd: '2026-09-25' });
+  const previous = envelope({ periodStart: '2026-07-12', periodEnd: '2026-08-18' });
+  const overview = buildFinancialOverview({ current, previous });
+  assert.deepEqual(overview.period, { start: '2026-08-19', end: '2026-09-25', timezone: 'Europe/Moscow' });
+  assert.deepEqual(overview.comparison.period, { start: '2026-07-12', end: '2026-08-18', timezone: 'Europe/Moscow' });
+  assert.equal(overview.comparison.comparable, true);
 });
 
 test('comparison has no changes for zero base or incompatible publication, method, scope and coverage', () => {

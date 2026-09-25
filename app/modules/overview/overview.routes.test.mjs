@@ -38,16 +38,27 @@ test('overview reads the owned requested store and selected week', async () => {
   assert.deepEqual(state.calls, [
     ['stores', 'user-1'],
     ['sync', 'user-1', 'store-2'],
-    ['overview', 'user-1', { storeId: 'store-2', financialPeriodStart: '2026-09-14' }]
+    ['overview', 'user-1', { storeId: 'store-2', financialPeriodStart: '2026-09-14', financialPeriodEnd: '2026-09-20' }]
   ]);
   assert.equal(state.response.status, 200);
   assert.equal(state.response.body.options.selectedStoreId, 'store-2');
+  assert.equal(state.response.body.options.selectedWeek, '2026-09-14');
+});
+
+test('overview passes an exact arbitrary period to the service and page', async () => {
+  const state = setup();
+  await state.run('/overview?storeId=store-1&periodStart=2026-08-19&periodEnd=2026-09-25');
+  assert.deepEqual(state.calls.at(-1), ['overview', 'user-1', {
+    storeId: 'store-1', financialPeriodStart: '2026-08-19', financialPeriodEnd: '2026-09-25'
+  }]);
+  assert.equal(state.response.body.options.selectedPeriodStart, '2026-08-19');
+  assert.equal(state.response.body.options.selectedPeriodEnd, '2026-09-25');
 });
 
 test('overview asks the service for the latest published week when none is selected', async () => {
   const state = setup();
   await state.run('/');
-  assert.deepEqual(state.calls.at(-1), ['overview', 'user-1', { storeId: 'store-1', financialPeriodStart: null }]);
+  assert.deepEqual(state.calls.at(-1), ['overview', 'user-1', { storeId: 'store-1', financialPeriodStart: null, financialPeriodEnd: null }]);
 });
 
 test('overview rejects foreign stores and malformed weeks before reading state', async () => {
@@ -59,6 +70,20 @@ test('overview rejects foreign stores and malformed weeks before reading state',
   await invalid.run('/overview?week=2026-02-29');
   assert.equal(invalid.response.status, 400);
   assert.equal(invalid.calls.some(([name]) => name === 'overview'), false);
+});
+
+test('overview rejects incomplete, reversed, invalid and overlong periods', async () => {
+  for (const route of [
+    '/overview?periodStart=2026-09-01',
+    '/overview?periodStart=2026-09-20&periodEnd=2026-09-19',
+    '/overview?periodStart=2026-02-29&periodEnd=2026-03-01',
+    '/overview?periodStart=2025-09-01&periodEnd=2026-09-02'
+  ]) {
+    const state = setup();
+    await state.run(route);
+    assert.equal(state.response.status, 400, route);
+    assert.equal(state.calls.some(([name]) => name === 'overview'), false, route);
+  }
 });
 
 test('only an explicitly demo store may bypass the real overview read', async () => {
