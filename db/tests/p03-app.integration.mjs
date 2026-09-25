@@ -8,7 +8,7 @@ const databaseName=new URL(integrationUrl).pathname.slice(1);
 if(!databaseName.toLowerCase().includes('test'))throw new Error('Refusing to run P0.3 integration tests outside a database whose name contains "test".');
 process.env.DATABASE_URL=integrationUrl;
 
-const {migrate,pool,runFinancialCalculation,beginFinancialSync,completeFinancialSync,failFinancialSync,getFinancialBankReconciliationState,getCurrentFinancialResult,getPublishedFinancialPeriod,getFinancialSellerOffsetReference,getFinancialSyncState}=await import('../../app/db.mjs');
+const {migrate,pool,runFinancialCalculation,beginFinancialSync,completeFinancialSync,failFinancialSync,getFinancialBankReconciliationState,getPublishedFinancialPeriod,getFinancialSellerOffsetReference,getFinancialSyncState}=await import('../../app/db.mjs');
 const ids={user:randomUUID(),business:randomUUID(),store:randomUUID()};
 
 await migrate();
@@ -220,7 +220,7 @@ test('bank control stores a versioned summary without changing product profit',a
   const state=await getFinancialBankReconciliationState(ids.user,ids.store);
   assert.equal(state.passed,1);
   await runFinancialCalculation(ids.user,ids.store);
-  const current=await getCurrentFinancialResult(ids.user,ids.store);
+  const current=await getPublishedFinancialPeriod(ids.user,ids.store,'2026-07-13','2026-07-19');
   assert.equal(current.taxReference.scope,'selected_products');
   assert.equal(current.taxReference.includedInResult,true);
   assert.equal(current.taxReference.estimatedTax,'6.0000');
@@ -258,7 +258,7 @@ test('P0.3 persists exact weekly results, links return cost fail-closed and isol
     const setting=(await client.query(`insert into mc.tax_settings(business_id,effective_from) values($1,'2026-01-01') returning id`,[isolated.business])).rows[0];
     const tax=(await client.query(`insert into mc.tax_setting_versions(business_id,tax_setting_id,version_no,regime_code,usn_rate_fraction,vat_mode,changed_by) values($1,$2,1,'usn_income',0.06,'exempt',$3) returning id`,[isolated.business,setting.id,isolated.user])).rows[0];
     await client.query(`update mc.tax_settings set current_version_id=$1 where id=$2`,[tax.id,setting.id]);
-    const stream=(await client.query(`insert into mc.sync_streams(business_id,store_id,source_type,status) values($1,$2,'financial_reports','idle') returning id`,[isolated.business,isolated.store])).rows[0];
+    const stream=(await client.query(`insert into mc.sync_streams(business_id,store_id,source_type,status) values($1,$2,'financial_reports','active') returning id`,[isolated.business,isolated.store])).rows[0];
     const run=(await client.query(`insert into mc.sync_runs(business_id,store_id,stream_id,requested_from,requested_to,status,started_at) values($1,$2,$3,'2026-08-03','2026-08-16','running',now()) returning id`,[isolated.business,isolated.store,stream.id])).rows[0];
     return{productId:product.id,variantId:variant.id,streamId:stream.id,runId:run.id};
   });
