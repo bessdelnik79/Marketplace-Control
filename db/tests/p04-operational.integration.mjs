@@ -10,7 +10,7 @@ if(!integrationUrl)throw new Error('Set P04_INTEGRATION_DATABASE_URL to a dispos
 if(!new URL(integrationUrl).pathname.slice(1).toLowerCase().includes('test'))throw new Error('Refusing to run P0.4 integration tests outside a database whose name contains "test".');
 process.env.DATABASE_URL=integrationUrl;
 
-const {migrate,pool,beginOperationalSync,completeOperationalSync,failOperationalSync,getOperationalSyncState,reserveOperationalRequestSlot}=await import('../../app/db.mjs');
+const {migrate,pool,beginOperationalSync,completeOperationalSync,failOperationalSync,getOperationalOverviewData,getOperationalSyncState,reserveOperationalRequestSlot}=await import('../../app/db.mjs');
 const {storeOperationalSnapshot}=await import('../../app/infrastructure/storage/operational-source-storage.mjs');
 const ids={user:randomUUID(),foreignUser:randomUUID(),business:randomUUID(),foreignBusiness:randomUUID(),store:randomUUID(),product:randomUUID()};
 const rawRoot=await mkdtemp(path.join(os.tmpdir(),'mc-p04-integration-'));
@@ -127,6 +127,11 @@ test('A to B to A creates a fresh immutable activation and current read returns 
     `select metric_date::text,available,order_count::int from mc.current_operational_daily_metrics where store_id=$1 and metric_date='2026-09-18'`,[ids.store]
   )).rows[0]);
   assert.deepEqual(current,{metric_date:'2026-09-18',available:true,order_count:18});
+  const overview=await getOperationalOverviewData(ids.user,ids.store);
+  assert.equal(overview.store.id,ids.store);
+  assert.deepEqual(overview.current.product_ids,[ids.product]);
+  assert.equal(overview.rows.find(row=>row.metric_date==='2026-09-18').order_count,'18');
+  assert.equal(await getOperationalOverviewData(ids.foreignUser,ids.store),null);
   const versions=await context(ids.user,ids.business,async client=>(await client.query(`select count(*)::int as n from mc.operational_snapshots where store_id=$1`,[ids.store])).rows[0].n);
   assert.equal(versions,3);
 });
@@ -176,6 +181,8 @@ test('selection change rejects an obsolete snapshot and makes the stream due imm
   assert.equal(state.error_code,'operational_selection_changed');
   assert.ok(new Date(state.next_run_at)<=new Date(Date.now()+5000));
   assert.equal(state.comparison_ready,false);
+  const overview=await getOperationalOverviewData(ids.user,ids.store);
+  assert.deepEqual(overview.current.product_ids,[ids.product]);
 });
 
 test('snapshot publication and selection extension share a database mutex',async()=>{

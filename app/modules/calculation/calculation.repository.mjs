@@ -205,6 +205,21 @@ async function getPeriodEnvelope(client,runId,periodStart,periodEnd){
        join mc.source_documents d on d.id=rv.document_id
       where i.run_id=$1 and rep.period_start<=$3 and rep.period_end>=$2`,[runId,period.period_start,period.period_end]
   )).rows[0];
+  const crossBorder=(await client.query(
+    `select count(distinct rep.external_report_id)::int as report_count
+       from mc.calculation_inputs i
+       join mc.report_versions rv on rv.id=i.report_version_id and rv.status='accepted'
+       join mc.reports rep on rep.id=rv.report_id
+       join lateral (
+         select raw_data from mc.financial_report_summary_versions candidate
+          where candidate.report_version_id=rv.id order by candidate.created_at desc,candidate.id desc limit 1
+       ) summary on true
+      where i.run_id=$1 and rep.period_start=$2 and rep.period_end=$3
+        and summary.raw_data->>'reportType'='2'
+        and nullif(btrim(summary.raw_data->>'country'),'') is not null
+        and lower(btrim(summary.raw_data->>'country')) not in ('россия','российская федерация','russia','russian federation','ru')`,
+    [runId,period.period_start,period.period_end]
+  )).rows[0];
   const lines=(await client.query(
     `select result_scope,product_id,variant_id,accounting_date::text,category_code,amount_signed::text,quality
        from mc.result_lines where financial_period_result_id=$1
@@ -225,7 +240,8 @@ async function getPeriodEnvelope(client,runId,periodStart,periodEnd){
   )).rows;
   const taxReasons=period.missing_reasons.filter(reason=>reason.startsWith('tax_')||reason==='vat_method_unsupported'||reason==='report_coverage_incomplete');
   const usable=computations.length>0&&!taxReasons.some(reason=>['tax_setting_missing','tax_method_unsupported','tax_source_unverified','tax_source_unlinked','tax_base_missing','tax_base_negative_unverified','report_coverage_incomplete'].includes(reason));
-  return{...period,source_freshness:coverage.source_freshness,covered_period:coverage.covered_start?{start:coverage.covered_start,end:coverage.covered_end}:null,lines,taxReference:{scope:'selected_products',method:'seller_defined_usn_income_selected_line1_estimate',quality:taxReasons.length?'partial':'complete',missingReasons:taxReasons,usable,includedInResult:usable,
+  return{...period,source_freshness:coverage.source_freshness,covered_period:coverage.covered_start?{start:coverage.covered_start,end:coverage.covered_end}:null,
+    cross_border_buyout:{present:crossBorder.report_count>0,reportCount:crossBorder.report_count},lines,taxReference:{scope:'selected_products',method:'seller_defined_usn_income_selected_line1_estimate',quality:taxReasons.length?'partial':'complete',missingReasons:taxReasons,usable,includedInResult:usable,
     taxableBase:usable?taxTotals.taxable_base:null,estimatedTax:usable?taxTotals.tax_amount:null,
     products:computations.map(row=>({productId:row.product_id,taxableBase:row.taxable_base,estimatedTax:row.tax_amount})),
     segments:segments.map(row=>({productId:row.product_id,taxComputationId:row.tax_computation_id,taxSettingVersionId:row.tax_setting_version_id,segmentStart:row.segment_start,segmentEnd:row.segment_end,taxableBase:row.taxable_base,rateFraction:row.rate_fraction}))}};

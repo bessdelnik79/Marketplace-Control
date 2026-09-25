@@ -1,5 +1,7 @@
 import { getPublishedFinancialPeriodPair } from '../calculation/calculation.repository.mjs';
+import { getOperationalOverviewData } from '../operational/operational.repository.mjs';
 import { buildFinancialOverview, calendarWeekForDate, previousCalendarWeek } from './financial-overview.mjs';
+import { buildOperationalOverview } from './operational-overview.mjs';
 
 function requiredId(value) {
   const result = String(value ?? '').trim();
@@ -72,11 +74,14 @@ export async function getFinancialOverview(userId, storeId, selectedDate, {
     return {
       status: 'unavailable',
       ...provenance,
+      crossBorderBuyout: { present: null, reportCount: null },
       period,
       requestedPeriod: period,
       coveredPeriod: null,
       quality: 'unavailable',
       missingReasons: ['published_period_missing'],
+      totals: null,
+      displayResult: null,
       comparison: {
         period: previousPeriod,
         quality: 'unavailable',
@@ -98,7 +103,38 @@ export async function getFinancialOverview(userId, storeId, selectedDate, {
     status: 'available',
     ...overview,
     ...provenance,
+    crossBorderBuyout: {
+      present: pair.current.cross_border_buyout?.present === true,
+      reportCount: Number(pair.current.cross_border_buyout?.reportCount ?? 0)
+    },
     requestedPeriod: overview.period,
     coveredPeriod: pair.current.covered_period ?? null
+  };
+}
+
+export async function getOverviewState(userId,{storeId,financialPeriodStart},{
+  loadPeriodPair=getPublishedFinancialPeriodPair,
+  loadOperationalData=getOperationalOverviewData
+}={}){
+  const normalizedUserId=requiredId(userId),normalizedStoreId=requiredId(storeId);
+  const operationalData=await loadOperationalData(normalizedUserId,normalizedStoreId);
+  if(!operationalData)return null;
+  const financial=await getFinancialOverview(normalizedUserId,normalizedStoreId,financialPeriodStart,{loadPeriodPair});
+  const requestedFinancialPeriod=calendarWeekForDate(financialPeriodStart,{timezone:'Europe/Moscow'});
+  return {
+    store:{
+      id:requiredId(operationalData.store?.id),name:requiredId(operationalData.store?.name),
+      status:requiredId(operationalData.store?.status),marketplaceCode:requiredId(operationalData.store?.marketplace_code),
+      connected:operationalData.store?.connected===true
+    },
+    financial:financial??{
+      status:'unavailable',publicationId:null,methodVersion:null,publishedAt:null,sourceFreshness:null,scope:null,
+      quality:'unavailable',missingReasons:['published_financial_result_missing'],totals:null,displayResult:null,
+      crossBorderBuyout:{present:null,reportCount:null},
+      requestedPeriod:requestedFinancialPeriod,coveredPeriod:null,
+      comparison:{period:previousCalendarWeek(requestedFinancialPeriod),quality:'unavailable',amount:null,changeAmount:null,changePercent:null,comparable:false,reason:'current_period_unavailable'}
+    },
+    operational:buildOperationalOverview(operationalData),
+    situations:{status:'unavailable',reason:'situation_rules_not_evaluated',items:[],total:null}
   };
 }

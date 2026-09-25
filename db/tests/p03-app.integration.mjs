@@ -272,7 +272,7 @@ test('P0.3 persists exact weekly results, links return cost fail-closed and isol
       {externalReportId:'9001',periodStart:'2026-08-03',periodEnd:'2026-08-09',checksum:'week-one-sale',rows:[{externalRowKey:'sale',rowChecksum:'sale',rawData:sale},{externalRowKey:'unmatched',rowChecksum:'unmatched',rawData:unmatched}]},
       {externalReportId:'9002',periodStart:'2026-08-03',periodEnd:'2026-08-09',checksum:'week-one-return',rows:[{externalRowKey:'return',rowChecksum:'return',rawData:returned},{externalRowKey:'excessive-return',rowChecksum:'excessive-return',rawData:excessiveReturn}]},
       {externalReportId:'9003',periodStart:'2026-08-10',periodEnd:'2026-08-16',checksum:'week-two',rows:[{externalRowKey:'sale',rowChecksum:'week-two-sale',rawData:secondWeek}]}
-    ]});
+    ],summaries:new Map([['9003',{checksum:'p03-cross-border',rawData:{reportId:'9003',reportType:2,country:'Армения'}}]])});
   await assert.rejects(()=>isolatedContext(async client=>{
     const rows=(await client.query(`select o.id,o.operation_type from mc.operation_versions o join mc.report_rows rr on rr.id=o.report_row_id where rr.raw_data->>'srid'='shared-order' order by o.accounting_date,o.id`)).rows;
     const method=(await client.query(`select id from mc.method_versions where code='financial_result' and version_no=5`)).rows[0];
@@ -298,8 +298,10 @@ test('P0.3 persists exact weekly results, links return cost fail-closed and isol
   assert.deepEqual(pair.scope,{type:'selected_products',productIds:[fixture.productId]});
   assert.ok(pair.current.source_freshness);
   assert.deepEqual(pair.current.covered_period,{start:'2026-08-10',end:'2026-08-16'});
+  assert.deepEqual(pair.current.cross_border_buyout,{present:true,reportCount:1});
   assert.ok(pair.previous.source_freshness);
   assert.deepEqual(pair.previous.covered_period,{start:'2026-08-03',end:'2026-08-09'});
+  assert.deepEqual(pair.previous.cross_border_buyout,{present:false,reportCount:0});
   assert.equal(await getPublishedFinancialPeriodPair(ids.user,isolated.store,{periodStart:'2026-08-10',periodEnd:'2026-08-16'}),null);
   const latest=await getPublishedFinancialPeriodPair(isolated.user,isolated.store);
   assert.equal(latest.current.period_start,'2026-08-10');

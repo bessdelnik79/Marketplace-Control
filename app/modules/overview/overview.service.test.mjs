@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getFinancialOverview } from './overview.service.mjs';
+import { getFinancialOverview, getOverviewState } from './overview.service.mjs';
 
 function period(start, end, { quality = 'complete', missingReasons = [] } = {}) {
   return {
@@ -21,6 +21,7 @@ function period(start, end, { quality = 'complete', missingReasons = [] } = {}) 
       estimatedUsnTax: '6.0000',
       availableResultAfterTax: '74.0000'
     },
+    cross_border_buyout: { present: false, reportCount: 0 },
     taxReference: { scope: 'selected_products', usable: true, includedInResult: true, estimatedTax: '6.0000' }
   };
 }
@@ -54,6 +55,7 @@ test('service reads adjacent weeks atomically and exposes publication provenance
   assert.deepEqual(overview.coveredPeriod, { start: '2026-09-14', end: '2026-09-20' });
   assert.deepEqual(overview.scope, { type: 'selected_products', productIds: ['product-a', 'product-b'] });
   assert.equal(overview.comparison.comparable, true);
+  assert.deepEqual(overview.crossBorderBuyout,{present:false,reportCount:0});
 });
 
 test('partial periods never show a percentage without proven comparable coverage', async () => {
@@ -65,6 +67,14 @@ test('partial periods never show a percentage without proven comparable coverage
   assert.equal(overview.comparison.comparable, false);
   assert.equal(overview.comparison.changePercent, null);
   assert.equal(overview.comparison.reason, 'incomparable_coverage');
+});
+
+test('financial overview exposes proven foreign buyout metadata without changing totals',async()=>{
+  const current=period('2026-09-14','2026-09-20');
+  current.cross_border_buyout={present:true,reportCount:2};
+  const overview=await getFinancialOverview('user-1','store-1','2026-09-14',{loadPeriodPair:async()=>pair({current})});
+  assert.deepEqual(overview.crossBorderBuyout,{present:true,reportCount:2});
+  assert.equal(overview.totals.availableResultAfterTax,'74.0000');
 });
 
 test('missing persisted week returns an explicit unavailable model without recalculation', async () => {
@@ -82,4 +92,35 @@ test('missing persisted week returns an explicit unavailable model without recal
 test('service rejects invalid date and foreign or missing publication stays absent', async () => {
   await assert.rejects(() => getFinancialOverview('user-1', 'store-1', '2026-02-29', { loadPeriodPair: async () => pair() }), { message: 'overview_invalid_date' });
   assert.equal(await getFinancialOverview('user-1', 'foreign-store', '2026-09-14', { loadPeriodPair: async () => null }), null);
+});
+
+test('unified overview keeps independent periods and stable empty situations',async()=>{
+  const state=await getOverviewState('user-1',{storeId:'store-1',financialPeriodStart:'2026-09-14'},
+    {loadPeriodPair:async()=>pair(),loadOperationalData:async()=>({
+      store:{id:'store-1',name:'Основной',status:'active',marketplace_code:'wb',connected:true},
+      current:null,rows:[]
+    })});
+  assert.equal(state.store.name,'Основной');
+  assert.equal(state.financial.status,'available');
+  assert.equal(state.operational.status,'unavailable');
+  assert.deepEqual(state.situations,{status:'unavailable',reason:'situation_rules_not_evaluated',items:[],total:null});
+});
+
+test('unified overview returns null for a foreign store without reading finance',async()=>{
+  let financeRead=false;
+  const state=await getOverviewState('user-1',{storeId:'foreign',financialPeriodStart:'2026-09-14'},
+    {loadOperationalData:async()=>null,loadPeriodPair:async()=>{financeRead=true;return pair();}});
+  assert.equal(state,null);
+  assert.equal(financeRead,false);
+});
+
+test('unified overview keeps a stable unavailable financial envelope',async()=>{
+  const state=await getOverviewState('user-1',{storeId:'store-1',financialPeriodStart:'2026-09-14'},
+    {loadPeriodPair:async()=>null,loadOperationalData:async()=>({
+      store:{id:'store-1',name:'Основной',status:'active',marketplace_code:'wb',connected:true},current:null,rows:[]
+    })});
+  assert.equal(state.financial.status,'unavailable');
+  assert.equal(state.financial.publicationId,null);
+  assert.equal(state.financial.totals,null);
+  assert.deepEqual(state.financial.crossBorderBuyout,{present:null,reportCount:null});
 });

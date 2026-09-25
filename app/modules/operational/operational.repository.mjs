@@ -262,6 +262,45 @@ export async function getOperationalSyncState(userId,storeId){
   )).rows[0]??null);
 }
 
+export async function getOperationalOverviewData(userId,storeId){
+  return withOwnedBusinessContext(userId,async(client,businessId)=>{
+    await client.query(`select 1 from mc.businesses where id=$1 for share`,[businessId]);
+    const store=(await client.query(
+      `select s.id,s.name,s.status,s.marketplace_code,(c.status='active') as connected
+         from mc.stores s
+         left join mc.connections c on c.business_id=s.business_id and c.store_id=s.id
+        where s.business_id=$1 and s.id=$2 and s.status<>'archived'`,[businessId,storeId]
+    )).rows[0];
+    if(!store)return null;
+    const current=(await client.query(
+      `select p.period_start::text,p.period_end::text,s.id as snapshot_id,s.quality,s.missing_reasons,
+              s.fetched_at,s.accepted_at,
+              coalesce(array_agg(sp.product_id order by sp.request_position) filter(where sp.product_id is not null),'{}'::uuid[]) as product_ids
+         from mc.operational_periods p
+         join mc.operational_snapshots s on s.business_id=p.business_id and s.store_id=p.store_id
+           and s.id=p.current_snapshot_id and s.status='accepted'
+         left join mc.operational_snapshot_products sp on sp.business_id=s.business_id and sp.store_id=s.store_id and sp.snapshot_id=s.id
+        where p.business_id=$1 and p.store_id=$2
+        group by p.id,s.id
+        order by p.period_end desc,p.period_start desc
+        limit 1`,[businessId,storeId]
+    )).rows[0]??null;
+    if(!current)return {store,current:null,rows:[]};
+    const rows=(await client.query(
+      `select m.product_id,m.metric_date::text,m.snapshot_id,m.currency,m.available,
+              m.order_count::text,m.order_amount::text,m.buyout_count::text,m.buyout_amount::text,
+              m.quality,m.missing_reasons,m.fetched_at,m.accepted_at
+         from mc.current_operational_daily_metrics m
+        where m.business_id=$1 and m.store_id=$2
+          and m.product_id=any($3::uuid[])
+          and m.metric_date between $4::date-28 and $5::date
+        order by m.metric_date,m.product_id`,
+      [businessId,storeId,current.product_ids,current.period_start,current.period_end]
+    )).rows;
+    return {store,current,rows};
+  });
+}
+
 export async function listOperationalSyncCandidates(limit=50){
   if(!Number.isInteger(limit)||limit<1||limit>100)throw new Error('operational_invalid_candidate_limit');
   return (await pool.query(`select * from mc.list_operational_sync_candidates($1)`,[limit])).rows;
