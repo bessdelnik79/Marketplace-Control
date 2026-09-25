@@ -28,6 +28,10 @@ const MISSING_REASON_ORDER = [
   'tax_setting_missing',
   'tax_selected_reference_only',
   'tax_method_unsupported',
+  'tax_source_unverified',
+  'tax_source_unlinked',
+  'tax_base_missing',
+  'tax_base_negative_unverified',
   'vat_method_unsupported',
   'report_coverage_incomplete',
   'source_unreconciled'
@@ -164,15 +168,31 @@ export function calculateStoreTaxReference({ periodStart, periodEnd, selectedPro
   const settings = taxSettings.map(setting => ({
     ...setting,
     id: requiredId(setting.id),
-    effectiveFrom: validDate(setting.effectiveFrom)
+    effectiveFrom: validDate(setting.effectiveFrom),
+    state: setting.state ?? 'active'
   })).sort((a, b) => a.effectiveFrom.localeCompare(b.effectiveFrom) || a.id.localeCompare(b.id));
   for (let i = 1; i < settings.length; i++) {
     if (settings[i].effectiveFrom === settings[i - 1].effectiveFrom) invalid('calculation_ambiguous_tax_setting');
   }
+  const effectiveSegments=[];
+  for(let index=0;index<settings.length;index++){
+    const setting=settings[index];
+    const next=settings[index+1];
+    const segmentStart=setting.effectiveFrom>range.start?setting.effectiveFrom:range.start;
+    const segmentEnd=next&&next.effectiveFrom<=range.end?dateFromNumber(dateNumber(next.effectiveFrom)-1):range.end;
+    if(segmentStart<=segmentEnd)effectiveSegments.push({setting,segmentStart,segmentEnd});
+  }
+  if(!effectiveSegments.length||effectiveSegments[0].segmentStart!==range.start)reasons.add('tax_setting_missing');
+  for(const {setting} of effectiveSegments){
+    if(setting.state==='voided')reasons.add('tax_setting_missing');
+    else if(setting.regimeCode!=='usn_income')reasons.add('tax_method_unsupported');
+    else if(setting.vatMode!=null&&setting.vatMode!=='exempt')reasons.add('vat_method_unsupported');
+  }
   const segments = new Map();
   const seen = new Set();
+  const productsWithBasisEvidence = new Set();
   for (const row of sourceRows) {
-    const id = uniqueSource(seen, row?.id, 'tax_source');
+    const id = uniqueSource(seen, row?.id, 'financial_component');
     if (row?.state === 'withdrawn') continue;
     const accountingDate = validDate(row?.accountingDate);
     if (accountingDate < range.start || accountingDate > range.end) continue;
@@ -195,29 +215,40 @@ export function calculateStoreTaxReference({ periodStart, periodEnd, selectedPro
     }
     if (!/^[+-]?\d+(?:[.,]\d{1,4})?$/.test(String(raw).trim())) { reasons.add('tax_source_unverified'); continue; }
     const value = money(String(raw).replace(',', '.'));
-    if (value === 0n) continue;
     let sign;
     if (document === 'продажа' && operation === 'продажа') sign = 1n;
     else if (document === 'возврат' && operation === 'возврат') sign = -1n;
     else { reasons.add('tax_source_unverified'); continue; }
     if (value < 0n) { reasons.add('tax_source_unverified'); continue; }
-    const setting = settings.filter(item => item.effectiveFrom <= accountingDate).at(-1);
+    productsWithBasisEvidence.add(productId);
+    const effective=effectiveSegments.find(item=>accountingDate>=item.segmentStart&&accountingDate<=item.segmentEnd);
+    const setting = effective?.setting;
     if (!setting) { reasons.add('tax_setting_missing'); continue; }
+    if(setting.state==='voided'){reasons.add('tax_setting_missing');continue;}
     if (setting.regimeCode !== 'usn_income') { reasons.add('tax_method_unsupported'); continue; }
     const rateText = String(setting.usnRateFraction ?? '').trim();
     const canonicalRate = rateText.includes('.') ? rateText.replace(/0+$/, '').replace(/\.$/, '') : rateText;
     const rate = parseDecimal(canonicalRate, 8, 'calculation_invalid_tax_rate');
     if (rate < 0n || rate > 100000000n) invalid('calculation_invalid_tax_rate');
-    const key = `${productId}:${setting.id}:${accountingDate.slice(0, 4)}`;
-    const segment = segments.get(key) ?? { productId, taxSettingVersionId: setting.id, effectiveFrom: setting.effectiveFrom, taxYear: Number(accountingDate.slice(0, 4)), rateFraction: formatDecimal(rate, 8), base: 0n, evidence: [] };
+    const key = `${productId}:${setting.id}:${effective.segmentStart}:${effective.segmentEnd}`;
+    const segment = segments.get(key) ?? { productId, taxSettingVersionId: setting.id, segmentStart:effective.segmentStart,segmentEnd:effective.segmentEnd, rateFraction: formatDecimal(rate, 8), base: 0n, evidence: [] };
     const amount = sign * value;
     segment.base += amount;
     segment.evidence.push({ sourceId: id, accountingDate, contributionAmount: formatDecimal(amount) });
     segments.set(key, segment);
   }
+  for(const productId of selected)for(const effective of effectiveSegments){
+    const setting=effective.setting;
+    if(setting.state!=='active'||setting.regimeCode!=='usn_income')continue;
+    const rateText=String(setting.usnRateFraction??'').trim();
+    const canonicalRate=rateText.includes('.')?rateText.replace(/0+$/,'').replace(/\.$/,''):rateText;
+    const rate=parseDecimal(canonicalRate,8,'calculation_invalid_tax_rate');
+    const key=`${productId}:${setting.id}:${effective.segmentStart}:${effective.segmentEnd}`;
+    if(!segments.has(key))segments.set(key,{productId,taxSettingVersionId:setting.id,segmentStart:effective.segmentStart,segmentEnd:effective.segmentEnd,rateFraction:formatDecimal(rate,8),base:0n,evidence:[]});
+  }
   let base = 0n;
   const products = new Map();
-  const rows = [...segments.values()].sort((a, b) => a.productId.localeCompare(b.productId) || a.taxYear - b.taxYear || a.effectiveFrom.localeCompare(b.effectiveFrom) || a.taxSettingVersionId.localeCompare(b.taxSettingVersionId));
+  const rows = [...segments.values()].sort((a, b) => a.productId.localeCompare(b.productId) || a.segmentStart.localeCompare(b.segmentStart) || a.taxSettingVersionId.localeCompare(b.taxSettingVersionId));
   for (const segment of rows) {
     base += segment.base;
     const product = products.get(segment.productId) ?? { productId: segment.productId, base: 0n, numerator: 0n };
@@ -237,12 +268,12 @@ export function calculateStoreTaxReference({ periodStart, periodEnd, selectedPro
     return { productId: product.productId, taxableBase: formatDecimal(product.base), estimatedTax: formatDecimal(amount) };
   });
   if (base < 0n || tax < 0n) reasons.add('tax_base_negative_unverified');
-  if (rows.length === 0) reasons.add('tax_base_missing');
-  const usable = rows.length > 0 && !['report_coverage_incomplete', 'tax_setting_missing', 'tax_method_unsupported', 'tax_source_unverified', 'tax_source_unlinked', 'tax_base_negative_unverified'].some(reason => reasons.has(reason));
+  if (selected.size === 0 || [...selected].some(productId => !productsWithBasisEvidence.has(productId))) reasons.add('tax_base_missing');
+  const usable = rows.length > 0 && !['report_coverage_incomplete', 'tax_setting_missing', 'tax_method_unsupported', 'tax_source_unverified', 'tax_source_unlinked', 'tax_base_missing', 'tax_base_negative_unverified'].some(reason => reasons.has(reason));
   return {
     scope: 'selected_products', method: 'seller_defined_usn_income_selected_line1_estimate', quality: reasons.size ? 'partial' : 'complete',
     missingReasons: [...reasons].sort(), taxableBase: usable ? formatDecimal(base) : null,
-    estimatedTax: usable ? formatDecimal(tax) : null, products: productTotals, segments: rows
+    estimatedTax: usable ? formatDecimal(tax) : null, usable, products: productTotals, computations: productTotals, segments: rows
   };
 }
 
@@ -373,10 +404,11 @@ function orderedReasons(reasons) {
   );
 }
 
-function totalsFor(lines) {
-  let selected = 0n, store = 0n;
+function totalsFor(lines,taxUsable=false) {
+  let selected = 0n, store = 0n, tax=0n;
   for (const line of lines) {
     const amount = money(line.amountSigned);
+    if(line.categoryCode==='estimated_usn_tax'){tax+=-amount;continue;}
     if (line.scopeCode === 'selected_product') selected += amount;
     else if (line.scopeCode === 'store') store += amount;
   }
@@ -384,7 +416,8 @@ function totalsFor(lines) {
     selectedProductsResultBeforeTax: formatDecimal(selected),
     storeLevelResultBeforeTax: formatDecimal(store),
     availableResultBeforeTax: formatDecimal(selected),
-    availableResultAfterTax: null,
+    estimatedUsnTax:formatDecimal(tax),
+    availableResultAfterTax: taxUsable?formatDecimal(selected-tax):null,
     netProfit: null
   };
 }
@@ -398,6 +431,7 @@ export function calculateFinancialResult({
   costVersions = [],
   expenses = [],
   taxSetting = null,
+  taxReference = null,
   reportCoverageComplete = true
 }) {
   const range = period(periodStart, periodEnd);
@@ -513,7 +547,14 @@ export function calculateFinancialResult({
   }
 
   if (!reportCoverageComplete) reasons.add('report_coverage_incomplete');
-  if (!taxSetting) reasons.add('tax_setting_missing');
+  if(taxReference){
+    for(const reason of taxReference.missingReasons)reasons.add(reason);
+    if(taxReference.usable)for(const product of taxReference.products){
+      const amount=money(product.estimatedTax);
+      addLine(lines,{scopeCode:'selected_product',productId:product.productId,variantId:null,accountingDate:range.end,categoryCode:'estimated_usn_tax'},-amount,{sourceType:'tax_computation',productId:product.productId,contributionAmount:formatDecimal(-amount)});
+    }
+    if(taxSetting&&taxSetting.vatMode!=='exempt')reasons.add('vat_method_unsupported');
+  }else if (!taxSetting) reasons.add('tax_setting_missing');
   else {
     reasons.add(taxSetting.regimeCode === 'usn_income' ? 'tax_selected_reference_only' : 'tax_method_unsupported');
     if (taxSetting.vatMode !== 'exempt') reasons.add('vat_method_unsupported');
@@ -546,6 +587,6 @@ export function calculateFinancialResult({
     quality: missingReasons.length ? 'partial' : 'complete',
     missingReasons,
     lines: resultLines,
-    totals: totalsFor(resultLines)
+    totals: totalsFor(resultLines,Boolean(taxReference?.usable))
   };
 }

@@ -57,6 +57,19 @@ export async function getCurrentFinancialResult(userId,storeId){
          from mc.result_lines where run_id=$1
         order by accounting_date,result_scope,product_id nulls last,variant_id nulls last,category_code,id`,[publication.run_id]
     )).rows;
+    if(publication.method_version==='financial-result-v4'){
+      const computations=(await client.query(`select id,product_id,taxable_base::text,tax_amount::text from mc.tax_computations where run_id=$1 order by product_id`,[publication.run_id])).rows;
+      const taxTotals=(await client.query(`select coalesce(sum(taxable_base),0)::text as taxable_base,coalesce(sum(tax_amount),0)::text as tax_amount from mc.tax_computations where run_id=$1`,[publication.run_id])).rows[0];
+      const segments=(await client.query(`select s.tax_computation_id,c.product_id,s.tax_setting_version_id,s.segment_start::text,s.segment_end::text,s.taxable_base::text,s.rate_fraction::text
+        from mc.tax_computation_segments s join mc.tax_computations c on c.id=s.tax_computation_id where c.run_id=$1 order by c.product_id,s.segment_start`,[publication.run_id])).rows;
+      const missingReasons=publication.missing_reasons.filter(reason=>reason.startsWith('tax_')||reason==='vat_method_unsupported'||reason==='report_coverage_incomplete');
+      const usable=computations.length>0&&!missingReasons.some(reason=>['tax_setting_missing','tax_method_unsupported','tax_source_unverified','tax_source_unlinked','tax_base_missing','tax_base_negative_unverified','report_coverage_incomplete'].includes(reason));
+      const estimatedTax=usable?taxTotals.tax_amount:null;
+      return{...publication,lines,taxReference:{scope:'selected_products',method:'seller_defined_usn_income_selected_line1_estimate',quality:missingReasons.length?'partial':'complete',missingReasons,usable,includedInResult:usable,
+        taxableBase:usable?taxTotals.taxable_base:null,estimatedTax,
+        products:computations.map(row=>({productId:row.product_id,taxableBase:row.taxable_base,estimatedTax:row.tax_amount})),
+        segments:segments.map(row=>({productId:row.product_id,taxComputationId:row.tax_computation_id,taxSettingVersionId:row.tax_setting_version_id,segmentStart:row.segment_start,segmentEnd:row.segment_end,taxableBase:row.taxable_base,rateFraction:row.rate_fraction}))}};
+    }
     if (publication.method_version !== 'financial-result-v3') return{...publication,lines,taxReference:null};
     const selectedProductIds=(await client.query(
       `select product_id from mc.calculation_request_products where request_id=$1 order by product_id`,[publication.request_id]
@@ -112,9 +125,9 @@ export async function prepareFinancialCalculation(userId,storeId){
     )).rows.map(row=>row.id);
     const taxes=(await client.query(
       `select v.id from mc.tax_settings s join mc.tax_setting_versions v on v.id=s.current_version_id
-        where s.business_id=$1 and s.effective_from<=$2 and v.state='active' order by s.effective_from,v.id`,[businessId,periodEnd]
+        where s.business_id=$1 and s.effective_from<=$2 order by s.effective_from,v.id`,[businessId,periodEnd]
     )).rows.map(row=>row.id);
-    const method=(await client.query(`select id,implementation_version from mc.method_versions where code='financial_result' and version_no=3`)).rows[0];
+    const method=(await client.query(`select id,implementation_version from mc.method_versions where code='financial_result' and version_no=4`)).rows[0];
     if(!method)throw new Error('calculation_method_missing');
     const fingerprint=createInputFingerprint({resultMethodVersion:`${method.id}:${method.implementation_version}`,selectedProductIds:products,reportVersionIds:normalized.map(row=>row.report_version_id),reportNormalizationIds:normalized.map(row=>row.normalization_id),costVersionIds:costs,expenseVersionIds:expenses,taxSettingVersionIds:taxes,periodStart,periodEnd});
     const current=(await client.query(`select id,input_fingerprint,status from mc.calculation_requests where business_id=$1 and store_id=$2 and is_latest for update`,[businessId,storeId])).rows[0];
@@ -162,7 +175,7 @@ async function executeFinancialCalculation(userId,requestId){
          from mc.operation_versions o join mc.financial_components f on f.operation_version_id=o.id
          join mc.report_rows rr on rr.id=o.report_row_id
         where o.report_normalization_id=any($1::uuid[]) order by f.id`,[normalizationIds]
-    )).rows.map(row=>({id:row.id,categoryCode:row.category_code,amountSigned:row.amount_signed,productId:row.product_id,variantId:row.variant_id,accountingDate:row.accounting_date,state:row.state,classificationStatus:isVerifiedWbResultComponent({categoryCode:row.category_code,sourceField:row.source_field,operationType:row.operation_type,docTypeName:row.doc_type_name,sellerOperName:row.seller_oper_name,rawValue:row.raw_value})?'confirmed':'unclassified',scopeCode:row.result_scope_classification}));
+    )).rows.map(row=>({id:row.id,categoryCode:row.category_code,sourceField:row.source_field,rawValue:row.raw_value,amountSigned:row.amount_signed,productId:row.product_id,variantId:row.variant_id,accountingDate:row.accounting_date,state:row.state,operationType:row.operation_type,docTypeName:row.doc_type_name,sellerOperName:row.seller_oper_name,classificationStatus:isVerifiedWbResultComponent({categoryCode:row.category_code,sourceField:row.source_field,operationType:row.operation_type,docTypeName:row.doc_type_name,sellerOperName:row.seller_oper_name,rawValue:row.raw_value})?'confirmed':'unclassified',scopeCode:row.result_scope_classification}));
     const operations=(await client.query(
       `select id,operation_type,product_id,variant_id,accounting_date::text,quantity::text,state
          from mc.operation_versions where report_normalization_id=any($1::uuid[]) and operation_type in ('sale','return') order by id`,[normalizationIds]
@@ -177,14 +190,32 @@ async function executeFinancialCalculation(userId,requestId){
          from mc.expense_versions v join mc.expenses e on e.id=v.expense_id where v.id=any($1::uuid[]) order by v.id`,[expenseIds]
     )).rows.map(row=>({id:row.id,productId:row.product_id,category:row.category,amount:row.amount,periodStart:row.period_start,periodEnd:row.period_end,recognitionMethod:row.recognition_method,state:row.state,scopeCode:row.product_id?'selected_product':'store'})):[];
     const taxIds=inputs.map(row=>row.tax_setting_version_id).filter(Boolean);
-    const tax=taxIds.length?(await client.query(
-      `select v.regime_code,v.usn_rate_fraction::text,v.vat_mode
+    const taxSettings=taxIds.length?(await client.query(
+      `select v.id,s.effective_from::text,v.regime_code,v.usn_rate_fraction::text,v.vat_mode,v.state
          from mc.tax_setting_versions v join mc.tax_settings s on s.id=v.tax_setting_id
         where v.id=any($1::uuid[]) and s.effective_from<=$2
-        order by s.effective_from desc,v.version_no desc limit 1`,[taxIds,request.period_end]
-    )).rows[0]:null;
+        order by s.effective_from,v.id`,[taxIds,request.period_end]
+    )).rows:[];
+    const tax=taxSettings.at(-1)??null;
     const currentReportCount=Number((await client.query(`select count(*)::int as n from mc.reports where business_id=$1 and store_id=$2 and current_version_id is not null`,[businessId,request.store_id])).rows[0].n);
-    const result=calculateFinancialResult({periodStart:request.period_start,periodEnd:request.period_end,selectedProductIds:selected,financialComponents:components,operations,costVersions:costs,expenses,taxSetting:tax?{regimeCode:tax.regime_code,usnRateFraction:tax.usn_rate_fraction,vatMode:tax.vat_mode}:null,reportCoverageComplete:normalizationIds.length===currentReportCount});
+    const reportCoverageComplete=normalizationIds.length===currentReportCount;
+    const taxReference=calculateStoreTaxReference({periodStart:request.period_start,periodEnd:request.period_end,selectedProductIds:selected,
+      sourceRows:components.filter(row=>row.sourceField==='retailAmount').map(row=>({id:row.id,productId:row.productId,accountingDate:row.accountingDate,retailAmount:row.rawValue,docTypeName:row.docTypeName,sellerOperName:row.sellerOperName,state:row.state})),
+      taxSettings:taxSettings.map(row=>({id:row.id,effectiveFrom:row.effective_from,regimeCode:row.regime_code,usnRateFraction:row.usn_rate_fraction,vatMode:row.vat_mode,state:row.state})),reportCoverageComplete});
+    const result=calculateFinancialResult({periodStart:request.period_start,periodEnd:request.period_end,selectedProductIds:selected,financialComponents:components,operations,costVersions:costs,expenses,
+      taxSetting:tax?{regimeCode:tax.regime_code,usnRateFraction:tax.usn_rate_fraction,vatMode:tax.vat_mode,state:tax.state}:null,taxReference,reportCoverageComplete});
+    const taxComputationIds=new Map();
+    if(taxReference.usable)for(const computation of taxReference.products){
+      const saved=(await client.query(`insert into mc.tax_computations(business_id,store_id,run_id,product_id,period_start,period_end,taxable_base,tax_amount,method_version_id)
+        values($1,$2,$3,$4,$5,$6,$7,$8,$9) returning id`,[businessId,request.store_id,run.id,computation.productId,request.period_start,request.period_end,computation.taxableBase,computation.estimatedTax,request.method_version_id])).rows[0];
+      taxComputationIds.set(String(computation.productId),saved.id);
+      for(const segment of taxReference.segments.filter(row=>String(row.productId)===String(computation.productId))){
+        const savedSegment=(await client.query(`insert into mc.tax_computation_segments(business_id,store_id,tax_computation_id,tax_setting_version_id,segment_start,segment_end,taxable_base,rate_fraction)
+          values($1,$2,$3,$4,$5,$6,$7,$8) returning id`,[businessId,request.store_id,saved.id,segment.taxSettingVersionId,segment.segmentStart,segment.segmentEnd,segment.taxableBase,segment.rateFraction])).rows[0];
+        for(const evidence of segment.evidence)await client.query(`insert into mc.tax_basis_evidence(business_id,store_id,tax_segment_id,financial_component_id,taxable_contribution,recognition_date)
+          values($1,$2,$3,$4,$5,$6)`,[businessId,request.store_id,savedSegment.id,evidence.sourceId,evidence.contributionAmount,evidence.accountingDate]);
+      }
+    }
     for(const line of result.lines){
       const saved=(await client.query(
         `insert into mc.result_lines(business_id,store_id,run_id,product_id,variant_id,accounting_date,category_code,amount_signed,quality,result_scope)
@@ -194,6 +225,7 @@ async function executeFinancialCalculation(userId,requestId){
         if(evidence.sourceType==='financial_component')await client.query(`insert into mc.result_evidence(business_id,store_id,result_line_id,financial_component_id,contribution_amount) values($1,$2,$3,$4,$5)`,[businessId,request.store_id,saved.id,evidence.sourceId,evidence.contributionAmount]);
         else if(evidence.sourceType==='sale_cost')await client.query(`insert into mc.result_evidence(business_id,store_id,result_line_id,cost_version_id,source_operation_version_id,quantity,contribution_amount) values($1,$2,$3,$4,$5,$6,$7)`,[businessId,request.store_id,saved.id,evidence.costVersionId,evidence.sourceId,evidence.quantity,evidence.contributionAmount]);
         else if(evidence.sourceType==='expense_version')await client.query(`insert into mc.result_evidence(business_id,store_id,result_line_id,expense_version_id,contribution_amount) values($1,$2,$3,$4,$5)`,[businessId,request.store_id,saved.id,evidence.sourceId,evidence.contributionAmount]);
+        else if(evidence.sourceType==='tax_computation')await client.query(`insert into mc.result_evidence(business_id,store_id,result_line_id,tax_computation_id,contribution_amount) values($1,$2,$3,$4,$5)`,[businessId,request.store_id,saved.id,taxComputationIds.get(String(evidence.productId)),evidence.contributionAmount]);
       }
     }
     await client.query(`update mc.calculation_runs set status='succeeded',quality=$2,missing_reasons=$3::jsonb,finished_at=now() where id=$1`,[run.id,result.quality,JSON.stringify(result.missingReasons)]);

@@ -642,6 +642,26 @@
 - `PRIMARY KEY (id)`
 - `CHECK ((result_scope_classification = ANY (ARRAY['selected_product'::text, 'store'::text, 'product_expected'::text, 'unclassified'::text, 'reconciliation'::text])))`
 
+## financial_report_summary_versions
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| report_version_id | uuid | нет | — |
+| sync_run_id | uuid | нет | — |
+| checksum | text | нет | — |
+| raw_data | jsonb | нет | — |
+| created_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, sync_run_id) REFERENCES mc.sync_runs(business_id, store_id, id)`
+- `UNIQUE (report_version_id, checksum)`
+- `PRIMARY KEY (id)`
+
 ## import_batches
 
 | Поле | Тип | NULL | По умолчанию |
@@ -1316,7 +1336,6 @@
 | segment_end | date | нет | — |
 | taxable_base | numeric(20,4) | нет | — |
 | rate_fraction | numeric | нет | — |
-| tax_amount | numeric(20,4) | нет | — |
 | created_at | timestamp with time zone | нет | now() |
 
 Ограничения и связи:
@@ -1329,8 +1348,7 @@
 - `CHECK (((rate_fraction >= (0)::numeric) AND (rate_fraction <= (1)::numeric)))`
 - `CHECK (isfinite(segment_end))`
 - `CHECK (isfinite(segment_start))`
-- `CHECK ((tax_amount >= (0)::numeric))`
-- `UNIQUE (tax_computation_id, segment_start, segment_end, tax_setting_version_id)`
+- `UNIQUE (tax_computation_id, segment_start, segment_end)`
 
 ## tax_computations
 
@@ -1340,12 +1358,10 @@
 | business_id | uuid | нет | — |
 | store_id | uuid | нет | — |
 | run_id | uuid | нет | — |
-| tax_setting_version_id | uuid | нет | — |
-| tax_year | integer | нет | — |
+| product_id | uuid | нет | — |
 | period_start | date | нет | — |
 | period_end | date | нет | — |
 | taxable_base | numeric(20,4) | нет | — |
-| rate_fraction | numeric | нет | — |
 | tax_amount | numeric(20,4) | нет | — |
 | method_version_id | uuid | нет | — |
 | created_at | timestamp with time zone | нет | now() |
@@ -1353,18 +1369,15 @@
 Ограничения и связи:
 
 - `UNIQUE (business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.product_selection_items(business_id, store_id, product_id)`
 - `FOREIGN KEY (business_id, store_id, run_id) REFERENCES mc.calculation_runs(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id)`
 - `CHECK ((period_end >= period_start))`
-- `CHECK (((EXTRACT(year FROM period_start) = (tax_year)::numeric) AND (EXTRACT(year FROM period_end) = (tax_year)::numeric)))`
 - `FOREIGN KEY (method_version_id) REFERENCES mc.method_versions(id)`
 - `CHECK (isfinite(period_end))`
 - `CHECK (isfinite(period_start))`
 - `PRIMARY KEY (id)`
-- `CHECK (((rate_fraction >= (0)::numeric) AND (rate_fraction <= (1)::numeric)))`
-- `UNIQUE (run_id, tax_year)`
+- `UNIQUE (run_id, product_id)`
 - `CHECK ((tax_amount >= (0)::numeric))`
-- `CHECK (((tax_year >= 2000) AND (tax_year <= 9999)))`
 
 ## tax_setting_versions
 

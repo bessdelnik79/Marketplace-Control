@@ -48,26 +48,39 @@ await context(async client=>{
   const operation=(await client.query(`insert into mc.operations(business_id,store_id,source_code,source_operation_key) values($1,$2,'wb_finance','785995400/1') returning id`,[ids.business,ids.store])).rows[0];
   const operationVersion=(await client.query(`insert into mc.operation_versions(business_id,store_id,operation_id,report_row_id,report_normalization_id,version_no,operation_type,product_id,variant_id,accounting_date,quantity) values($1,$2,$3,$4,$5,1,'sale',$6,$7,'2026-07-15',1) returning id`,[ids.business,ids.store,operation.id,reportRow.id,normalization.id,product.id,variant.id])).rows[0];
   await client.query(`insert into mc.financial_components(business_id,store_id,operation_version_id,component_key,category_code,amount_signed,method_version_id,source_field,result_scope_classification) values($1,$2,$3,'retailAmount','revenue',100,$4,'retailAmount','selected_product')`,[ids.business,ids.store,operationVersion.id,importMethod.id]);
+  const taxSetting=(await client.query(`insert into mc.tax_settings(business_id,effective_from) values($1,'2026-01-01') returning id`,[ids.business])).rows[0];
+  const taxVersion=(await client.query(`insert into mc.tax_setting_versions(business_id,tax_setting_id,version_no,regime_code,usn_rate_fraction,vat_mode,changed_by)
+    values($1,$2,1,'usn_income',0.06,'exempt',$3) returning id`,[ids.business,taxSetting.id,ids.user])).rows[0];
+  await client.query(`update mc.tax_settings set current_version_id=$1 where id=$2`,[taxVersion.id,taxSetting.id]);
   assert.ok(selection.id);
 });
 
-test('P0.3 creates a reproducible partial result and idempotently keeps one publication',async()=>{
+test('P0.3 persists selected-SKU USN, deducts it once and idempotently keeps one publication',async()=>{
   const first=await runFinancialCalculation(ids.user,ids.store);
-  assert.equal(first.quality,'partial');
-  assert.deepEqual(first.missingReasons,['tax_setting_missing']);
+  assert.equal(first.quality,'complete');
+  assert.deepEqual(first.missingReasons,[]);
   assert.equal(first.totals.availableResultBeforeTax,'60.0000');
+  assert.equal(first.totals.estimatedUsnTax,'6.0000');
+  assert.equal(first.totals.availableResultAfterTax,'54.0000');
   const second=await runFinancialCalculation(ids.user,ids.store);
   assert.equal(second.changed,false);
   const saved=await context(async client=>(await client.query(
-    `select r.quality,r.missing_reasons,count(distinct p.id)::int publications,sum(l.amount_signed)::text total
+    `select r.quality,r.missing_reasons,count(distinct p.id)::int publications,sum(l.amount_signed)::text total,
+            count(distinct tc.id)::int computations,count(distinct ts.id)::int segments,count(distinct tb.id)::int basis,
+            count(distinct case when l.category_code='estimated_usn_tax' then e.id end)::int tax_evidence
        from mc.publications p join mc.calculation_runs r on r.id=p.run_id
        left join mc.result_lines l on l.run_id=r.id
+       left join mc.result_evidence e on e.result_line_id=l.id
+       left join mc.tax_computations tc on tc.run_id=r.id
+       left join mc.tax_computation_segments ts on ts.tax_computation_id=tc.id
+       left join mc.tax_basis_evidence tb on tb.tax_segment_id=ts.id
       where p.store_id=$1 and p.is_current group by r.quality,r.missing_reasons`,[ids.store]
   )).rows[0]);
-  assert.equal(saved.quality,'partial');
-  assert.deepEqual(saved.missing_reasons,['tax_setting_missing']);
+  assert.equal(saved.quality,'complete');
+  assert.deepEqual(saved.missing_reasons,[]);
   assert.equal(saved.publications,1);
-  assert.equal(saved.total,'60.0000');
+  assert.equal(saved.total,'54.0000');
+  assert.deepEqual([saved.computations,saved.segments,saved.basis,saved.tax_evidence],[1,1,1,1]);
 });
 
 test('financial sync reselects a previously accepted checksum without duplicating its version',async()=>{
@@ -209,10 +222,11 @@ test('bank control stores a versioned summary without changing product profit',a
   await runFinancialCalculation(ids.user,ids.store);
   const current=await getCurrentFinancialResult(ids.user,ids.store);
   assert.equal(current.taxReference.scope,'selected_products');
-  assert.ok(current.taxReference.missingReasons.includes('tax_setting_missing'));
+  assert.equal(current.taxReference.includedInResult,true);
+  assert.equal(current.taxReference.estimatedTax,'6.0000');
   assert.ok(!current.taxReference.missingReasons.includes('tax_source_unlinked'));
   const profit=await context(async client=>(await client.query(`select sum(l.amount_signed)::text as amount from mc.publications p join mc.result_lines l on l.run_id=p.run_id where p.store_id=$1 and p.is_current`,[ids.store])).rows[0].amount);
-  assert.equal(profit,'60.0000');
+  assert.equal(profit,'54.0000');
   const snapshot=await context(async client=>(await client.query(`select s.id,s.raw_data->>'bankPaymentSum' as bank_payment from mc.financial_report_summary_versions s where s.store_id=$1`,[ids.store])).rows[0]);
   assert.equal(snapshot.bank_payment,'100');
   await assert.rejects(()=>context(client=>client.query(`update mc.financial_report_summary_versions set raw_data='{}' where id=$1`,[snapshot.id])),/immutable/);

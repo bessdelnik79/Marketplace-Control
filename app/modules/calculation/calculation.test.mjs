@@ -114,6 +114,7 @@ test('calculation excludes unallocated store charges from selected SKU result', 
     selectedProductsResultBeforeTax: '87.5000',
     storeLevelResultBeforeTax: '0.0000',
     availableResultBeforeTax: '87.5000',
+    estimatedUsnTax: '0.0000',
     availableResultAfterTax: null,
     netProfit: null
   });
@@ -275,7 +276,9 @@ test('seller-defined USN reference uses selected SKU sale less return and effect
   assert.equal(result.taxableBase,'130.0000');
   assert.equal(result.estimatedTax,'7.3000');
   assert.deepEqual(result.products.map(row=>[row.productId,row.taxableBase,row.estimatedTax]),[['sku-1','80.0000','4.8000'],['sku-2','50.0000','2.5000']]);
-  assert.deepEqual(result.segments.map(row=>[row.taxSettingVersionId,row.taxableBase]),[['rate-6','80.0000'],['rate-5','50.0000']]);
+  assert.deepEqual(result.segments.map(row=>[row.productId,row.taxSettingVersionId,row.taxableBase]),[
+    ['sku-1','rate-6','80.0000'],['sku-1','rate-5','0.0000'],['sku-2','rate-6','0.0000'],['sku-2','rate-5','50.0000']
+  ]);
   assert.deepEqual(calculateStoreTaxReference({periodStart:'2026-09-14',periodEnd:'2026-09-20',selectedProductIds:[...selectedProductIds].reverse(),sourceRows:[...sourceRows].reverse(),taxSettings:[...taxSettings].reverse()}),result);
 });
 
@@ -295,7 +298,90 @@ test('unsupported rows, missing rates and incomplete coverage prevent a misleadi
   ],reportCoverageComplete:false});
   assert.equal(result.quality,'partial');
   assert.equal(result.estimatedTax,null);
-  assert.deepEqual(result.missingReasons,['report_coverage_incomplete','tax_base_missing','tax_setting_missing','tax_source_unverified']);
+  assert.deepEqual(result.missingReasons,['report_coverage_incomplete','tax_setting_missing','tax_source_unverified']);
+});
+
+test('persistable selected-SKU tax is deducted once while before-tax total remains unchanged',()=>{
+  const sourceRows=[{id:'component-1',productId:'product-1',accountingDate:'2026-07-13',docTypeName:'Продажа',sellerOperName:'Продажа',retailAmount:'100'}];
+  const taxSettings=[{id:'setting-1',effectiveFrom:'2026-01-01',regimeCode:'usn_income',usnRateFraction:'0.06'}];
+  const taxReference=calculateStoreTaxReference({periodStart:'2026-07-13',periodEnd:'2026-07-19',selectedProductIds:['product-1'],sourceRows,taxSettings});
+  const result=calculateFinancialResult({periodStart:'2026-07-13',periodEnd:'2026-07-19',selectedProductIds:['product-1'],
+    financialComponents:[{id:'component-1',classificationStatus:'confirmed',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-07-13',categoryCode:'revenue',amountSigned:'100'}],
+    taxSetting:{regimeCode:'usn_income',usnRateFraction:'0.06',vatMode:'exempt'},taxReference});
+  assert.equal(result.quality,'complete');
+  assert.deepEqual(result.lines.map(row=>[row.categoryCode,row.amountSigned]),[['revenue','100.0000'],['estimated_usn_tax','-6.0000']]);
+  assert.deepEqual(result.totals,{selectedProductsResultBeforeTax:'100.0000',storeLevelResultBeforeTax:'0.0000',availableResultBeforeTax:'100.0000',estimatedUsnTax:'6.0000',availableResultAfterTax:'94.0000',netProfit:null});
+});
+
+test('complete report proves zero tax while a voided effective boundary never falls back',()=>{
+  const base={periodStart:'2026-07-13',periodEnd:'2026-07-19',selectedProductIds:['product-1'],sourceRows:[
+    {id:'sale',productId:'product-1',accountingDate:'2026-07-13',docTypeName:'Продажа',sellerOperName:'Продажа',retailAmount:'100'},
+    {id:'return',productId:'product-1',accountingDate:'2026-07-14',docTypeName:'Возврат',sellerOperName:'Возврат',retailAmount:'100'}
+  ]};
+  const zero=calculateStoreTaxReference({...base,taxSettings:[{id:'active',effectiveFrom:'2026-01-01',regimeCode:'usn_income',usnRateFraction:'0.06'}]});
+  assert.equal(zero.usable,true);
+  assert.deepEqual(zero.products,[{productId:'product-1',taxableBase:'0.0000',estimatedTax:'0.0000'}]);
+  const voided=calculateStoreTaxReference({...base,taxSettings:[
+    {id:'active',effectiveFrom:'2026-01-01',regimeCode:'usn_income',usnRateFraction:'0.06'},
+    {id:'voided',effectiveFrom:'2026-07-16',regimeCode:'usn_income',usnRateFraction:'0.06',state:'voided'}
+  ]});
+  assert.equal(voided.usable,false);
+  assert.ok(voided.missingReasons.includes('tax_setting_missing'));
+});
+
+test('missing tax basis evidence never becomes a silent zero',()=>{
+  const result=calculateStoreTaxReference({periodStart:'2026-07-13',periodEnd:'2026-07-19',selectedProductIds:['product-1'],sourceRows:[],
+    taxSettings:[{id:'active',effectiveFrom:'2026-01-01',regimeCode:'usn_income',usnRateFraction:'0.06'}]});
+  assert.equal(result.usable,false);
+  assert.equal(result.estimatedTax,null);
+  assert.ok(result.missingReasons.includes('tax_base_missing'));
+});
+
+test('every selected SKU needs its own tax basis evidence',()=>{
+  const result=calculateStoreTaxReference({periodStart:'2026-07-13',periodEnd:'2026-07-19',selectedProductIds:['product-1','product-2'],
+    sourceRows:[{id:'sale',productId:'product-1',accountingDate:'2026-07-13',docTypeName:'Продажа',sellerOperName:'Продажа',retailAmount:'100'}],
+    taxSettings:[{id:'active',effectiveFrom:'2026-01-01',regimeCode:'usn_income',usnRateFraction:'0.06'}]});
+  assert.equal(result.usable,false);
+  assert.equal(result.estimatedTax,null);
+  assert.ok(result.missingReasons.includes('tax_base_missing'));
+});
+
+test('missing tax setting does not invent missing VAT or tax base when retail evidence exists',()=>{
+  const sourceRows=[{id:'sale',productId:'product-1',accountingDate:'2026-07-13',docTypeName:'Продажа',sellerOperName:'Продажа',retailAmount:'100'}];
+  const taxReference=calculateStoreTaxReference({periodStart:'2026-07-13',periodEnd:'2026-07-19',selectedProductIds:['product-1'],sourceRows,taxSettings:[]});
+  const result=calculateFinancialResult({periodStart:'2026-07-13',periodEnd:'2026-07-19',selectedProductIds:['product-1'],taxReference});
+  assert.deepEqual(taxReference.missingReasons,['tax_setting_missing']);
+  assert.deepEqual(result.missingReasons,['tax_setting_missing']);
+});
+
+test('unsupported VAT keeps persisted USN deduction but result remains partial',()=>{
+  const sourceRows=[{id:'component-1',productId:'product-1',accountingDate:'2026-07-13',docTypeName:'Продажа',sellerOperName:'Продажа',retailAmount:'100'}];
+  const taxReference=calculateStoreTaxReference({periodStart:'2026-07-13',periodEnd:'2026-07-19',selectedProductIds:['product-1'],sourceRows,
+    taxSettings:[{id:'setting-1',effectiveFrom:'2026-01-01',regimeCode:'usn_income',usnRateFraction:'0.06'}]});
+  const result=calculateFinancialResult({periodStart:'2026-07-13',periodEnd:'2026-07-19',selectedProductIds:['product-1'],
+    financialComponents:[{id:'component-1',classificationStatus:'confirmed',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-07-13',categoryCode:'revenue',amountSigned:'100'}],
+    taxSetting:{regimeCode:'usn_income',usnRateFraction:'0.06',vatMode:'general'},taxReference});
+  assert.equal(result.quality,'partial');
+  assert.deepEqual(result.missingReasons,['vat_method_unsupported']);
+  assert.equal(result.totals.availableResultAfterTax,'94.0000');
+  assert.equal(result.totals.netProfit,null);
+});
+
+test('unsupported VAT anywhere in the effective period remains visible after a later exemption',()=>{
+  const sourceRows=[
+    {id:'early',productId:'product-1',accountingDate:'2026-07-13',docTypeName:'Продажа',sellerOperName:'Продажа',retailAmount:'50'},
+    {id:'late',productId:'product-1',accountingDate:'2026-07-17',docTypeName:'Продажа',sellerOperName:'Продажа',retailAmount:'50'}
+  ];
+  const taxReference=calculateStoreTaxReference({periodStart:'2026-07-13',periodEnd:'2026-07-19',selectedProductIds:['product-1'],sourceRows,taxSettings:[
+    {id:'general',effectiveFrom:'2026-01-01',regimeCode:'usn_income',usnRateFraction:'0.06',vatMode:'general'},
+    {id:'exempt',effectiveFrom:'2026-07-16',regimeCode:'usn_income',usnRateFraction:'0.06',vatMode:'exempt'}
+  ]});
+  assert.equal(taxReference.usable,true);
+  assert.ok(taxReference.missingReasons.includes('vat_method_unsupported'));
+  const result=calculateFinancialResult({periodStart:'2026-07-13',periodEnd:'2026-07-19',selectedProductIds:['product-1'],taxSetting:{regimeCode:'usn_income',vatMode:'exempt'},taxReference});
+  assert.equal(result.quality,'partial');
+  assert.ok(result.missingReasons.includes('vat_method_unsupported'));
+  assert.equal(result.totals.availableResultAfterTax,'-6.0000');
 });
 
 test('selected sale with missing amount and unlinked sale suppress tax estimate', () => {
