@@ -132,6 +132,14 @@ test('unusable tax is not silently treated as zero and result explicitly stays b
   assert.deepEqual(overview.missingReasons, ['cost_missing', 'tax_setting_missing']);
 });
 
+test('a partial aggregate may retain complete evidence lines from covered child periods',()=>{
+  const raw=envelope({quality:'partial',missingReasons:['cost_missing']});
+  raw.lines.forEach(line=>{line.quality='complete';});
+  const overview=buildFinancialPeriodOverview(raw);
+  assert.equal(overview.quality,'partial');
+  assert.equal(overview.displayResult.amount,'94.0000');
+});
+
 test('overview compares adjacent weeks from one publication and uses absolute previous amount for percent', () => {
   const current = envelope();
   const previous = envelope({

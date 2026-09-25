@@ -124,12 +124,12 @@ export async function getFinancialOverview(userId, storeId, selectedDate, select
     timezone
   });
   return {
-    status: 'available',
+    status: overview.quality === 'unavailable' ? 'unavailable' : 'available',
     ...overview,
     ...provenance,
     crossBorderBuyout: {
-      present: pair.current.cross_border_buyout?.present === true,
-      reportCount: Number(pair.current.cross_border_buyout?.reportCount ?? 0)
+      present: pair.current.cross_border_buyout?.present === null ? null : pair.current.cross_border_buyout?.present === true,
+      reportCount: pair.current.cross_border_buyout?.reportCount === null ? null : Number(pair.current.cross_border_buyout?.reportCount ?? 0)
     },
     requestedPeriod: overview.period,
     coveredPeriod: pair.current.covered_period ?? null

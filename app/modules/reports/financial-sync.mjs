@@ -12,9 +12,37 @@ const knownErrors = new Set([
   'financial_connection_unavailable','financial_invalid_request','financial_unauthorized','financial_payment_required',
   'financial_rate_limited','financial_unavailable','financial_invalid_response','financial_invalid_row','financial_invalid_amount',
   'financial_invalid_cursor','financial_too_large','financial_report_period_mismatch','financial_duplicate_row_conflict',
-  'financial_token_type_unsupported','financial_sync_superseded'
+  'financial_token_type_unsupported','financial_sync_superseded','financial_invalid_random','financial_invalid_rate_delay',
+  'financial_context_mismatch','financial_method_missing','financial_report_version_not_accepted','financial_row_period_mismatch',
+  'financial_summary_unavailable','financial_summary_unauthorized','financial_summary_rate_limited','financial_invalid_summary',
+  'financial_duplicate_summary_conflict','financial_summary_too_large'
 ]);
-const safeCode = error => knownErrors.has(error?.message) ? error.message : 'financial_internal_error';
+
+const safeDiagnosticIdentifier = (value, maxLength = 120) => {
+  const result = String(value ?? '').trim();
+  return result && result.length <= maxLength && /^[a-zA-Z0-9_.:-]+$/.test(result) ? result : undefined;
+};
+
+const safeEndpoint = value => {
+  try {
+    const url = new URL(String(value));
+    return ['https:', 'http:'].includes(url.protocol) ? `${url.origin}${url.pathname}`.slice(0, 240) : undefined;
+  } catch { return undefined; }
+};
+
+export const financialSyncErrorCode = error => knownErrors.has(error?.message) ? error.message : 'financial_internal_error';
+
+export function financialSyncFailureDiagnostic(error, errorCode = financialSyncErrorCode(error)) {
+  const diagnostic = {
+    errorCode,
+    errorName: safeDiagnosticIdentifier(error?.name),
+    databaseCode: safeDiagnosticIdentifier(error?.code),
+    constraint: safeDiagnosticIdentifier(error?.constraint),
+    wbStatus: Number.isInteger(error?.status) && error.status >= 100 && error.status <= 599 ? error.status : undefined,
+    endpoint: safeEndpoint(error?.endpoint)
+  };
+  return Object.fromEntries(Object.entries(diagnostic).filter(([, value]) => value !== undefined));
+}
 
 export function scheduleFinancialSync(userId, storeId, {
   force = false,
@@ -76,11 +104,13 @@ export function scheduleFinancialSync(userId, storeId, {
         scheduleFinancialCalculation(userId,storeId);
       }
     } catch (error) {
-      const code = safeCode(error);
+      const code = financialSyncErrorCode(error);
       const retryDelaySeconds=code==='financial_rate_limited'?financialRequestDelaySeconds(random):70;
       if (job?.run_id) await failFinancialSync(userId, job, code, { retryDelaySeconds }).catch(() => {});
       if (stored && documentId) await removeFinancialDocument({ businessId: job.business_id, storeId: job.store_id, documentId, root: sourceRoot }).catch(() => {});
-      console.warn('[WB financial reports failed]', JSON.stringify({ time: new Date().toISOString(), error: code, wbStatus: error?.status, endpoint: error?.endpoint, userId, storeId }));
+      console.warn('[WB financial reports failed]', JSON.stringify({
+        time: new Date().toISOString(), userId, storeId, error: code, ...financialSyncFailureDiagnostic(error, code)
+      }));
     } finally {
       activeJobs.delete(key);
     }

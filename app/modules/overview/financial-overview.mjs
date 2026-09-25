@@ -1,6 +1,7 @@
 const MONEY_SCALE = 4;
 const DAY_MS = 86400000;
 const QUALITY_VALUES = new Set(['complete', 'partial', 'unavailable']);
+const QUALITY_RANK = new Map([['complete', 0], ['partial', 1], ['unavailable', 2]]);
 const REVENUE_CATEGORIES = new Set(['revenue', 'revenue_return']);
 const MISSING_REASON_ORDER = [
   'cost_missing',
@@ -175,7 +176,7 @@ function normalizeLine(line, period, quality) {
   const category = requiredText(valueFrom(line, 'categoryCode', 'category_code'), 'overview_invalid_line');
   const accountingDate = validateCalendarDate(valueFrom(line, 'accountingDate', 'accounting_date'));
   if (accountingDate < period.start || accountingDate > period.end) invalid('overview_line_period_mismatch');
-  if (normalizeQuality(line.quality) !== quality) invalid('overview_line_quality_mismatch');
+  if (QUALITY_RANK.get(normalizeQuality(line.quality)) > QUALITY_RANK.get(quality)) invalid('overview_line_quality_mismatch');
   const rawProductId=valueFrom(line,'productId','product_id');
   const productId=rawProductId===null||rawProductId===undefined?null:requiredText(rawProductId,'overview_invalid_line');
   return { scope, productId, category, amount: parseScale4Money(valueFrom(line, 'amountSigned', 'amount_signed')) };

@@ -73,6 +73,26 @@ test('service reads only exact arbitrary published envelopes and compares the im
   assert.deepEqual(overview.comparison.period, { start: '2026-07-12', end: '2026-08-18', timezone: 'Europe/Moscow' });
 });
 
+test('service preserves an uncovered requested range and exposes it as unavailable',async()=>{
+  const requested={start:'2026-08-01',end:'2026-09-25',timezone:'Europe/Moscow'};
+  const overview=await getFinancialOverview('user-1','store-1',requested.start,requested.end,{
+    loadPeriodPair:async()=>({
+      publication_id:'publication-1',published_at:new Date('2026-09-25T10:00:00Z'),method_version:'financial-result-v5',
+      scope:{type:'selected_products',productIds:['product-1']},
+      current:{period_start:requested.start,period_end:requested.end,quality:'unavailable',missing_reasons:['report_coverage_incomplete'],
+        totals:null,lines:[],source_freshness:new Date('2026-09-25T09:00:00Z'),covered_period:{start:'2026-08-03',end:'2026-09-20'},
+        cross_border_buyout:{present:null,reportCount:null}},previous:null
+    })
+  });
+  assert.equal(overview.status,'unavailable');
+  assert.deepEqual(overview.requestedPeriod,requested);
+  assert.deepEqual(overview.coveredPeriod,{start:'2026-08-03',end:'2026-09-20'});
+  assert.deepEqual(overview.missingReasons,['report_coverage_incomplete']);
+  assert.equal(overview.totals.revenue,null);
+  assert.deepEqual(overview.crossBorderBuyout,{present:null,reportCount:null});
+  assert.equal(overview.comparison.comparable,false);
+});
+
 test('partial periods never show a percentage without proven comparable coverage', async () => {
   const partial = period('2026-09-14', '2026-09-20', { quality: 'partial', missingReasons: ['cost_missing'] });
   const previous = period('2026-09-07', '2026-09-13', { quality: 'partial', missingReasons: ['cost_missing'] });
