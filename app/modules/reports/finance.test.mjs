@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decimal, financialComponentScope, financialDateRange, financialHistoricalWeekRange, financialParserVersion, financialReportPeriodMatches, financialRequestDelaySeconds, loadWbFinancialReports, normalizeFinancialOperation, normalizeFinancialReports, parseFinancialJson } from './finance.mjs';
+import { decimal, financialComponentScope, financialDateRange, financialHistoricalWeekRange, financialParserVersion, financialReportPeriodMatches, financialRequestDelaySeconds, loadWbFinancialReports, normalizeFinancialOperation, normalizeFinancialReports, parseFinancialJson, unverifiedFinancialComponents } from './finance.mjs';
 
 const row = (overrides = {}) => ({
   reportId: '90071992547409931', dateFrom: '2026-09-01', dateTo: '2026-09-07', createDate: '2026-09-08', currency: 'RUB',
@@ -122,7 +122,7 @@ test('unverified WB remuneration fields remain separate informational components
 });
 
 test('verified non-product WB charges have store scope only for exact field, document, operation and positive value', () => {
-  assert.equal(financialParserVersion, 'wb-finance-v3');
+  assert.equal(financialParserVersion, 'wb-finance-v4');
   const cases = [
     ['deliveryService', 'Логистика', 'logistics'],
     ['deliveryService', 'Доставка', 'logistics'],
@@ -156,4 +156,12 @@ test('unverified PVZ, loyalty and unrelated fields cannot become store expenses'
   const source = row({ nmId: null, retailAmount: null, docTypeName: '', sellerOperName: 'Штраф', penalty: '10', ppvzReward: '2', cashbackDiscount: '3' });
   const operation = normalizeFinancialOperation(source);
   assert.deepEqual(operation.components.filter(component => financialComponentScope(source, operation, component) === 'store').map(component => component.sourceField), ['penalty']);
+});
+
+test('unverified monetary fields and reverse signs are exposed for durable issues',()=>{
+  const source=row({nmId:null,retailAmount:null,docTypeName:'',sellerOperName:'Штраф',penalty:'-10',ppvzReward:'2',cashbackDiscount:'3'});
+  const operation=normalizeFinancialOperation(source);
+  assert.deepEqual(unverifiedFinancialComponents(source,operation,false),['cashbackDiscount','penalty','ppvzReward']);
+  const verified=row({nmId:null,retailAmount:null,docTypeName:'',sellerOperName:'Штраф',penalty:'10'});
+  assert.deepEqual(unverifiedFinancialComponents(verified,normalizeFinancialOperation(verified),false),[]);
 });

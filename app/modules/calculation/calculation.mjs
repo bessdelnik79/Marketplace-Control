@@ -138,6 +138,7 @@ export function createInputFingerprint({
   reportVersionIds = [],
   reportNormalizationIds = [],
   costVersionIds = [],
+  operationLinkIds = [],
   expenseVersionIds = [],
   taxSettingVersionIds = [],
   periodStart,
@@ -150,6 +151,7 @@ export function createInputFingerprint({
     report_version_ids_sorted: sortedUnique(reportVersionIds),
     report_normalization_ids_sorted: sortedUnique(reportNormalizationIds),
     cost_version_ids_sorted: sortedUnique(costVersionIds),
+    operation_link_ids_sorted: sortedUnique(operationLinkIds),
     expense_version_ids_sorted: sortedUnique(expenseVersionIds),
     tax_setting_version_ids_sorted: sortedUnique(taxSettingVersionIds),
     period_start: range.start,
@@ -428,6 +430,7 @@ export function calculateFinancialResult({
   selectedProductIds = [],
   financialComponents = [],
   operations = [],
+  operationLinks = [],
   costVersions = [],
   expenses = [],
   taxSetting = null,
@@ -457,10 +460,6 @@ export function calculateFinancialResult({
       if (!NON_RESULT_CATEGORIES.has(component?.categoryCode)) reasons.add('operation_unclassified');
       continue;
     }
-    if (component?.scopeCode === 'store') {
-      reasons.add('store_component_unallocated');
-      continue;
-    }
     const scope = resolveScope(component, selected, reasons);
     if (!scope) continue;
     const amount = money(component.amountSigned);
@@ -475,6 +474,15 @@ export function calculateFinancialResult({
     });
   }
 
+  const operationsById = new Map();
+  for (const operation of operations) {
+    const id = String(operation?.id ?? '').trim();
+    if (!id) continue;
+    const matches = operationsById.get(id) ?? [];
+    matches.push(operation);
+    operationsById.set(id, matches);
+  }
+
   for (const operation of operations) {
     if (operation?.state === 'withdrawn' || !sourceInPeriod(operation, range)) continue;
     const operationId = uniqueSource(seenSources, operation?.id, 'operation');
@@ -486,7 +494,50 @@ export function calculateFinancialResult({
     const scope = resolveScope({ ...operation, scopeCode: operation.scopeCode ?? 'selected_product' }, selected, reasons);
     if (!scope) continue;
     if (operation.operationType === 'return') {
-      reasons.add('return_original_sale_unmatched');
+      const possibleLinks = operationLinks.filter(link =>
+        String(link?.fromOperationVersionId ?? '') === operationId &&
+        link?.linkType === 'return_to_original_sale' &&
+        link?.status !== 'rejected'
+      );
+      if (possibleLinks.length !== 1 || possibleLinks[0]?.status !== 'confirmed') {
+        reasons.add('return_original_sale_unmatched');
+        continue;
+      }
+      const link = possibleLinks[0];
+      const linkedSales = operationsById.get(String(link?.toOperationVersionId ?? '')) ?? [];
+      const sale = linkedSales.length === 1 ? linkedSales[0] : null;
+      const returnDate = validDate(operation.accountingDate);
+      if (!sale || sale?.state === 'withdrawn' || sale?.operationType !== 'sale' ||
+          String(sale?.productId ?? '') !== String(operation?.productId ?? '') ||
+          String(sale?.variantId ?? '') !== String(operation?.variantId ?? '') ||
+          validDate(sale?.accountingDate) > returnDate) {
+        reasons.add('return_original_sale_unmatched');
+        continue;
+      }
+      const saleDate = validDate(sale.accountingDate);
+      const cost = selectCost(costVersions, String(sale.variantId), saleDate);
+      if (!cost) {
+        reasons.add('cost_missing');
+        continue;
+      }
+      const unitCost = money(cost.unitCost);
+      if (unitCost < 0n) invalid('calculation_invalid_cost');
+      let cogs = roundedProductToMoney(operation.quantity, unitCost);
+      if (cogs < 0n) cogs = -cogs;
+      addLine(lines, {
+        ...scope,
+        accountingDate: returnDate,
+        categoryCode: 'cost_of_goods'
+      }, cogs, {
+        sourceType: 'return_cost',
+        sourceId: operationId,
+        originalSaleOperationId: requiredId(sale.id),
+        operationLinkId: requiredId(link.id),
+        costVersionId: requiredId(cost.id),
+        quantity: String(operation.quantity),
+        unitCost: formatDecimal(unitCost),
+        contributionAmount: formatDecimal(cogs)
+      });
       continue;
     }
     if (!scope.variantId) {
@@ -526,10 +577,6 @@ export function calculateFinancialResult({
     if (dailyRows.length === 0) continue;
     uniqueSource(seenSources, expense?.id, 'expense_version');
     validateScopeStructure(expense);
-    if (expense?.scopeCode === 'store') {
-      reasons.add('store_expense_unallocated');
-      continue;
-    }
     const scope = resolveScope(expense, selected, reasons);
     if (!scope) continue;
     for (const daily of dailyRows) {

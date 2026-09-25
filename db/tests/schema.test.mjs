@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,17);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,19);
   pass('password identity and expiring session are stored by migration 2');
   const financialMethod=await one("select implementation_version from mc.method_versions where code='wb_finance_import' and version_no=1");
   assert.equal(financialMethod.implementation_version,'wb-finance-v1');
@@ -47,6 +47,9 @@ try {
   assert.equal(resultMethodV2.parameters.verifiedComponents,'field-operation-name-v1');
   const financeMethodV3=await one("select implementation_version from mc.method_versions where code='wb_finance_import' and version_no=3");
   assert.equal(financeMethodV3.implementation_version,'wb-finance-v3');
+  const financeMethodV4=await one("select implementation_version,parameters from mc.method_versions where code='wb_finance_import' and version_no=4");
+  assert.equal(financeMethodV4.implementation_version,'wb-finance-v4');
+  assert.equal(financeMethodV4.parameters.dataIssueLifecycle,true);
   const resultMethodV3=await one("select implementation_version from mc.method_versions where code='financial_result' and version_no=3");
   assert.equal(resultMethodV3.implementation_version,'financial-result-v3');
   const resultMethodV4=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=4");
@@ -292,6 +295,18 @@ try {
   await q("update mc.calculation_runs set status='succeeded',quality='complete',missing_reasons='[]',finished_at=now() where id=$1",[taxRun.id]);
   await rejects('insert into mc.tax_computation_segments(business_id,store_id,tax_computation_id,tax_setting_version_id,segment_start,segment_end,taxable_base,rate_fraction) values($1,$2,$3,$4,$5,$6,0,0.05)',[b.id,store.id,taxComputation.id,taxV2.id,'2026-08-31','2026-09-06'],/calculation|running/,'successful run seals persisted tax artifacts');
   pass('selected-SKU tax artifacts enforce frozen inputs, exact basis and reconciled result evidence');
+  const resultMethodV5Id=(await one("select id from mc.method_versions where code='financial_result' and version_no=5")).id;
+  const periodRequest=await insert('calculation_requests',{...base,generation_no:90,selection_id:selection.id,method_version_id:resultMethodV5Id,period_start:'2026-08-31',period_end:'2026-09-06',input_fingerprint:'p03-period-tampering',is_latest:false});
+  await insert('calculation_request_products',{...base,request_id:periodRequest.id,product_id:products[0].id});
+  await insert('calculation_request_inputs',{...base,request_id:periodRequest.id,report_version_id:rv.id});
+  await insert('calculation_request_inputs',{...base,request_id:periodRequest.id,report_normalization_id:normalization.id});
+  const periodRun=await insert('calculation_runs',{...base,selection_id:selection.id,method_version_id:resultMethodV5Id,period_start:'2026-08-31',period_end:'2026-09-06',input_fingerprint:'p03-period-tampering',request_id:periodRequest.id,attempt_no:1});
+  await insert('calculation_inputs',{...base,run_id:periodRun.id,report_version_id:rv.id});
+  await insert('calculation_inputs',{...base,run_id:periodRun.id,report_normalization_id:normalization.id});
+  const falsePeriod=await insert('financial_period_results',{...base,run_id:periodRun.id,period_start:'2026-08-31',period_end:'2026-09-06',quality:'complete',missing_reasons:[],totals:{selectedProductsResultBeforeTax:'999.0000',storeLevelResultBeforeTax:'0.0000',availableResultBeforeTax:'999.0000',estimatedUsnTax:'0.0000',availableResultAfterTax:null,netProfit:null}});
+  const periodLine=await insert('result_lines',{...base,run_id:periodRun.id,financial_period_result_id:falsePeriod.id,product_id:products[0].id,variant_id:small.id,accounting_date:'2026-09-01',category_code:'revenue',amount_signed:2000,quality:'complete',result_scope:'selected_product'});
+  await insert('result_evidence',{...base,result_line_id:periodLine.id,financial_component_id:component.id,contribution_amount:2000});
+  await rejects("update mc.calculation_runs set status='succeeded',quality='complete',missing_reasons='[]',finished_at=now() where id=$1",[periodRun.id],/period result totals/,'persisted weekly totals cannot be sealed when they disagree with evidence');
   const run = await insert('calculation_runs',{...base,selection_id:selection.id,method_version_id:method.id,period_start:'2026-08-31',period_end:'2026-09-06',input_fingerprint:'inputs-1'});
   await insert('calculation_inputs',{...base,run_id:run.id,report_version_id:rv.id});
   await insert('calculation_inputs',{...base,run_id:run.id,cost_version_id:costV1.id});
@@ -413,6 +428,29 @@ try {
   const isolatedStore = await insert('stores',{business_id:isolated.id,external_account_id:'isolated',name:'isolated',status:'active'});
   const isolatedDoc = await insert('source_documents',{business_id:isolated.id,store_id:isolatedStore.id,origin:'wb_api',document_type:'catalog',checksum:'isolated',completeness:'complete'});
   await rejects('insert into mc.product_selections(business_id,store_id,plan_version_id,catalog_document_id,confirmed_by,product_limit_snapshot) values($1,$2,$3,$4,$5,3)',[isolated.id,isolatedStore.id,byCode.free.id,isolatedDoc.id,user.id],/nonempty and confirmed/,'cannot commit an unfinished selection header');
+
+  const upgradeDb=new PGlite();
+  try{
+    for(const migration of migrations.filter(name=>Number(name.split('_')[0])<=17))await upgradeDb.exec(await readFile(path.join(root,'db/migrations',migration),'utf8'));
+    const uq=async(sql,params=[])=>(await upgradeDb.query(sql,params)).rows;
+    const uone=async(sql,params=[])=>(await uq(sql,params))[0];
+    const upgradeUser=await uone(`insert into mc.users(display_name) values('Upgrade owner') returning id`);
+    const upgradeBusiness=await uone(`insert into mc.businesses(name) values('Upgrade business') returning id`);
+    await uq(`insert into mc.memberships(business_id,user_id) values($1,$2)`,[upgradeBusiness.id,upgradeUser.id]);
+    await uq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[upgradeUser.id,upgradeBusiness.id]);
+    const upgradeStore=await uone(`insert into mc.stores(business_id,external_account_id,name,status) values($1,'upgrade-store','Upgrade','active') returning id`,[upgradeBusiness.id]);
+    const upgradeDocument=await uone(`insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness) values($1,$2,'wb_api','weekly_realization','upgrade-document','complete') returning id`,[upgradeBusiness.id,upgradeStore.id]);
+    const upgradeReport=await uone(`insert into mc.reports(business_id,store_id,external_report_id,period_start,period_end) values($1,$2,'upgrade-report','2026-09-01','2026-09-07') returning id`,[upgradeBusiness.id,upgradeStore.id]);
+    const upgradeVersion=await uone(`insert into mc.report_versions(business_id,store_id,report_id,document_id,version_no,checksum,parser_version) values($1,$2,$3,$4,1,'upgrade-version','test') returning id`,[upgradeBusiness.id,upgradeStore.id,upgradeReport.id,upgradeDocument.id]);
+    const upgradeRow=await uone(`insert into mc.report_rows(business_id,store_id,report_version_id,external_row_key,row_number,raw_data,row_checksum) values($1,$2,$3,'1',1,'{}','upgrade-row') returning id`,[upgradeBusiness.id,upgradeStore.id,upgradeVersion.id]);
+    const upgradeMethods=await uq(`select id,implementation_version from mc.method_versions where code='wb_finance_import' and implementation_version in('wb-finance-v2','wb-finance-v3') order by version_no`);
+    for(const upgradeMethod of upgradeMethods)await uq(`insert into mc.report_normalizations(business_id,store_id,report_version_id,method_version_id,normalization_key,status) values($1,$2,$3,$4,$5,'succeeded')`,[upgradeBusiness.id,upgradeStore.id,upgradeVersion.id,upgradeMethod.id,`${upgradeMethod.implementation_version}:${upgradeVersion.id}`]);
+    await uq(`insert into mc.data_issues(business_id,store_id,document_id,report_row_id,code,severity) values($1,$2,$3,$4,'duplicate_issue','blocking'),($1,$2,$3,$4,'duplicate_issue','blocking')`,[upgradeBusiness.id,upgradeStore.id,upgradeDocument.id,upgradeRow.id]);
+    await upgradeDb.exec(await readFile(path.join(root,'db/migrations/018_data_issue_lifecycle.sql'),'utf8'));
+    const upgradedIssues=await uq(`select status,count(*)::int as n from mc.data_issues where code='duplicate_issue' group by status order by status`);
+    assert.deepEqual(upgradedIssues,[{status:'open',n:1},{status:'resolved',n:1}]);
+    pass('migration 18 resolves duplicate legacy issues instead of failing upgrade');
+  }finally{await upgradeDb.close();}
 
   // Produce a machine-derived field/constraint inventory for review.
   const cols = await q("select table_name,column_name,data_type,udt_name,is_nullable,column_default,numeric_precision,numeric_scale from information_schema.columns where table_schema='mc' order by table_name,ordinal_position");

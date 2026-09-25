@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export const financialReportsEndpoint = 'https://finance-api.wildberries.ru/api/finance/v1/sales-reports/detailed';
-export const financialParserVersion = 'wb-finance-v3';
+export const financialParserVersion = 'wb-finance-v4';
 const unverifiedMoneyFields = [
   'sellerPromo','installmentCoFinancingAmount','cashbackAmount','cashbackDiscount',
   'cashbackCommissionChange','sellerPromoDiscount','loyaltyDiscount','agencyVat'
@@ -266,6 +266,20 @@ export function financialComponentScope(row, operation, component, productMatche
       operation.operationType === rule.operation && component.categoryCode === rule.category &&
       raw !== null && raw !== '0' && !raw.startsWith('-')) return 'store';
   return 'product_expected';
+}
+
+const unverifiedResultCategories = new Set([
+  'wb_reward_without_vat','wb_reward_vat','pickup_reward',
+  'rebill_logistic_compensation','unclassified_financial_field','commission_adjustment'
+]);
+
+export function unverifiedFinancialComponents(row,operation,productMatched=false){
+  return operation.components.filter(component=>{
+    if(unverifiedResultCategories.has(component.categoryCode))return true;
+    const raw=decimal(row?.[component.sourceField]);
+    if(raw?.startsWith('-'))return true;
+    return financialComponentScope(row,operation,component,productMatched)==='product_expected'&&!productMatched;
+  }).map(component=>component.sourceField).sort();
 }
 
 export function financialHistoricalWeekRange(earliestDate, recentFrom, lastCheckedWeek) {

@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { withOwnedBusinessContext } from '../../infrastructure/database/client.mjs';
-import { financialComponentScope, financialHistoricalWeekRange, financialParserVersion, financialReportPeriodMatches, normalizeFinancialOperation, stableJson } from './finance.mjs';
+import { financialComponentScope, financialHistoricalWeekRange, financialParserVersion, financialReportPeriodMatches, normalizeFinancialOperation, stableJson, unverifiedFinancialComponents } from './finance.mjs';
 import { reconcileBankPayment } from './bank-reconciliation.mjs';
+import { buildSellerOffsetReference } from './full-report-credit.mjs';
 
 async function recordBankCheck(client, businessId, job, source, versionId, summary, summaryError) {
   if(summary)await client.query(
@@ -147,6 +148,16 @@ export async function completeFinancialSync(userId,job,{documentId,reports,summa
          values($1,$2,$3,$4,$5,'succeeded') returning id`,
         [businessId,job.store_id,version.id,method.id,`${financialParserVersion}:${version.id}`]
       )).rows[0];
+      await client.query(
+        `update mc.data_issues di
+            set status='resolved',resolved_at=now(),resolved_by_normalization_id=$1
+           from mc.report_rows rr
+           join mc.report_versions old_version on old_version.id=rr.report_version_id
+          where di.business_id=$2 and di.store_id=$3 and di.report_row_id=rr.id
+            and old_version.report_id=$4 and di.status='open'
+            and di.report_normalization_id is distinct from $1`,
+        [normalization.id,businessId,job.store_id,report.id]
+      );
       let rowNumber=0;
       for(const sourceRow of source.rows){
         rowNumber++;
@@ -159,6 +170,7 @@ export async function completeFinancialSync(userId,job,{documentId,reports,summa
           )).rows[0];
         if(!reportRow||reportRow.row_checksum!==sourceRow.rowChecksum)throw new Error('financial_duplicate_row_conflict');
         const normalized=normalizeFinancialOperation(sourceRow.rawData);
+        if(normalized.accountingDate<source.periodStart||normalized.accountingDate>source.periodEnd)throw new Error('financial_row_period_mismatch');
         let product=null,variant=null;
         if(normalized.wbArticle&&/^\d+$/.test(normalized.wbArticle))product=(await client.query(
           `select id from mc.products where business_id=$1 and store_id=$2 and wb_article=$3::bigint`,
@@ -170,13 +182,15 @@ export async function completeFinancialSync(userId,job,{documentId,reports,summa
           [businessId,job.store_id,product.id,normalized.variantBarcode]
         )).rows[0]??null;
         const addIssue=async(code,severity,details)=>{issues++;await client.query(
-          `insert into mc.data_issues(business_id,store_id,document_id,report_row_id,code,severity,details)
-           values($1,$2,$3,$4,$5,$6,$7::jsonb)`,
-          [businessId,job.store_id,documentId,reportRow.id,code,severity,JSON.stringify(details)]
+          `insert into mc.data_issues(business_id,store_id,document_id,report_row_id,report_normalization_id,code,severity,details)
+           values($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
+          [businessId,job.store_id,documentId,reportRow.id,normalization.id,code,severity,JSON.stringify(details)]
         );};
         if(normalized.wbArticle&&!product)await addIssue('financial_product_not_in_catalog','warning',{wbArticle:normalized.wbArticle});
         if(product&&normalized.variantBarcode&&!variant)await addIssue('financial_variant_not_matched','warning',{wbArticle:normalized.wbArticle});
         if(normalized.operationType==='unclassified')await addIssue('financial_operation_unclassified','blocking',{docTypeName:String(sourceRow.rawData.docTypeName??''),sellerOperName:String(sourceRow.rawData.sellerOperName??'')});
+        const unverifiedFields=unverifiedFinancialComponents(sourceRow.rawData,normalized,Boolean(product));
+        if(unverifiedFields.length)await addIssue('financial_components_unverified','blocking',{sourceFields:unverifiedFields});
         const sourceOperationKey=`${source.externalReportId}/${sourceRow.externalRowKey}`;
         let operation=(await client.query(`select id from mc.operations where store_id=$1 and source_code='wb_finance' and source_operation_key=$2`,[job.store_id,sourceOperationKey])).rows[0];
         if(!operation)operation=(await client.query(
@@ -259,7 +273,20 @@ export async function getFinancialSyncState(userId,storeId){
             r.status as run_status,r.error_code,r.started_at,r.finished_at,r.requested_from,r.requested_to,r.progress,
             (select max(ci.date_to) from mc.coverage_intervals ci where ci.business_id=ss.business_id and ci.store_id=ss.store_id and ci.stream_id=ss.id and ci.status='complete') as coverage_to,
             (select count(*)::int from mc.reports rp where rp.business_id=ss.business_id and rp.store_id=ss.store_id and rp.current_version_id is not null) as report_count,
-            (select count(*)::int from mc.data_issues di where di.business_id=ss.business_id and di.store_id=ss.store_id and di.status='open') as issue_count,
+            (select count(*)::int
+               from mc.data_issues di
+               join mc.report_normalizations rn on rn.id=di.report_normalization_id
+               join mc.report_versions rv on rv.id=rn.report_version_id
+               join mc.reports rp on rp.id=rv.report_id and rp.current_version_id=rv.id
+              where di.business_id=ss.business_id and di.store_id=ss.store_id and di.status='open'
+                and rn.status='succeeded'
+                and not exists(
+                  select 1 from mc.report_normalizations newer
+                  join mc.method_versions newer_method on newer_method.id=newer.method_version_id
+                  join mc.method_versions current_method on current_method.id=rn.method_version_id
+                  where newer.report_version_id=rn.report_version_id and newer.status='succeeded'
+                    and newer_method.code=current_method.code and newer_method.version_no>current_method.version_no
+                )) as issue_count,
             exists(select 1 from mc.product_selections ps where ps.business_id=ss.business_id and ps.store_id=ss.store_id and ps.status='confirmed') as selection_ready
        from mc.sync_streams ss
        left join lateral (select status,error_code,started_at,finished_at,requested_from,requested_to,progress from mc.sync_runs where stream_id=ss.id order by created_at desc limit 1) r on true
@@ -285,4 +312,30 @@ export async function getFinancialBankReconciliationState(userId,storeId){
       where r.business_id=$1 and r.store_id=$2 and r.report_type='weekly_realization' and r.current_version_id is not null`,
     [businessId,storeId]
   )).rows[0]);
+}
+
+export async function getFinancialSellerOffsetReference(userId,storeId,reportId){
+  const externalReportId=String(reportId??'');
+  if(!/^\d+$/.test(externalReportId))throw new Error('seller_offset_report_invalid');
+  return withOwnedBusinessContext(userId,async(client,businessId)=>{
+    const report=(await client.query(
+      `select id,external_report_id,period_start::text as period_start,period_end::text as period_end,current_version_id
+         from mc.reports
+        where business_id=$1 and store_id=$2 and report_type='weekly_realization' and external_report_id=$3`,
+      [businessId,storeId,externalReportId]
+    )).rows[0];
+    if(!report?.current_version_id)return null;
+    const rows=(await client.query(
+      `select raw_data from mc.report_rows
+        where business_id=$1 and store_id=$2 and report_version_id=$3
+        order by row_number,id`,
+      [businessId,storeId,report.current_version_id]
+    )).rows.map(row=>row.raw_data);
+    return{
+      reportUuid:report.id,
+      periodStart:report.period_start,
+      periodEnd:report.period_end,
+      ...buildSellerOffsetReference({reportId:report.external_report_id,rows})
+    };
+  });
 }

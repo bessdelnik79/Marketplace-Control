@@ -271,11 +271,13 @@
 | created_at | timestamp with time zone | нет | now() |
 | report_normalization_id | uuid | да | — |
 | tax_setting_version_id | uuid | да | — |
+| operation_link_id | uuid | да | — |
 
 Ограничения и связи:
 
+- `FOREIGN KEY (business_id, store_id, operation_link_id) REFERENCES mc.operation_links(business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, report_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id)`
-- `CHECK ((num_nonnulls(report_version_id, report_normalization_id, cost_version_id, expense_version_id, tax_setting_version_id) = 1))`
+- `CHECK ((num_nonnulls(report_version_id, report_normalization_id, cost_version_id, expense_version_id, tax_setting_version_id, operation_link_id) = 1))`
 - `FOREIGN KEY (business_id, tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id)`
 - `FOREIGN KEY (business_id, store_id, cost_version_id) REFERENCES mc.cost_versions(business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, expense_version_id) REFERENCES mc.expense_versions(business_id, store_id, id)`
@@ -317,18 +319,21 @@
 | expense_version_id | uuid | да | — |
 | tax_setting_version_id | uuid | да | — |
 | created_at | timestamp with time zone | нет | now() |
+| report_version_id | uuid | да | — |
+| operation_link_id | uuid | да | — |
 
 Ограничения и связи:
 
+- `FOREIGN KEY (business_id, store_id, operation_link_id) REFERENCES mc.operation_links(business_id, store_id, id)`
+- `CHECK ((num_nonnulls(report_version_id, report_normalization_id, cost_version_id, expense_version_id, tax_setting_version_id, operation_link_id) = 1))`
+- `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, cost_version_id) REFERENCES mc.cost_versions(business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, expense_version_id) REFERENCES mc.expense_versions(business_id, store_id, id)`
 - `UNIQUE (business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, report_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, request_id) REFERENCES mc.calculation_requests(business_id, store_id, id)`
 - `FOREIGN KEY (business_id, tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id)`
-- `CHECK ((num_nonnulls(report_normalization_id, cost_version_id, expense_version_id, tax_setting_version_id) = 1))`
 - `PRIMARY KEY (id)`
-- `UNIQUE NULLS NOT DISTINCT (request_id, report_normalization_id, cost_version_id, expense_version_id, tax_setting_version_id)`
 
 ## calculation_request_products
 
@@ -528,9 +533,15 @@
 | status | text | нет | 'open'::text |
 | details | jsonb | нет | '{}'::jsonb |
 | created_at | timestamp with time zone | нет | now() |
+| report_normalization_id | uuid | да | — |
+| resolved_at | timestamp with time zone | да | — |
+| resolved_by_normalization_id | uuid | да | — |
 
 Ограничения и связи:
 
+- `FOREIGN KEY (business_id, store_id, report_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id)`
+- `CHECK ((((status = 'open'::text) AND (resolved_at IS NULL) AND (resolved_by_normalization_id IS NULL)) OR ((status = 'resolved'::text) AND (resolved_at IS NOT NULL) AND (resolved_by_normalization_id IS NOT NULL)) OR (status = 'accepted_limitation'::text)))`
+- `FOREIGN KEY (business_id, store_id, resolved_by_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, document_id) REFERENCES mc.source_documents(business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, report_row_id) REFERENCES mc.report_rows(business_id, store_id, id)`
 - `PRIMARY KEY (id)`
@@ -641,6 +652,34 @@
 - `UNIQUE (operation_version_id, method_version_id, component_key)`
 - `PRIMARY KEY (id)`
 - `CHECK ((result_scope_classification = ANY (ARRAY['selected_product'::text, 'store'::text, 'product_expected'::text, 'unclassified'::text, 'reconciliation'::text])))`
+
+## financial_period_results
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| run_id | uuid | нет | — |
+| period_start | date | нет | — |
+| period_end | date | нет | — |
+| quality | text | нет | — |
+| missing_reasons | jsonb | нет | '[]'::jsonb |
+| totals | jsonb | да | — |
+| created_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `UNIQUE (business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, run_id) REFERENCES mc.calculation_runs(business_id, store_id, id)`
+- `CHECK ((period_end >= period_start))`
+- `CHECK ((jsonb_typeof(missing_reasons) = 'array'::text))`
+- `CHECK (isfinite(period_end))`
+- `CHECK (isfinite(period_start))`
+- `PRIMARY KEY (id)`
+- `CHECK ((quality = ANY (ARRAY['complete'::text, 'partial'::text, 'unavailable'::text])))`
+- `UNIQUE (run_id, period_start, period_end)`
+- `CHECK (((totals IS NULL) OR (jsonb_typeof(totals) = 'object'::text)))`
 
 ## financial_report_summary_versions
 
@@ -1083,6 +1122,7 @@
 | created_at | timestamp with time zone | нет | now() |
 | source_operation_version_id | uuid | да | — |
 | tax_computation_id | uuid | да | — |
+| operation_link_id | uuid | да | — |
 
 Ограничения и связи:
 
@@ -1091,7 +1131,8 @@
 - `FOREIGN KEY (business_id, store_id, financial_component_id) REFERENCES mc.financial_components(business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, result_line_id) REFERENCES mc.result_lines(business_id, store_id, id)`
 - `CHECK ((num_nonnulls(financial_component_id, cost_version_id, expense_version_id, tax_computation_id) = 1))`
-- `CHECK (((source_operation_version_id IS NULL) OR (cost_version_id IS NOT NULL)))`
+- `FOREIGN KEY (business_id, store_id, operation_link_id) REFERENCES mc.operation_links(business_id, store_id, id)`
+- `CHECK (((operation_link_id IS NULL) OR ((cost_version_id IS NOT NULL) AND (source_operation_version_id IS NOT NULL))))`
 - `PRIMARY KEY (id)`
 - `FOREIGN KEY (business_id, store_id, source_operation_version_id) REFERENCES mc.operation_versions(business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, tax_computation_id) REFERENCES mc.tax_computations(business_id, store_id, id)`
@@ -1113,10 +1154,12 @@
 | quality | text | нет | — |
 | created_at | timestamp with time zone | нет | now() |
 | result_scope | text | нет | 'selected_product'::text |
+| financial_period_result_id | uuid | да | — |
 
 Ограничения и связи:
 
 - `CHECK ((((result_scope = 'selected_product'::text) AND (product_id IS NOT NULL)) OR ((result_scope = 'store'::text) AND (product_id IS NULL) AND (variant_id IS NULL))))`
+- `FOREIGN KEY (business_id, store_id, financial_period_result_id) REFERENCES mc.financial_period_results(business_id, store_id, id)`
 - `UNIQUE (business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.product_selection_items(business_id, store_id, product_id)`
 - `FOREIGN KEY (business_id, store_id, product_id, variant_id) REFERENCES mc.variants(business_id, store_id, product_id, id)`
@@ -1368,6 +1411,7 @@
 
 Ограничения и связи:
 
+- `UNIQUE (run_id, period_start, period_end, product_id)`
 - `UNIQUE (business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.product_selection_items(business_id, store_id, product_id)`
 - `FOREIGN KEY (business_id, store_id, run_id) REFERENCES mc.calculation_runs(business_id, store_id, id)`
@@ -1376,7 +1420,6 @@
 - `CHECK (isfinite(period_end))`
 - `CHECK (isfinite(period_start))`
 - `PRIMARY KEY (id)`
-- `UNIQUE (run_id, product_id)`
 - `CHECK ((tax_amount >= (0)::numeric))`
 
 ## tax_setting_versions

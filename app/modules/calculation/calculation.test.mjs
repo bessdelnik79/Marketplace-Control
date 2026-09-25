@@ -61,6 +61,7 @@ test('canonical JSON and input fingerprint are stable across object and input ar
     reportVersionIds: ['report-2', 'report-1'],
     reportNormalizationIds: ['normalization-2', 'normalization-1'],
     costVersionIds: ['cost-2', 'cost-1'],
+    operationLinkIds: ['link-2', 'link-1'],
     expenseVersionIds: ['expense-1'],
     taxSettingVersionIds: [],
     periodStart: '2026-07-13',
@@ -71,10 +72,12 @@ test('canonical JSON and input fingerprint are stable across object and input ar
     selectedProductIds: ['product-a', 'product-b'],
     reportVersionIds: [...base.reportVersionIds].reverse(),
     reportNormalizationIds: [...base.reportNormalizationIds].reverse(),
-    costVersionIds: [...base.costVersionIds].reverse()
+    costVersionIds: [...base.costVersionIds].reverse(),
+    operationLinkIds: [...base.operationLinkIds].reverse()
   };
   assert.equal(createInputFingerprint(base), createInputFingerprint(reordered));
   assert.notEqual(createInputFingerprint(base), createInputFingerprint({ ...base, costVersionIds: ['cost-3'] }));
+  assert.notEqual(createInputFingerprint(base), createInputFingerprint({ ...base, operationLinkIds: ['link-3'] }));
   assert.match(createInputFingerprint(base), /^[a-f0-9]{64}$/);
 });
 
@@ -95,7 +98,7 @@ test('even periodization truncates to four places and puts the exact remainder o
   assert.deepEqual(periodizeExpense(expense, { periodStart: '2026-07-14', periodEnd: '2026-07-15' }).map(row => row.amountSigned), ['-3.3333', '-3.3334']);
 });
 
-test('calculation excludes unallocated store charges from selected SKU result', () => {
+test('calculation keeps confirmed store charges separate from selected SKU result', () => {
   const result = calculateFinancialResult({
     periodStart: '2026-07-13',
     periodEnd: '2026-07-19',
@@ -109,16 +112,20 @@ test('calculation excludes unallocated store charges from selected SKU result', 
     ]
   });
   assert.equal(result.quality, 'partial');
-  assert.deepEqual(result.missingReasons, ['store_component_unallocated', 'tax_setting_missing']);
+  assert.deepEqual(result.missingReasons, ['tax_setting_missing']);
   assert.deepEqual(result.totals, {
     selectedProductsResultBeforeTax: '87.5000',
-    storeLevelResultBeforeTax: '0.0000',
+    storeLevelResultBeforeTax: '-5.1250',
     availableResultBeforeTax: '87.5000',
     estimatedUsnTax: '0.0000',
     availableResultAfterTax: null,
     netProfit: null
   });
-  assert.equal(result.lines.length, 2);
+  assert.deepEqual(result.lines.map(line => [line.scopeCode, line.categoryCode, line.amountSigned]), [
+    ['selected_product', 'commission', '-12.5000'],
+    ['selected_product', 'revenue', '100.0000'],
+    ['store', 'storage', '-5.1250']
+  ]);
 });
 
 test('calculation sums values beyond Number safe precision exactly', () => {
@@ -182,7 +189,7 @@ test('sales COGS uses the latest effective version and exact rounded multiplicat
   assert.equal(cogs[1].evidence[0].costVersionId, 'cost-new');
 });
 
-test('only selected product expenses enter result; unallocated store expense is explicit', () => {
+test('store expenses stay separate from selected product expenses', () => {
   const result = calculateFinancialResult({
     periodStart: '2026-07-14', periodEnd: '2026-07-15', selectedProductIds: ['product-1'],
     expenses: [
@@ -191,13 +198,65 @@ test('only selected product expenses enter result; unallocated store expense is 
     ]
   });
   assert.equal(result.totals.selectedProductsResultBeforeTax, '-6.0000');
-  assert.equal(result.totals.storeLevelResultBeforeTax, '0.0000');
-  assert.ok(result.missingReasons.includes('store_expense_unallocated'));
-  assert.deepEqual(result.lines.map(line => line.categoryCode), ['packaging', 'packaging']);
+  assert.equal(result.totals.storeLevelResultBeforeTax, '-2.5000');
+  assert.ok(!result.missingReasons.includes('store_expense_unallocated'));
   assert.deepEqual(result.lines.map(line => [line.scopeCode, line.accountingDate, line.amountSigned]), [
     ['selected_product', '2026-07-14', '-3.0000'],
+    ['store', '2026-07-14', '-2.5000'],
     ['selected_product', '2026-07-15', '-3.0000']
   ]);
+});
+
+test('return COGS restores original sale cost on the return date', () => {
+  const result = calculateFinancialResult({
+    periodStart: '2026-07-13', periodEnd: '2026-07-19', selectedProductIds: ['product-1'],
+    operations: [
+      { id: 'sale-before-period', operationType: 'sale', productId: 'product-1', variantId: 'variant-1', accountingDate: '2026-07-10', quantity: '2' },
+      { id: 'return-1', operationType: 'return', productId: 'product-1', variantId: 'variant-1', accountingDate: '2026-07-16', quantity: '-1.234567' }
+    ],
+    operationLinks: [
+      { id: 'link-1', fromOperationVersionId: 'return-1', toOperationVersionId: 'sale-before-period', linkType: 'return_to_original_sale', status: 'confirmed' }
+    ],
+    costVersions: [
+      { id: 'cost-at-sale', variantId: 'variant-1', effectiveFrom: '2026-01-01', unitCost: '10.0000' },
+      { id: 'cost-at-return', variantId: 'variant-1', effectiveFrom: '2026-07-15', unitCost: '60.0000' }
+    ]
+  });
+  const cogs = result.lines.find(line => line.categoryCode === 'cost_of_goods');
+  assert.equal(cogs.accountingDate, '2026-07-16');
+  assert.equal(cogs.amountSigned, '12.3457');
+  assert.deepEqual(cogs.evidence, [{
+    sourceType: 'return_cost', sourceId: 'return-1', originalSaleOperationId: 'sale-before-period',
+    operationLinkId: 'link-1', costVersionId: 'cost-at-sale', quantity: '-1.234567',
+    unitCost: '10.0000', contributionAmount: '12.3457'
+  }]);
+  assert.equal(result.totals.selectedProductsResultBeforeTax, '12.3457');
+  assert.ok(!result.missingReasons.includes('return_original_sale_unmatched'));
+});
+
+test('return COGS stays absent for missing, non-confirmed or multiple active links', () => {
+  const base = {
+    periodStart: '2026-07-13', periodEnd: '2026-07-19', selectedProductIds: ['product-1'],
+    operations: [
+      { id: 'sale-1', operationType: 'sale', productId: 'product-1', variantId: 'variant-1', accountingDate: '2026-07-13', quantity: '1' },
+      { id: 'sale-2', operationType: 'sale', productId: 'product-1', variantId: 'variant-1', accountingDate: '2026-07-13', quantity: '1' },
+      { id: 'return-1', operationType: 'return', productId: 'product-1', variantId: 'variant-1', accountingDate: '2026-07-14', quantity: '-1' }
+    ],
+    costVersions: [{ id: 'cost-1', variantId: 'variant-1', effectiveFrom: '2026-01-01', unitCost: '10.0000' }]
+  };
+  const cases = [
+    [],
+    [{ id: 'ambiguous', fromOperationVersionId: 'return-1', toOperationVersionId: 'sale-1', linkType: 'return_to_original_sale', status: 'ambiguous' }],
+    [
+      { id: 'link-1', fromOperationVersionId: 'return-1', toOperationVersionId: 'sale-1', linkType: 'return_to_original_sale', status: 'confirmed' },
+      { id: 'link-2', fromOperationVersionId: 'return-1', toOperationVersionId: 'sale-2', linkType: 'return_to_original_sale', status: 'confirmed' }
+    ]
+  ];
+  for (const operationLinks of cases) {
+    const result = calculateFinancialResult({ ...base, operationLinks });
+    assert.equal(result.lines.filter(line => line.evidence.some(item => item.sourceType === 'return_cost')).length, 0);
+    assert.ok(result.missingReasons.includes('return_original_sale_unmatched'));
+  }
 });
 
 test('expenses reject unknown categories and store scope rejects product linkage', () => {
