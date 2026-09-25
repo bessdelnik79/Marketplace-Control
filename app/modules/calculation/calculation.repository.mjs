@@ -171,43 +171,91 @@ export async function getCurrentFinancialResult(userId,storeId){
   });
 }
 
+async function getCurrentPublicationContext(client,businessId,storeId){
+  const publication=(await client.query(
+    `select p.id as publication_id,p.created_at as published_at,r.id as run_id,r.request_id,
+            m.code as method_code,m.implementation_version as method_version,b.timezone
+       from mc.publications p join mc.calculation_runs r on r.id=p.run_id
+       join mc.method_versions m on m.id=r.method_version_id
+       join mc.businesses b on b.id=p.business_id
+      where p.business_id=$1 and p.store_id=$2 and p.is_current
+      order by p.created_at desc limit 1`,[businessId,storeId]
+  )).rows[0];
+  if(!publication)return null;
+  const productIds=(await client.query(
+    `select product_id from mc.calculation_request_products where request_id=$1 order by product_id`,[publication.request_id]
+  )).rows.map(row=>row.product_id);
+  return{...publication,scope:{type:'selected_products',productIds}};
+}
+
+async function getPeriodEnvelope(client,runId,periodStart,periodEnd){
+  const period=(await client.query(
+    `select id as period_result_id,period_start::text,period_end::text,quality,missing_reasons,totals
+       from mc.financial_period_results
+      where run_id=$1 and period_start=$2 and period_end=$3`,[runId,periodStart,periodEnd]
+  )).rows[0];
+  if(!period)return null;
+  const coverage=(await client.query(
+    `select max(d.received_at) as source_freshness,
+            min(greatest(rep.period_start,$2::date))::text as covered_start,
+            max(least(rep.period_end,$3::date))::text as covered_end
+       from mc.calculation_inputs i
+       join mc.report_versions rv on rv.id=i.report_version_id
+       join mc.reports rep on rep.id=rv.report_id
+       join mc.source_documents d on d.id=rv.document_id
+      where i.run_id=$1 and rep.period_start<=$3 and rep.period_end>=$2`,[runId,period.period_start,period.period_end]
+  )).rows[0];
+  const lines=(await client.query(
+    `select result_scope,product_id,variant_id,accounting_date::text,category_code,amount_signed::text,quality
+       from mc.result_lines where financial_period_result_id=$1
+      order by accounting_date,result_scope,product_id nulls last,variant_id nulls last,category_code,id`,[period.period_result_id]
+  )).rows;
+  const computations=(await client.query(
+    `select id,product_id,taxable_base::text,tax_amount::text from mc.tax_computations
+      where run_id=$1 and period_start=$2 and period_end=$3 order by product_id`,[runId,period.period_start,period.period_end]
+  )).rows;
+  const taxTotals=(await client.query(
+    `select coalesce(sum(taxable_base),0)::text as taxable_base,coalesce(sum(tax_amount),0)::text as tax_amount
+       from mc.tax_computations where run_id=$1 and period_start=$2 and period_end=$3`,[runId,period.period_start,period.period_end]
+  )).rows[0];
+  const segments=(await client.query(
+    `select s.tax_computation_id,c.product_id,s.tax_setting_version_id,s.segment_start::text,s.segment_end::text,s.taxable_base::text,s.rate_fraction::text
+       from mc.tax_computation_segments s join mc.tax_computations c on c.id=s.tax_computation_id
+      where c.run_id=$1 and c.period_start=$2 and c.period_end=$3 order by c.product_id,s.segment_start`,[runId,period.period_start,period.period_end]
+  )).rows;
+  const taxReasons=period.missing_reasons.filter(reason=>reason.startsWith('tax_')||reason==='vat_method_unsupported'||reason==='report_coverage_incomplete');
+  const usable=computations.length>0&&!taxReasons.some(reason=>['tax_setting_missing','tax_method_unsupported','tax_source_unverified','tax_source_unlinked','tax_base_missing','tax_base_negative_unverified','report_coverage_incomplete'].includes(reason));
+  return{...period,source_freshness:coverage.source_freshness,covered_period:coverage.covered_start?{start:coverage.covered_start,end:coverage.covered_end}:null,lines,taxReference:{scope:'selected_products',method:'seller_defined_usn_income_selected_line1_estimate',quality:taxReasons.length?'partial':'complete',missingReasons:taxReasons,usable,includedInResult:usable,
+    taxableBase:usable?taxTotals.taxable_base:null,estimatedTax:usable?taxTotals.tax_amount:null,
+    products:computations.map(row=>({productId:row.product_id,taxableBase:row.taxable_base,estimatedTax:row.tax_amount})),
+    segments:segments.map(row=>({productId:row.product_id,taxComputationId:row.tax_computation_id,taxSettingVersionId:row.tax_setting_version_id,segmentStart:row.segment_start,segmentEnd:row.segment_end,taxableBase:row.taxable_base,rateFraction:row.rate_fraction}))}};
+}
+
 export async function getPublishedFinancialPeriod(userId,storeId,periodStart,periodEnd){
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
-    const period=(await client.query(
-      `select p.id as publication_id,p.created_at as published_at,r.id as run_id,r.request_id,
-              pr.id as period_result_id,pr.period_start::text,pr.period_end::text,pr.quality,pr.missing_reasons,pr.totals,
-              m.code as method_code,m.implementation_version as method_version
-         from mc.publications p join mc.calculation_runs r on r.id=p.run_id
-         join mc.method_versions m on m.id=r.method_version_id
-         join mc.financial_period_results pr on pr.run_id=r.id
-        where p.business_id=$1 and p.store_id=$2 and p.is_current and pr.period_start=$3 and pr.period_end=$4
-        order by p.created_at desc limit 1`,[businessId,storeId,periodStart,periodEnd]
-    )).rows[0];
-    if(!period)return null;
-    const lines=(await client.query(
-      `select result_scope,product_id,variant_id,accounting_date::text,category_code,amount_signed::text,quality
-         from mc.result_lines where financial_period_result_id=$1
-        order by accounting_date,result_scope,product_id nulls last,variant_id nulls last,category_code,id`,[period.period_result_id]
-    )).rows;
-    const computations=(await client.query(
-      `select id,product_id,taxable_base::text,tax_amount::text from mc.tax_computations
-        where run_id=$1 and period_start=$2 and period_end=$3 order by product_id`,[period.run_id,period.period_start,period.period_end]
-    )).rows;
-    const taxTotals=(await client.query(
-      `select coalesce(sum(taxable_base),0)::text as taxable_base,coalesce(sum(tax_amount),0)::text as tax_amount
-         from mc.tax_computations where run_id=$1 and period_start=$2 and period_end=$3`,[period.run_id,period.period_start,period.period_end]
-    )).rows[0];
-    const segments=(await client.query(
-      `select s.tax_computation_id,c.product_id,s.tax_setting_version_id,s.segment_start::text,s.segment_end::text,s.taxable_base::text,s.rate_fraction::text
-         from mc.tax_computation_segments s join mc.tax_computations c on c.id=s.tax_computation_id
-        where c.run_id=$1 and c.period_start=$2 and c.period_end=$3 order by c.product_id,s.segment_start`,[period.run_id,period.period_start,period.period_end]
-    )).rows;
-    const taxReasons=period.missing_reasons.filter(reason=>reason.startsWith('tax_')||reason==='vat_method_unsupported'||reason==='report_coverage_incomplete');
-    const usable=computations.length>0&&!taxReasons.some(reason=>['tax_setting_missing','tax_method_unsupported','tax_source_unverified','tax_source_unlinked','tax_base_missing','tax_base_negative_unverified','report_coverage_incomplete'].includes(reason));
-    return{...period,lines,taxReference:{scope:'selected_products',method:'seller_defined_usn_income_selected_line1_estimate',quality:taxReasons.length?'partial':'complete',missingReasons:taxReasons,usable,includedInResult:usable,
-      taxableBase:usable?taxTotals.taxable_base:null,estimatedTax:usable?taxTotals.tax_amount:null,
-      products:computations.map(row=>({productId:row.product_id,taxableBase:row.taxable_base,estimatedTax:row.tax_amount})),
-      segments:segments.map(row=>({productId:row.product_id,taxComputationId:row.tax_computation_id,taxSettingVersionId:row.tax_setting_version_id,segmentStart:row.segment_start,segmentEnd:row.segment_end,taxableBase:row.taxable_base,rateFraction:row.rate_fraction}))}};
+    const publication=await getCurrentPublicationContext(client,businessId,storeId);
+    if(!publication)return null;
+    const period=await getPeriodEnvelope(client,publication.run_id,periodStart,periodEnd);
+    return period?{...publication,...period}:null;
+  });
+}
+
+export async function getPublishedFinancialPeriodPair(userId,storeId,{periodStart=null,periodEnd=null,previousPeriodStart=null,previousPeriodEnd=null}={}){
+  return withOwnedBusinessContext(userId,async(client,businessId)=>{
+    const publication=await getCurrentPublicationContext(client,businessId,storeId);
+    if(!publication)return null;
+    if(!periodStart||!periodEnd){
+      const latest=(await client.query(
+        `select period_start::text,period_end::text from mc.financial_period_results
+          where run_id=$1 order by period_end desc,period_start desc limit 1`,[publication.run_id]
+      )).rows[0];
+      if(!latest)return{...publication,current:null,previous:null};
+      periodStart=latest.period_start;periodEnd=latest.period_end;
+    }
+    const current=await getPeriodEnvelope(client,publication.run_id,periodStart,periodEnd);
+    const previous=previousPeriodStart&&previousPeriodEnd
+      ?await getPeriodEnvelope(client,publication.run_id,previousPeriodStart,previousPeriodEnd):null;
+    return{...publication,current,previous};
   });
 }
 

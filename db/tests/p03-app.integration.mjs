@@ -8,7 +8,7 @@ const databaseName=new URL(integrationUrl).pathname.slice(1);
 if(!databaseName.toLowerCase().includes('test'))throw new Error('Refusing to run P0.3 integration tests outside a database whose name contains "test".');
 process.env.DATABASE_URL=integrationUrl;
 
-const {migrate,pool,runFinancialCalculation,beginFinancialSync,completeFinancialSync,failFinancialSync,getFinancialBankReconciliationState,getPublishedFinancialPeriod,getFinancialSellerOffsetReference,getFinancialSyncState}=await import('../../app/db.mjs');
+const {migrate,pool,runFinancialCalculation,beginFinancialSync,completeFinancialSync,failFinancialSync,getFinancialBankReconciliationState,getPublishedFinancialPeriod,getPublishedFinancialPeriodPair,getFinancialSellerOffsetReference,getFinancialSyncState}=await import('../../app/db.mjs');
 const ids={user:randomUUID(),business:randomUUID(),store:randomUUID()};
 
 await migrate();
@@ -289,6 +289,21 @@ test('P0.3 persists exact weekly results, links return cost fail-closed and isol
   assert.deepEqual(second.missing_reasons,[]);
   assert.equal(second.totals.availableResultAfterTax,'54.0000');
   assert.equal(await getPublishedFinancialPeriod(isolated.user,isolated.store,'2026-08-04','2026-08-10'),null);
+  const pair=await getPublishedFinancialPeriodPair(isolated.user,isolated.store,{periodStart:'2026-08-10',periodEnd:'2026-08-16',previousPeriodStart:'2026-08-03',previousPeriodEnd:'2026-08-09'});
+  assert.equal(pair.current.period_result_id,second.period_result_id);
+  assert.equal(pair.previous.period_result_id,first.period_result_id);
+  assert.equal(pair.publication_id,second.publication_id);
+  assert.equal(pair.method_version,'financial-result-v5');
+  assert.equal(pair.timezone,'Europe/Moscow');
+  assert.deepEqual(pair.scope,{type:'selected_products',productIds:[fixture.productId]});
+  assert.ok(pair.current.source_freshness);
+  assert.deepEqual(pair.current.covered_period,{start:'2026-08-10',end:'2026-08-16'});
+  assert.ok(pair.previous.source_freshness);
+  assert.deepEqual(pair.previous.covered_period,{start:'2026-08-03',end:'2026-08-09'});
+  assert.equal(await getPublishedFinancialPeriodPair(ids.user,isolated.store,{periodStart:'2026-08-10',periodEnd:'2026-08-16'}),null);
+  const latest=await getPublishedFinancialPeriodPair(isolated.user,isolated.store);
+  assert.equal(latest.current.period_start,'2026-08-10');
+  assert.equal(latest.previous,null);
   const returnEvidence=await isolatedContext(async client=>(await client.query(
     `select e.contribution_amount::text,e.quantity::text,l.status,
             (select count(*)::int from mc.calculation_request_inputs i where i.request_id=r.request_id and i.operation_link_id=e.operation_link_id) as frozen
