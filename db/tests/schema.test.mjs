@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,21);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,22);
   pass('password identity and expiring session are stored by migration 2');
   const financialMethod=await one("select implementation_version from mc.method_versions where code='wb_finance_import' and version_no=1");
   assert.equal(financialMethod.implementation_version,'wb-finance-v1');
@@ -117,8 +117,16 @@ try {
   await rejects("insert into mc.sync_streams(business_id,store_id,source_type) values($1,$2,'unknown')",[b.id,store.id],/check constraint/,'unknown operational source type is rejected');
   const operationalStream=await insert('sync_streams',{business_id:b.id,store_id:store.id,source_type:'operational_sales_funnel'});
   assert.deepEqual((await q('select user_id,store_id from mc.list_operational_sync_candidates(10) where store_id=$1',[store.id]))[0],{user_id:user.id,store_id:store.id});
+  await q("update mc.sync_streams set status='paused' where id=$1",[operationalStream.id]);
+  assert.equal((await one('select count(*)::int as n from mc.list_operational_sync_candidates(10) where store_id=$1',[store.id])).n,0);
+  await q("update mc.sync_streams set status='active' where id=$1",[operationalStream.id]);
+  await q("update mc.connections set status='invalid' where id=$1",[connection.id]);
+  await q('update mc.sync_streams set next_run_at=clock_timestamp() where id=$1',[operationalStream.id]);
+  assert.equal((await one('select count(*)::int as n from mc.list_operational_sync_candidates(10) where store_id=$1',[store.id])).n,0);
+  await q("update mc.connections set status='active' where id=$1",[connection.id]);
   pass('operational scheduler finds only due connected stores with a confirmed selection');
   const operationalRun=await insert('sync_runs',{business_id:b.id,store_id:store.id,stream_id:operationalStream.id,requested_from:'2026-09-14',requested_to:'2026-09-20',status:'running',started_at:new Date()});
+  await q('update mc.sync_streams set next_run_at=null where id=$1',[operationalStream.id]);
   assert.equal((await one('select count(*)::int as n from mc.list_operational_sync_candidates(10) where store_id=$1',[store.id])).n,0);
   pass('operational scheduler does not duplicate a recent running job');
   const operationalDocument=await insert('source_documents',{business_id:b.id,store_id:store.id,sync_run_id:operationalRun.id,origin:'wb_api',document_type:'operational_sales_funnel',checksum:'b'.repeat(64),completeness:'complete'});
@@ -445,6 +453,7 @@ try {
   await insert('memberships',{business_id:extensionBusiness.id,user_id:user.id});
   await context(extensionBusiness.id,user.id);
   const extensionStore = await insert('stores',{business_id:extensionBusiness.id,external_account_id:'extension',name:'Extension',status:'active'});
+  await insert('connections',{business_id:extensionBusiness.id,store_id:extensionStore.id,secret_ref:'database:extension',scopes:['analytics'],status:'active'});
   const extensionDoc = await insert('source_documents',{business_id:extensionBusiness.id,store_id:extensionStore.id,origin:'wb_api',document_type:'catalog',checksum:'extension',completeness:'complete'});
   const extensionProducts=[];
   for(let i=1;i<=4;i++) extensionProducts.push(await product(extensionStore,880000+i));
@@ -454,6 +463,7 @@ try {
   await one('select mc.add_products_to_selection($1,$2::uuid[]) as id',[extensionStore.id,[extensionProducts[3].id]]);
   assert.equal((await one('select count(*)::int as n from mc.product_selection_items where business_id=$1',[extensionBusiness.id])).n,4);
   assert.ok(new Date((await one('select next_run_at from mc.sync_streams where id=$1',[extensionOperationalStream.id])).next_run_at)<=new Date(Date.now()+5000));
+  assert.ok(new Date((await one('select next_run_at from mc.operational_sync_targets where store_id=$1',[extensionStore.id])).next_run_at)<=new Date(Date.now()+5000));
   pass('upgraded plan can extend a confirmed selection without replacing prior products');
   await rejects('select mc.add_products_to_selection($1,$2::uuid[])',[extensionStore.id,[extensionProducts[3].id]],/already selected/,'selected product cannot be added twice');
 

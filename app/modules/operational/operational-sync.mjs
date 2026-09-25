@@ -146,6 +146,7 @@ function safeLogger(logger) {
 
 export async function runOperationalSync(userId, storeId, {
   force = false,
+  businessId,
   fetchImpl = fetch,
   waitImpl = ms => new Promise(resolve => setTimeout(resolve, ms)),
   clock = () => new Date(),
@@ -160,7 +161,7 @@ export async function runOperationalSync(userId, storeId, {
   let job, snapshotId, range, published = false;
   try {
     range = operationalRollingMoscowRange(clock());
-    job = await operations.begin(userId, storeId, { force, ...range });
+    job = await operations.begin(userId, storeId, { force, ...(businessId ? { businessId } : {}), ...range });
     if (!job?.started) return { status: 'not_started', reason: job?.reason ?? 'unknown', range };
     const products = selectedProducts(job);
     const token = operationalToken(

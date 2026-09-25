@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { pool, withOwnedBusinessContext } from '../../infrastructure/database/client.mjs';
+import { pool, withBusinessContext, withOwnedBusinessContext } from '../../infrastructure/database/client.mjs';
 import { verifyOperationalSnapshotObject } from '../../infrastructure/storage/operational-source-storage.mjs';
 
 const parserVersion='wb-sales-funnel-v1';
@@ -26,9 +26,12 @@ function decimal(value){
   return text;
 }
 
-export async function beginOperationalSync(userId,storeId,{force=false,dateFrom,dateTo}={}){
+export async function beginOperationalSync(userId,storeId,{force=false,dateFrom,dateTo,businessId:targetBusinessId}={}){
   const range=period(dateFrom,dateTo);
-  return withOwnedBusinessContext(userId,async(client,businessId)=>{
+  const inContext=targetBusinessId
+    ? action=>withBusinessContext(userId,targetBusinessId,action)
+    : action=>withOwnedBusinessContext(userId,action);
+  return inContext(async(client,businessId)=>{
     await client.query(
       `insert into mc.sync_streams(business_id,store_id,source_type,next_run_at,status)
        select s.business_id,s.id,'operational_sales_funnel',now(),'active'
@@ -75,7 +78,7 @@ export async function beginOperationalSync(userId,storeId,{force=false,dateFrom,
 
 export async function reserveOperationalRequestSlot(userId,job,delaySeconds=20){
   if(!Number.isInteger(delaySeconds)||delaySeconds<20||delaySeconds>60)throw new Error('operational_invalid_rate_delay');
-  return withOwnedBusinessContext(userId,async(client,businessId)=>{
+  return withBusinessContext(userId,job.business_id,async(client,businessId)=>{
     if(businessId!==job.business_id||!job.seller_id)throw new Error('operational_context_mismatch');
     const rateKey=sha(`wb:analytics:sales-funnel:${job.seller_id}`);
     const slot=(await client.query(
@@ -90,7 +93,7 @@ export async function reserveOperationalRequestSlot(userId,job,delaySeconds=20){
 }
 
 export async function updateOperationalSyncProgress(userId,job,progress){
-  return withOwnedBusinessContext(userId,async(client,businessId)=>{
+  return withBusinessContext(userId,job.business_id,async(client,businessId)=>{
     if(businessId!==job.business_id)throw new Error('operational_context_mismatch');
     await client.query(`update mc.sync_runs set progress=$2::jsonb where id=$1 and business_id=$3 and status='running'`,[job.run_id,JSON.stringify(progress),businessId]);
   });
@@ -99,7 +102,7 @@ export async function updateOperationalSyncProgress(userId,job,progress){
 export async function completeOperationalSync(userId,job,{documentId,snapshotId,objects,metrics,fetchedAt=new Date(),storage}={}){
   const range=period(job.date_from,job.date_to);
   if(!Array.isArray(objects)||!objects.length||!Array.isArray(metrics))throw new Error('operational_invalid_result');
-  return withOwnedBusinessContext(userId,async(client,businessId)=>{
+  return withBusinessContext(userId,job.business_id,async(client,businessId)=>{
     if(businessId!==job.business_id||!Array.isArray(job.products)||!job.products.length)throw new Error('operational_context_mismatch');
     await client.query(`select 1 from mc.businesses where id=$1 for update`,[businessId]);
     const stream=(await client.query(`select id from mc.sync_streams where id=$1 and business_id=$2 and store_id=$3 for update`,[job.stream_id,businessId,job.store_id])).rows[0];
@@ -201,7 +204,7 @@ export async function completeOperationalSync(userId,job,{documentId,snapshotId,
 
 export async function failOperationalSync(userId,job,errorCode,{retryDelaySeconds=20}={}){
   if(!Number.isInteger(retryDelaySeconds)||retryDelaySeconds<20||retryDelaySeconds>300)throw new Error('operational_invalid_rate_delay');
-  return withOwnedBusinessContext(userId,async(client,businessId)=>{
+  return withBusinessContext(userId,job.business_id,async(client,businessId)=>{
     const stream=(await client.query(`select id from mc.sync_streams where id=$1 and business_id=$2 and store_id=$3 for update`,[job.stream_id,businessId,job.store_id])).rows[0];
     if(!stream)return;
     const code=String(errorCode).slice(0,100);

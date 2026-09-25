@@ -1016,6 +1016,24 @@
 - `CHECK ((status = ANY (ARRAY['received'::text, 'validated'::text, 'accepted'::text, 'rejected'::text])))`
 - `CHECK ((version_no > 0))`
 
+## operational_sync_targets
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| store_id | uuid | нет | — |
+| business_id | uuid | нет | — |
+| requested_by | uuid | нет | — |
+| next_run_at | timestamp with time zone | нет | now() |
+| status | text | нет | 'active'::text |
+| updated_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, requested_by) REFERENCES mc.memberships(business_id, user_id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `PRIMARY KEY (store_id)`
+- `CHECK ((status = ANY (ARRAY['active'::text, 'blocked'::text])))`
+
 ## operations
 
 | Поле | Тип | NULL | По умолчанию |

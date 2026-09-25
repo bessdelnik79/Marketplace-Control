@@ -51,6 +51,16 @@ async function storedObject(raw,snapshotId){
   return storeOperationalSnapshot({businessId:ids.business,storeId:ids.store,snapshotId,raw,root:rawRoot,masterKey});
 }
 
+test('global dispatcher sees only eligible targets without tenant context',async()=>{
+  const due=()=>pool.query(`select business_id,store_id from mc.list_operational_sync_candidates(10) where store_id=$1`,[ids.store]).then(result=>result.rows);
+  assert.deepEqual(await due(),[{business_id:ids.business,store_id:ids.store}]);
+  await context(ids.user,ids.business,client=>client.query(`update mc.connections set status='invalid' where store_id=$1`,[ids.store]));
+  await context(ids.user,ids.business,client=>client.query(`update mc.sync_streams set next_run_at=clock_timestamp() where store_id=$1 and source_type='operational_sales_funnel'`,[ids.store]));
+  assert.deepEqual(await due(),[]);
+  await context(ids.user,ids.business,client=>client.query(`update mc.connections set status='active' where store_id=$1`,[ids.store]));
+  assert.deepEqual(await due(),[{business_id:ids.business,store_id:ids.store}]);
+});
+
 test('operational repository atomically publishes immutable complete and partial versions',async()=>{
   const first=await beginOperationalSync(ids.user,ids.store,{force:true,...week});
   assert.equal(first.started,true);
@@ -210,6 +220,17 @@ test('snapshot publication and selection extension share a database mutex',async
   assert.equal(published.quality,'complete');
   const state=await getOperationalSyncState(ids.user,ids.store);
   assert.ok(new Date(state.next_run_at)<=new Date(Date.now()+5000));
+});
+
+test('dispatcher business id disambiguates users with multiple memberships',async()=>{
+  await context(ids.foreignUser,ids.foreignBusiness,client=>client.query(
+    `insert into mc.memberships(business_id,user_id,role,created_at) values($1,$2,'editor','2000-01-01T00:00:00Z')`,
+    [ids.foreignBusiness,ids.user]
+  ));
+  const job=await beginOperationalSync(ids.user,ids.store,{force:true,businessId:ids.business,...week});
+  assert.equal(job.started,true);
+  assert.equal(job.business_id,ids.business);
+  await failOperationalSync(ids.user,job,'operational_test_finished');
 });
 
 test.after(async()=>{await pool.end();await rm(rawRoot,{recursive:true,force:true});});

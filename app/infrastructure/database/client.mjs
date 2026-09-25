@@ -44,3 +44,15 @@ export async function withOwnedBusinessContext(userId, action) {
     return action(client, membership.business_id, membership.role);
   });
 }
+
+export async function withBusinessContext(userId, businessId, action) {
+  return withUserContext(userId, async client => {
+    const membership = (await client.query(
+      `select role from mc.memberships where user_id=$1 and business_id=$2`,
+      [userId, businessId]
+    )).rows[0];
+    if (!membership) throw new Error('business_not_found');
+    await client.query("select set_config('app.business_id',$1,true)", [businessId]);
+    return action(client, businessId, membership.role);
+  });
+}
