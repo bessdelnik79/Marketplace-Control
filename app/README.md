@@ -13,6 +13,7 @@
 | `modules/reports/` | Финансовые отчёты WB и их загрузка |
 | `modules/calculation/` | Финансовый расчёт и фоновый запуск |
 | `modules/overview/` | Чтение опубликованных недельных результатов и финансовая read-модель обзора |
+| `modules/operational/` | Sales Funnel v3, версии дневных заказов/выкупов и состояние синхронизации |
 | `infrastructure/database/` | Подключение к PostgreSQL, миграции и общий контекст транзакции |
 | `infrastructure/email/`, `security/`, `storage/` | Письма, шифрование и хранение исходных файлов |
 | `frontend/` | Все серверные HTML-страницы, клиентский JS, CSS и изображения |

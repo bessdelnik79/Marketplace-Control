@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,19);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,20);
   pass('password identity and expiring session are stored by migration 2');
   const financialMethod=await one("select implementation_version from mc.method_versions where code='wb_finance_import' and version_no=1");
   assert.equal(financialMethod.implementation_version,'wb-finance-v1');
@@ -113,6 +113,28 @@ try {
   await q('update mc.stores set status=$1 where id=$2',['archived',store.id]);
   await q('update mc.stores set status=$1 where id=$2',['active',store.id]);
   await rejects(selectSql,[store.id,doc.id,[products[3].id]],/already selected/,'reconnecting same store retains selection');
+
+  await rejects("insert into mc.sync_streams(business_id,store_id,source_type) values($1,$2,'unknown')",[b.id,store.id],/check constraint/,'unknown operational source type is rejected');
+  const operationalStream=await insert('sync_streams',{business_id:b.id,store_id:store.id,source_type:'operational_sales_funnel'});
+  const operationalRun=await insert('sync_runs',{business_id:b.id,store_id:store.id,stream_id:operationalStream.id,requested_from:'2026-09-14',requested_to:'2026-09-20',status:'running',started_at:new Date()});
+  const operationalDocument=await insert('source_documents',{business_id:b.id,store_id:store.id,sync_run_id:operationalRun.id,origin:'wb_api',document_type:'operational_sales_funnel',checksum:'b'.repeat(64),completeness:'complete'});
+  await rejects('insert into mc.operational_periods(business_id,store_id,period_start,period_end) values($1,$2,$3,$4)',[b.id,store.id,'2026-09-14','2026-09-21'],/check constraint/,'operational period is limited to seven inclusive days');
+  const operationalPeriod=await insert('operational_periods',{business_id:b.id,store_id:store.id,period_start:'2026-09-14',period_end:'2026-09-20'});
+  await rejects('insert into mc.operational_snapshots(business_id,store_id,operational_period_id,document_id,version_no,checksum,parser_version,fetched_at,quality,status,accepted_at) values($1,$2,$3,$4,2,$5,$6,now(),\'complete\',\'accepted\',now())',[b.id,store.id,operationalPeriod.id,operationalDocument.id,'d'.repeat(64),'test-v1'],/must start received/,'operational snapshot cannot bypass validation on insert');
+  const operationalSnapshot=await insert('operational_snapshots',{business_id:b.id,store_id:store.id,operational_period_id:operationalPeriod.id,document_id:operationalDocument.id,version_no:1,checksum:'c'.repeat(64),parser_version:'test-v1',fetched_at:new Date(),quality:'complete'});
+  await insert('source_objects',{business_id:b.id,store_id:store.id,document_id:operationalDocument.id,storage_key:`${b.id}/${store.id}/operational-snapshots/${operationalSnapshot.id}/part-0000.json.gz.enc`,part_number:0,byte_size:64,checksum:'e'.repeat(64),content_type:'application/json+gzip+aes-256-gcm'});
+  for(const [position,selectedProduct] of products.slice(0,3).entries()){
+    await insert('operational_snapshot_products',{business_id:b.id,store_id:store.id,snapshot_id:operationalSnapshot.id,product_id:selectedProduct.id,request_position:position+1});
+    for(let day=14;day<=20;day++)await insert('operational_daily_metrics',{business_id:b.id,store_id:store.id,snapshot_id:operationalSnapshot.id,product_id:selectedProduct.id,metric_date:`2026-09-${day}`,currency:'RUB',order_count:day,order_amount:String(day*100),buyout_count:day-1,buyout_amount:String((day-1)*100),row_checksum:String(position+1).repeat(64)});
+  }
+  await q("update mc.operational_snapshots set status='validated' where id=$1",[operationalSnapshot.id]);
+  await q("update mc.operational_snapshots set status='accepted',accepted_at=now() where id=$1",[operationalSnapshot.id]);
+  await insert('operational_snapshot_activations',{business_id:b.id,store_id:store.id,operational_period_id:operationalPeriod.id,snapshot_id:operationalSnapshot.id,document_id:operationalDocument.id,fetched_at:new Date()});
+  await q('update mc.operational_periods set current_snapshot_id=$1 where id=$2',[operationalSnapshot.id,operationalPeriod.id]);
+  assert.equal((await one('select quality from mc.operational_snapshots where id=$1',[operationalSnapshot.id])).quality,'complete');
+  pass('complete operational snapshot freezes selected scope and switches accepted current version');
+  await rejects('update mc.operational_daily_metrics set order_count=0 where snapshot_id=$1',[operationalSnapshot.id],/immutable/,'accepted operational daily metrics are immutable');
+  await rejects('update mc.operational_periods set current_snapshot_id=null where id=$1',[operationalPeriod.id],/cannot be cleared/,'accepted operational current pointer cannot be cleared');
 
   const b2 = await insert('businesses',{name:'Business B'});
   await insert('memberships',{business_id:b2.id,user_id:user.id});
@@ -352,6 +374,8 @@ try {
   assert.equal((await one('select count(*)::int as n from mc.stores')).n,1);
   assert.equal((await one('select count(*)::int as n from mc.products where store_id=$1',[store2.id])).n,0);
   assert.equal((await one('select count(*)::int as n from mc.selected_products')).n,3);
+  assert.equal((await one('select count(*)::int as n from mc.operational_periods')).n,1);
+  assert.equal((await one('select count(*)::int as n from mc.current_operational_daily_metrics')).n,21);
   pass('non-owner role sees only current business, including views');
   assert.equal((await one('select count(*)::int as n from mc.tax_settings')).n,2);
   assert.equal((await one('select count(*)::int as n from mc.tax_setting_versions where business_id=$1',[b2.id])).n,0);
@@ -360,19 +384,23 @@ try {
   assert.equal((await one('select count(*)::int as n from mc.memberships where user_id=$1',[user.id])).n,2);
   pass('authenticated user can discover own business before tenant context is set');
   assert.equal((await one('select count(*)::int as n from mc.products')).n,0);
-  for(const table of ['expenses','expense_versions','tax_settings','tax_setting_versions']) {
+  for(const table of ['expenses','expense_versions','tax_settings','tax_setting_versions','operational_periods','operational_snapshots','operational_snapshot_activations','operational_snapshot_products','operational_daily_metrics']) {
     assert.equal((await one(`select count(*)::int as n from mc.${table}`)).n,0);
   }
   pass('missing tenant context fails closed');
   await db.exec('reset role;');
   const taxRls=await q("select relrowsecurity,relforcerowsecurity from pg_class where oid in ('mc.tax_settings'::regclass,'mc.tax_setting_versions'::regclass)");
   assert.ok(taxRls.length===2&&taxRls.every(row=>row.relrowsecurity&&row.relforcerowsecurity));
-  await db.exec('grant insert,update on mc.tax_settings,mc.tax_setting_versions,mc.expenses,mc.expense_versions,mc.audit_events to mc_test_reader; set role mc_test_reader;');
+  const operationalRls=await q("select relrowsecurity,relforcerowsecurity from pg_class where oid in ('mc.operational_periods'::regclass,'mc.operational_snapshots'::regclass,'mc.operational_snapshot_activations'::regclass,'mc.operational_snapshot_products'::regclass,'mc.operational_daily_metrics'::regclass)");
+  assert.ok(operationalRls.length===5&&operationalRls.every(row=>row.relrowsecurity&&row.relforcerowsecurity));
+  pass('operational tables enforce tenant RLS and the current-day view inherits it');
+  await db.exec('grant insert,update on mc.tax_settings,mc.tax_setting_versions,mc.expenses,mc.expense_versions,mc.operational_periods,mc.audit_events to mc_test_reader; set role mc_test_reader;');
   await rejects('insert into mc.tax_settings(business_id,effective_from) values($1,$2)',[b.id,'2027-01-01'],/row-level security/,'missing tenant context prevents tax writes');
   await context(b.id,user.id);
   await rejects('insert into mc.tax_settings(business_id,effective_from) values($1,$2)',[b2.id,'2027-01-01'],/row-level security/,'non-owner cannot create tax identity in another tenant');
   await assert.rejects(()=>insert('tax_setting_versions',{...taxValues,business_id:b2.id,tax_setting_id:foreignTax.id,version_no:2}),/row-level security/);
   await rejects('insert into mc.expenses(business_id,store_id) values($1,$2)',[b2.id,store2.id],/row-level security/,'non-owner cannot create expense in another tenant');
+  await rejects('insert into mc.operational_periods(business_id,store_id,period_start,period_end) values($1,$2,$3,$4)',[b2.id,store2.id,'2026-09-14','2026-09-20'],/row-level security/,'non-owner cannot create an operational period in another tenant');
   assert.equal((await q('update mc.tax_settings set current_version_id=null where id=$1 returning id',[foreignTax.id])).length,0);
   const roleTax=await insert('tax_settings',{business_id:b.id,effective_from:'2027-01-01'});
   const roleTaxVersion=await insert('tax_setting_versions',{...taxValues,tax_setting_id:roleTax.id});
@@ -452,6 +480,24 @@ try {
     pass('migration 18 resolves duplicate legacy issues instead of failing upgrade');
   }finally{await upgradeDb.close();}
 
+  const operationalUpgradeDb=new PGlite();
+  try{
+    for(const migration of migrations.filter(name=>Number(name.split('_')[0])<=19))await operationalUpgradeDb.exec(await readFile(path.join(root,'db/migrations',migration),'utf8'));
+    const oq=async(sql,params=[])=>(await operationalUpgradeDb.query(sql,params)).rows;
+    const oone=async(sql,params=[])=>(await oq(sql,params))[0];
+    const upgradeUser=await oone(`insert into mc.users(display_name) values('Operational upgrade owner') returning id`);
+    const upgradeBusiness=await oone(`insert into mc.businesses(name) values('Operational upgrade business') returning id`);
+    await oq(`insert into mc.memberships(business_id,user_id) values($1,$2)`,[upgradeBusiness.id,upgradeUser.id]);
+    await oq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[upgradeUser.id,upgradeBusiness.id]);
+    const upgradeStore=await oone(`insert into mc.stores(business_id,external_account_id,name,status) values($1,'operational-upgrade','Operational upgrade','active') returning id`,[upgradeBusiness.id]);
+    await oq(`insert into mc.connections(business_id,store_id,secret_ref,status) values($1,$2,'database:upgrade','active')`,[upgradeBusiness.id,upgradeStore.id]);
+    await oq(`select set_config('app.user_id','',false),set_config('app.business_id','',false)`);
+    await operationalUpgradeDb.exec(await readFile(path.join(root,'db/migrations/020_operational_sales_funnel.sql'),'utf8'));
+    await oq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[upgradeUser.id,upgradeBusiness.id]);
+    assert.equal((await oone(`select count(*)::int as n from mc.sync_streams where store_id=$1 and source_type='operational_sales_funnel'`,[upgradeStore.id])).n,1);
+    pass('migration 20 backfills an existing connected WB store without tenant context leakage');
+  }finally{await operationalUpgradeDb.close();}
+
   // Produce a machine-derived field/constraint inventory for review.
   const cols = await q("select table_name,column_name,data_type,udt_name,is_nullable,column_default,numeric_precision,numeric_scale from information_schema.columns where table_schema='mc' order by table_name,ordinal_position");
   const constraints = await q("select c.relname as table_name,con.conname,con.contype,pg_get_constraintdef(con.oid) as definition from pg_constraint con join pg_class c on c.oid=con.conrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='mc' order by c.relname,con.conname");
@@ -468,7 +514,7 @@ try {
   }
   if(process.env.DB_TEST_CHECK_ONLY!=='1') {
     await mkdir(path.join(root,'outputs'),{recursive:true});
-    await writeFile(path.join(root,'outputs/database-v1-dictionary.md'),inventory.join('\n')+'\n');
+    await writeFile(path.join(root,'outputs/database-v1-dictionary.md'),inventory.join('\n').trimEnd()+'\n');
     await mkdir(path.join(root,'work'),{recursive:true});
     await writeFile(path.join(root,'work/db-test-result.json'),JSON.stringify({engine:version,passed:count,tables:tables.length},null,2));
   }

@@ -75,7 +75,7 @@ export async function saveWbConnection(userId, {storeId,sellerId,scopes,encrypte
        on conflict(connection_id) do update set ciphertext=excluded.ciphertext,nonce=excluded.nonce,auth_tag=excluded.auth_tag,key_version=excluded.key_version,updated_at=now()`,
       [businessId,connection.id,encrypted.ciphertext,encrypted.nonce,encrypted.authTag,encrypted.keyVersion]
     );
-    for(const sourceType of ['catalog','financial_reports'])await client.query(
+    for(const sourceType of ['catalog','financial_reports','operational_sales_funnel'])await client.query(
       `insert into mc.sync_streams(business_id,store_id,source_type,next_run_at,status)
        values($1,$2,$3,now(),'active') on conflict(store_id,source_type) do update set status='active',next_run_at=now()`,
       [businessId,storeId,sourceType]

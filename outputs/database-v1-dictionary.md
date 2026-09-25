@@ -878,6 +878,144 @@
 - `CHECK ((state = ANY (ARRAY['active'::text, 'withdrawn'::text])))`
 - `CHECK ((version_no > 0))`
 
+## operational_daily_metrics
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| snapshot_id | uuid | нет | — |
+| product_id | uuid | нет | — |
+| metric_date | date | нет | — |
+| currency | text | нет | — |
+| order_count | bigint | нет | — |
+| order_amount | numeric(20,4) | нет | — |
+| buyout_count | bigint | нет | — |
+| buyout_amount | numeric(20,4) | нет | — |
+| row_checksum | text | нет | — |
+| created_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `UNIQUE (business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, snapshot_id, product_id) REFERENCES mc.operational_snapshot_products(business_id, store_id, snapshot_id, product_id)`
+- `CHECK ((buyout_amount >= (0)::numeric))`
+- `CHECK ((buyout_count >= 0))`
+- `CHECK ((currency = 'RUB'::text))`
+- `CHECK (isfinite(metric_date))`
+- `CHECK ((order_amount >= (0)::numeric))`
+- `CHECK ((order_count >= 0))`
+- `PRIMARY KEY (id)`
+- `CHECK ((row_checksum ~ '^[0-9a-f]{64}$'::text))`
+- `UNIQUE (snapshot_id, product_id, metric_date)`
+
+## operational_periods
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| source_code | text | нет | 'wb_sales_funnel_v3'::text |
+| period_start | date | нет | — |
+| period_end | date | нет | — |
+| current_snapshot_id | uuid | да | — |
+| created_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id, id, current_snapshot_id) REFERENCES mc.operational_snapshots(business_id, store_id, operational_period_id, id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `UNIQUE (business_id, store_id, id)`
+- `CHECK (((period_end >= period_start) AND (period_end <= (period_start + 6))))`
+- `CHECK (isfinite(period_end))`
+- `CHECK (isfinite(period_start))`
+- `PRIMARY KEY (id)`
+- `CHECK ((source_code = 'wb_sales_funnel_v3'::text))`
+- `UNIQUE (store_id, source_code, period_start, period_end)`
+
+## operational_snapshot_activations
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| operational_period_id | uuid | нет | — |
+| snapshot_id | uuid | нет | — |
+| document_id | uuid | нет | — |
+| fetched_at | timestamp with time zone | нет | — |
+| created_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id, document_id) REFERENCES mc.source_documents(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, operational_period_id, snapshot_id) REFERENCES mc.operational_snapshots(business_id, store_id, operational_period_id, id)`
+- `UNIQUE (business_id, store_id, id)`
+- `UNIQUE (document_id)`
+- `PRIMARY KEY (id)`
+
+## operational_snapshot_products
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| snapshot_id | uuid | нет | — |
+| product_id | uuid | нет | — |
+| request_position | integer | нет | — |
+| created_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.product_selection_items(business_id, store_id, product_id)`
+- `FOREIGN KEY (business_id, store_id, snapshot_id) REFERENCES mc.operational_snapshots(business_id, store_id, id)`
+- `UNIQUE (business_id, store_id, snapshot_id, product_id)`
+- `PRIMARY KEY (snapshot_id, product_id)`
+- `CHECK ((request_position > 0))`
+- `UNIQUE (snapshot_id, request_position)`
+
+## operational_snapshots
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| operational_period_id | uuid | нет | — |
+| document_id | uuid | нет | — |
+| version_no | integer | нет | — |
+| checksum | text | нет | — |
+| parser_version | text | нет | — |
+| source_timezone | text | нет | 'Europe/Moscow'::text |
+| fetched_at | timestamp with time zone | нет | — |
+| quality | text | нет | — |
+| missing_reasons | jsonb | нет | '[]'::jsonb |
+| status | text | нет | 'received'::text |
+| accepted_at | timestamp with time zone | да | — |
+| created_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id, document_id) REFERENCES mc.source_documents(business_id, store_id, id)`
+- `UNIQUE (business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, operational_period_id) REFERENCES mc.operational_periods(business_id, store_id, id)`
+- `UNIQUE (business_id, store_id, operational_period_id, id)`
+- `CHECK (((status = 'accepted'::text) = (accepted_at IS NOT NULL)))`
+- `CHECK ((((quality = 'complete'::text) AND (missing_reasons = '[]'::jsonb)) OR ((quality = ANY (ARRAY['partial'::text, 'unavailable'::text])) AND (jsonb_array_length(missing_reasons) > 0))))`
+- `CHECK ((checksum ~ '^[0-9a-f]{64}$'::text))`
+- `UNIQUE (document_id)`
+- `CHECK ((jsonb_typeof(missing_reasons) = 'array'::text))`
+- `UNIQUE (operational_period_id, checksum)`
+- `UNIQUE (operational_period_id, version_no)`
+- `CHECK ((length(TRIM(BOTH FROM parser_version)) > 0))`
+- `PRIMARY KEY (id)`
+- `CHECK ((quality = ANY (ARRAY['complete'::text, 'partial'::text, 'unavailable'::text])))`
+- `CHECK ((source_timezone = 'Europe/Moscow'::text))`
+- `CHECK ((status = ANY (ARRAY['received'::text, 'validated'::text, 'accepted'::text, 'rejected'::text])))`
+- `CHECK ((version_no > 0))`
+
 ## operations
 
 | Поле | Тип | NULL | По умолчанию |
@@ -1340,7 +1478,7 @@
 - `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
 - `UNIQUE (business_id, store_id, id)`
 - `PRIMARY KEY (id)`
-- `CHECK ((source_type = ANY (ARRAY['catalog'::text, 'financial_reports'::text])))`
+- `CHECK ((source_type = ANY (ARRAY['catalog'::text, 'financial_reports'::text, 'operational_sales_funnel'::text])))`
 - `CHECK ((status = ANY (ARRAY['active'::text, 'paused'::text, 'blocked'::text])))`
 - `UNIQUE (store_id, source_type)`
 

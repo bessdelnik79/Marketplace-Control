@@ -2,7 +2,7 @@
 
 Готовые транзакционные миграции PostgreSQL и проверки модели. На VM работает подключение WB с зашифрованным хранением токена, загрузка каталога и детализации финансовых отчётов; обработчик платежей ещё не реализован.
 
-- [Исходная миграция](migrations/001_initial.sql), [регистрация с паролем](migrations/002_password_auth.sql), [зашифрованные секреты WB](migrations/006_wb_connection_secrets.sql), [изображения каталога](migrations/007_product_images.sql), [расширение выбора товаров](migrations/008_extend_product_selection.sql), [финансовая синхронизация](migrations/009_financial_report_sync.sql), [общий лимитер запросов WB](migrations/010_wb_api_request_slots.sql), [пользовательские финансовые входы](migrations/011_user_financial_inputs.sql), [воспроизводимый расчёт P0.3](migrations/012_financial_calculation.sql), [сводки отчётов](migrations/013_financial_report_summaries.sql), [подтверждённые компоненты](migrations/014_financial_result_verified_components.sql), [store scope](migrations/015_wb_finance_store_scope.sql), [налоговую базу продавца](migrations/016_seller_defined_usn_reference.sql), [сохранённый налог выбранных SKU](migrations/017_selected_sku_tax_results.sql), [жизненный цикл проблем данных](migrations/018_data_issue_lifecycle.sql) и [недельные результаты P0.3](migrations/019_p03_period_return_results.sql).
+- [Исходная миграция](migrations/001_initial.sql), [регистрация с паролем](migrations/002_password_auth.sql), [зашифрованные секреты WB](migrations/006_wb_connection_secrets.sql), [изображения каталога](migrations/007_product_images.sql), [расширение выбора товаров](migrations/008_extend_product_selection.sql), [финансовая синхронизация](migrations/009_financial_report_sync.sql), [общий лимитер запросов WB](migrations/010_wb_api_request_slots.sql), [пользовательские финансовые входы](migrations/011_user_financial_inputs.sql), [воспроизводимый расчёт P0.3](migrations/012_financial_calculation.sql), [сводки отчётов](migrations/013_financial_report_summaries.sql), [подтверждённые компоненты](migrations/014_financial_result_verified_components.sql), [store scope](migrations/015_wb_finance_store_scope.sql), [налоговую базу продавца](migrations/016_seller_defined_usn_reference.sql), [сохранённый налог выбранных SKU](migrations/017_selected_sku_tax_results.sql), [жизненный цикл проблем данных](migrations/018_data_issue_lifecycle.sql), [недельные результаты P0.3](migrations/019_p03_period_return_results.sql) и [оперативные версии Sales Funnel](migrations/020_operational_sales_funnel.sql).
 - [Схема и принятые решения](../outputs/database-v1.md).
 - [Все поля, типы, значения и ограничения](../outputs/database-v1-dictionary.md).
 - [Проверки](tests/schema.test.mjs).
@@ -51,6 +51,14 @@ P03_INTEGRATION_DATABASE_URL=postgresql:///marketplace_control_p03_test node db/
 
 Он фиксирует выбор товаров, нормализацию отчёта, себестоимость, точный результат по доступным данным, причины неполноты и идемпотентную текущую публикацию. Тест также отказывается работать с базой, в имени которой нет `test`.
 
+Хранение оперативных snapshot P0.4 проверяется отдельным сценарием на настоящем PostgreSQL:
+
+```sh
+P04_INTEGRATION_DATABASE_URL=postgresql:///marketplace_control_p04_test node db/tests/p04-operational.integration.mjs
+```
+
+Сценарий проверяет атомарную публикацию полной и частичной версии, неизменяемую историю, повтор checksum без дубля версии, состояние ошибки, tenant isolation и общий rate-slot Analytics.
+
 В среде без npm можно указать путь к установленному модулю PGlite через переменную `PGLITE_MODULE`. В текущей сессии использовался скачанный в `work/` пакет версии 0.3.14, проверенный по SHA-512 из реестра. Каталог `work/` исключён из Git.
 
 ## Контракт серверного доступа
@@ -87,6 +95,7 @@ COMMIT;
 - Отчёт: загрузить полный исходник, создать версию `received`, записать строки, нормализовать и сверить, перевести в `validated`, затем `accepted`. Только после этого переключать указатель отчёта. Нельзя добавлять строки после начала валидации.
 - Расчёт: `calculation_requests` хранит последнее желаемое поколение и frozen snapshot товаров/входов. Каждая попытка создаёт неизменяемый `calculation_run`; строки и доказательства должны сойтись до атомарной публикации под блокировкой магазина. Повтор того же fingerprint не создаёт новую публикацию.
 - Нормализация `wb_finance_import` отделена от raw-версии отчёта и может повторно обработать тот же checksum новой версией метода. Исполняемый `financial-result-v5` сохраняет отдельный envelope для каждой недели: точные строки, налоговые доказательства, totals, quality и стабильные причины неполноты. Связанный возврат восстанавливает себестоимость исходной продажи; неподтверждённые операции исключаются fail-closed. Результат не называется чистой прибылью.
+- Оперативная воронка хранит зашифрованный raw-ответ отдельно от финансовых исходников. `operational_snapshots` замораживает выбранные товары и дневные метрики, проходит `received → validated → accepted`, после чего период атомарно переключает `current_snapshot_id`. `current_operational_daily_metrics` разрешает перекрывающиеся rolling-окна по самому свежему принятому snapshot для каждого товара и дня. Отсутствующая строка остаётся явным пробелом `partial`/`unavailable`, а не нулём или устаревшим значением.
 
 ## Лимиты и пока открытые решения
 
@@ -100,7 +109,7 @@ COMMIT;
 
 Проверены ограничения и бизнес-сценарии в одном встроенном PostgreSQL. Многопользовательская нагрузка, гонки двух реальных соединений, резервное восстановление, подключение WB и платёжные подписи не тестировались. Лимиты сериализуются блокировкой строки бизнеса; перед production нужен конкурентный интеграционный тест на целевом сервере.
 
-Будущие таблицы заказов, расширенной рекламы, запасов и контрольных точек добавляются следующими миграциями. Налоговые настройки добавлены миграцией 011, а доказуемая оценка УСН по выбранным SKU — миграцией 017. Таблицы MVP не выдаются за завершённую реализацию всех функций концепции.
+Версионные дневные заказы и выкупы Sales Funnel добавлены миграцией 020; расписание накопления истории и read-модель обзора остаются следующими частями P0.4. Таблицы расширенной рекламы, запасов и контрольных точек добавляются следующими миграциями. Таблицы MVP не выдаются за завершённую реализацию всех функций концепции.
 
 ## Регрессия модуля себестоимости
 
