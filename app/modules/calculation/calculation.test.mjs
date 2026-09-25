@@ -42,6 +42,12 @@ test('only verified WB field, operation and document combinations enter the resu
   }
   assert.equal(isVerifiedWbResultComponent({sourceField:'acquiringFee',categoryCode:'acquiring',operationType:'sale',docTypeName:'Продажа',sellerOperName:'Продажа',rawValue:'-10'}),false);
   assert.equal(isVerifiedWbResultComponent({sourceField:'deliveryService',categoryCode:'logistics',operationType:'service_charge',docTypeName:'',sellerOperName:'Логистика',rawValue:'-10'}),false);
+  assert.equal(isVerifiedWbResultComponent({sourceField:'deduction',categoryCode:'promotion',operationType:'adjustment',docTypeName:'',sellerOperName:'Удержание',bonusTypeName:'Оказание услуг «WB Продвижение», документ №315213683',rawValue:'304'}),true);
+  assert.equal(isVerifiedWbResultComponent({sourceField:'deduction',categoryCode:'promotion',operationType:'adjustment',docTypeName:'',sellerOperName:'Удержание',bonusTypeName:'Иная услуга',rawValue:'304'}),false);
+  assert.equal(isVerifiedWbResultComponent({sourceField:'deduction',categoryCode:'promotion',operationType:'adjustment',docTypeName:'',sellerOperName:'Удержание',bonusTypeName:'Оказание услуг «WB Продвижение», иной документ',rawValue:'304'}),false);
+  assert.equal(isVerifiedWbResultComponent({sourceField:'ppvzReward',categoryCode:'pickup_reward',operationType:'other',docTypeName:'Продажа',sellerOperName:'Возмещение за выдачу и возврат товаров на ПВЗ',rawValue:'16.29'}),true);
+  assert.equal(isVerifiedWbResultComponent({sourceField:'vw',categoryCode:'wb_reward_without_vat',operationType:'other',docTypeName:'Продажа',sellerOperName:'Возмещение за выдачу и возврат товаров на ПВЗ',rawValue:'-13.3522'}),true);
+  assert.equal(isVerifiedWbResultComponent({sourceField:'vwNds',categoryCode:'wb_reward_vat',operationType:'other',docTypeName:'Продажа',sellerOperName:'Возмещение за выдачу и возврат товаров на ПВЗ',rawValue:'-2.94'}),true);
 });
 
 test('money normalization preserves four decimal places without Number precision loss', () => {
@@ -152,6 +158,19 @@ test('signed commission adjustment is included while legacy additional payment i
   assert.equal(result.lines[0].categoryCode, 'commission_adjustment');
   assert.equal(result.lines[0].amountSigned, '-3.2500');
   assert.deepEqual(result.missingReasons, ['operation_unclassified', 'tax_setting_missing']);
+});
+
+test('promotion and independent PVZ source fields are store results with their original signs',()=>{
+  const result=calculateFinancialResult({periodStart:'2026-09-07',periodEnd:'2026-09-13',selectedProductIds:['product-1'],financialComponents:[
+    {id:'revenue',classificationStatus:'confirmed',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-09-07',categoryCode:'revenue',amountSigned:'100'},
+    {id:'promotion',classificationStatus:'confirmed',scopeCode:'store',accountingDate:'2026-09-08',categoryCode:'promotion',amountSigned:'-304'},
+    {id:'pvz-reward',classificationStatus:'confirmed',scopeCode:'store',accountingDate:'2026-09-09',categoryCode:'pickup_reward',amountSigned:'16.29'},
+    {id:'pvz-vw',classificationStatus:'confirmed',scopeCode:'store',accountingDate:'2026-09-09',categoryCode:'wb_reward_without_vat',amountSigned:'-13.3522'},
+    {id:'pvz-vat',classificationStatus:'confirmed',scopeCode:'store',accountingDate:'2026-09-09',categoryCode:'wb_reward_vat',amountSigned:'-2.94'}
+  ]});
+  assert.equal(result.totals.storeLevelResultBeforeTax,'-304.0022');
+  assert.equal(result.missingReasons.includes('operation_unclassified'),false);
+  assert.deepEqual(result.lines.map(line=>line.categoryCode),['revenue','promotion','pickup_reward','wb_reward_vat','wb_reward_without_vat']);
 });
 
 test('verified charges affect partial result once while PVZ and WB reward fields remain excluded', () => {
@@ -388,21 +407,35 @@ test('complete report proves zero tax while a voided effective boundary never fa
   assert.ok(voided.missingReasons.includes('tax_setting_missing'));
 });
 
-test('missing tax basis evidence never becomes a silent zero',()=>{
+test('full report coverage makes a selected SKU without sales an explicit zero tax computation',()=>{
   const result=calculateStoreTaxReference({periodStart:'2026-07-13',periodEnd:'2026-07-19',selectedProductIds:['product-1'],sourceRows:[],
     taxSettings:[{id:'active',effectiveFrom:'2026-01-01',regimeCode:'usn_income',usnRateFraction:'0.06'}]});
-  assert.equal(result.usable,false);
-  assert.equal(result.estimatedTax,null);
-  assert.ok(result.missingReasons.includes('tax_base_missing'));
+  assert.equal(result.usable,true);
+  assert.equal(result.estimatedTax,'0.0000');
+  assert.deepEqual(result.products,[{productId:'product-1',taxableBase:'0.0000',estimatedTax:'0.0000'}]);
+  assert.equal(result.missingReasons.includes('tax_base_missing'),false);
 });
 
-test('every selected SKU needs its own tax basis evidence',()=>{
+test('full report coverage gives every no-sale selected SKU a zero computation',()=>{
   const result=calculateStoreTaxReference({periodStart:'2026-07-13',periodEnd:'2026-07-19',selectedProductIds:['product-1','product-2'],
     sourceRows:[{id:'sale',productId:'product-1',accountingDate:'2026-07-13',docTypeName:'Продажа',sellerOperName:'Продажа',retailAmount:'100'}],
     taxSettings:[{id:'active',effectiveFrom:'2026-01-01',regimeCode:'usn_income',usnRateFraction:'0.06'}]});
+  assert.equal(result.usable,true);
+  assert.equal(result.estimatedTax,'6.0000');
+  assert.deepEqual(result.products,[
+    {productId:'product-1',taxableBase:'100.0000',estimatedTax:'6.0000'},
+    {productId:'product-2',taxableBase:'0.0000',estimatedTax:'0.0000'}
+  ]);
+  assert.equal(result.missingReasons.includes('tax_base_missing'),false);
+});
+
+test('incomplete report coverage still blocks a no-sale zero tax computation',()=>{
+  const result=calculateStoreTaxReference({periodStart:'2026-07-13',periodEnd:'2026-07-19',selectedProductIds:['product-1'],sourceRows:[],reportCoverageComplete:false,
+    taxSettings:[{id:'active',effectiveFrom:'2026-01-01',regimeCode:'usn_income',usnRateFraction:'0.06'}]});
   assert.equal(result.usable,false);
   assert.equal(result.estimatedTax,null);
-  assert.ok(result.missingReasons.includes('tax_base_missing'));
+  assert.deepEqual(result.missingReasons,['report_coverage_incomplete']);
+  assert.deepEqual(result.products,[{productId:'product-1',taxableBase:'0.0000',estimatedTax:'0.0000'}]);
 });
 
 test('missing tax setting does not invent missing VAT or tax base when retail evidence exists',()=>{
@@ -452,6 +485,10 @@ test('selected sale with missing amount and unlinked sale suppress tax estimate'
   const unlinked=calculateStoreTaxReference({...base,sourceRows:[valid,{...valid,id:'unlinked',productId:null,retailAmount:'10'}]});
   assert.equal(unlinked.estimatedTax,null);
   assert.ok(unlinked.missingReasons.includes('tax_source_unlinked'));
+  const missingAndUnlinked=calculateStoreTaxReference({...base,sourceRows:[valid,{...valid,id:'missing-unlinked',productId:null,retailAmount:null}]});
+  assert.equal(missingAndUnlinked.estimatedTax,null);
+  assert.ok(missingAndUnlinked.missingReasons.includes('tax_source_unlinked'));
+  assert.ok(missingAndUnlinked.missingReasons.includes('tax_source_unverified'));
 });
 
 test('output is deterministic regardless of source order and aggregates evidence', () => {

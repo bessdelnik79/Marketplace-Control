@@ -4,7 +4,7 @@ const MONEY_SCALE = 4;
 const RESULT_CATEGORIES = new Set([
   'revenue', 'revenue_return', 'commission', 'acquiring', 'logistics',
   'storage', 'acceptance', 'penalty', 'deduction', 'commission_adjustment',
-  'other_adjustment'
+  'other_adjustment', 'promotion', 'pickup_reward', 'wb_reward_without_vat', 'wb_reward_vat'
 ]);
 const NON_RESULT_CATEGORIES = new Set(['payout']);
 const VERIFIED_WB_COMPONENTS = new Map([
@@ -71,12 +71,22 @@ export function normalizeMoney(value) {
   return formatDecimal(money(value));
 }
 
-export function isVerifiedWbResultComponent({ categoryCode, sourceField, operationType, docTypeName, sellerOperName, rawValue }) {
+export function isVerifiedWbResultComponent({ categoryCode, sourceField, operationType, docTypeName, sellerOperName, bonusTypeName, rawValue }) {
   const value=String(rawValue??'').trim().replace(',', '.');
-  if(!/^\d+(?:\.\d+)?$/.test(value)||!/[1-9]/.test(value))return false;
+  if(!/^-?\d+(?:\.\d+)?$/.test(value)||!/[1-9]/.test(value))return false;
+  const pvzCategories=new Map([['ppvzReward','pickup_reward'],['vw','wb_reward_without_vat'],['vwNds','wb_reward_vat']]);
+  if(pvzCategories.get(sourceField)===categoryCode && operationType==='other' &&
+     String(docTypeName??'').trim()==='Продажа' && String(sellerOperName??'').trim()==='Возмещение за выдачу и возврат товаров на ПВЗ'){
+    return sourceField==='ppvzReward'?!value.startsWith('-'):value.startsWith('-');
+  }
+  if(value.startsWith('-'))return false;
   if (sourceField === 'retailAmount') {
     return (categoryCode === 'revenue' && operationType === 'sale') ||
       (categoryCode === 'revenue_return' && operationType === 'return');
+  }
+  if (sourceField === 'deduction' && categoryCode === 'promotion' && operationType === 'adjustment') {
+    return String(docTypeName ?? '').trim() === '' && String(sellerOperName ?? '').trim() === 'Удержание' &&
+      /^Оказание услуг «WB Продвижение», документ №\d+$/.test(String(bonusTypeName ?? '').trim());
   }
   const rule = VERIFIED_WB_COMPONENTS.get(sourceField);
   if (!rule || rule.category !== categoryCode || rule.operation !== operationType) return false;
@@ -192,7 +202,6 @@ export function calculateStoreTaxReference({ periodStart, periodEnd, selectedPro
   }
   const segments = new Map();
   const seen = new Set();
-  const productsWithBasisEvidence = new Set();
   for (const row of sourceRows) {
     const id = uniqueSource(seen, row?.id, 'financial_component');
     if (row?.state === 'withdrawn') continue;
@@ -204,6 +213,8 @@ export function calculateStoreTaxReference({ periodStart, periodEnd, selectedPro
     const operation = String(row?.sellerOperName ?? '').trim().toLocaleLowerCase('ru-RU');
     const isSaleOrReturn = (document === 'продажа' && operation === 'продажа') || (document === 'возврат' && operation === 'возврат');
     if (!productId) {
+      if (isSaleOrReturn) reasons.add('tax_source_unlinked');
+      if (isSaleOrReturn && (raw === null || raw === undefined || raw === '')) reasons.add('tax_source_unverified');
       if (raw !== null && raw !== undefined && raw !== '') {
         const text = String(raw).trim();
         if (!/^[+-]?\d+(?:[.,]\d{1,4})?$/.test(text) || money(text.replace(',', '.')) !== 0n) reasons.add('tax_source_unlinked');
@@ -222,7 +233,6 @@ export function calculateStoreTaxReference({ periodStart, periodEnd, selectedPro
     else if (document === 'возврат' && operation === 'возврат') sign = -1n;
     else { reasons.add('tax_source_unverified'); continue; }
     if (value < 0n) { reasons.add('tax_source_unverified'); continue; }
-    productsWithBasisEvidence.add(productId);
     const effective=effectiveSegments.find(item=>accountingDate>=item.segmentStart&&accountingDate<=item.segmentEnd);
     const setting = effective?.setting;
     if (!setting) { reasons.add('tax_setting_missing'); continue; }
@@ -270,7 +280,7 @@ export function calculateStoreTaxReference({ periodStart, periodEnd, selectedPro
     return { productId: product.productId, taxableBase: formatDecimal(product.base), estimatedTax: formatDecimal(amount) };
   });
   if (base < 0n || tax < 0n) reasons.add('tax_base_negative_unverified');
-  if (selected.size === 0 || [...selected].some(productId => !productsWithBasisEvidence.has(productId))) reasons.add('tax_base_missing');
+  if (selected.size === 0) reasons.add('tax_base_missing');
   const usable = rows.length > 0 && !['report_coverage_incomplete', 'tax_setting_missing', 'tax_method_unsupported', 'tax_source_unverified', 'tax_source_unlinked', 'tax_base_missing', 'tax_base_negative_unverified'].some(reason => reasons.has(reason));
   return {
     scope: 'selected_products', method: 'seller_defined_usn_income_selected_line1_estimate', quality: reasons.size ? 'partial' : 'complete',
@@ -448,6 +458,7 @@ export function calculateFinancialResult({
     const componentId = uniqueSource(seenSources, component?.id, 'financial_component');
     validateScopeStructure(component);
     if (component?.productId && !selected.has(String(component.productId))) continue;
+    if (component?.scopeCode === 'reconciliation') continue;
     if (NON_RESULT_CATEGORIES.has(component?.categoryCode)) continue;
     if (component?.classificationStatus !== 'confirmed') {
       reasons.add('operation_unclassified');

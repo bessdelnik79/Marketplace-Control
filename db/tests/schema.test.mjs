@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,22);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,23);
   pass('password identity and expiring session are stored by migration 2');
   const financialMethod=await one("select implementation_version from mc.method_versions where code='wb_finance_import' and version_no=1");
   assert.equal(financialMethod.implementation_version,'wb-finance-v1');
@@ -50,11 +50,23 @@ try {
   const financeMethodV4=await one("select implementation_version,parameters from mc.method_versions where code='wb_finance_import' and version_no=4");
   assert.equal(financeMethodV4.implementation_version,'wb-finance-v4');
   assert.equal(financeMethodV4.parameters.dataIssueLifecycle,true);
+  const financeMethodV5=await one("select implementation_version,parameters from mc.method_versions where code='wb_finance_import' and version_no=5");
+  assert.equal(financeMethodV5.implementation_version,'wb-finance-v5');
+  assert.equal(financeMethodV5.parameters.promotion,'wb-bonus-type-v1');
   const resultMethodV3=await one("select implementation_version from mc.method_versions where code='financial_result' and version_no=3");
   assert.equal(resultMethodV3.implementation_version,'financial-result-v3');
   const resultMethodV4=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=4");
   assert.equal(resultMethodV4.implementation_version,'financial-result-v4');
   assert.equal(resultMethodV4.parameters.rounding,'once-per-selected-product');
+  const resultMethodV6=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=6");
+  assert.equal(resultMethodV6.implementation_version,'financial-result-v6');
+  assert.equal(resultMethodV6.parameters.zeroSaleTaxBase,'complete-coverage-v1');
+  assert.deepEqual(await q("select code,class from mc.financial_categories where code in ('pickup_reward','wb_reward_without_vat','wb_reward_vat') order by code"),[
+    {code:'pickup_reward',class:'income'},{code:'wb_reward_vat',class:'expense'},{code:'wb_reward_without_vat',class:'expense'}
+  ]);
+  const guards=(await q("select proname,pg_get_functiondef(p.oid) as definition from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='mc' and proname in ('guard_period_result','guard_selected_tax_artifact','guard_selected_tax_finish','guard_run_finish') order by proname"));
+  assert.equal(guards.length,4);
+  for(const guard of guards)assert.match(guard.definition,/financial-result-v6/,guard.proname);
   const taxComputationColumns=(await q("select column_name from information_schema.columns where table_schema='mc' and table_name='tax_computations' order by column_name")).map(row=>row.column_name);
   assert.ok(taxComputationColumns.includes('product_id'));
   assert.ok(!taxComputationColumns.includes('tax_year')&&!taxComputationColumns.includes('tax_setting_version_id')&&!taxComputationColumns.includes('rate_fraction'));

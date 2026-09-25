@@ -83,6 +83,60 @@ test('P0.3 persists selected-SKU USN, deducts it once and idempotently keeps one
   assert.deepEqual([saved.computations,saved.segments,saved.basis,saved.tax_evidence],[1,1,1,1]);
 });
 
+test('verified 07-13 store sources do not create product-link issues and no-sale SKU persists zero tax',async()=>{
+  const scope={user:randomUUID(),business:randomUUID(),store:randomUUID()};
+  const scoped=async action=>{
+    const client=await pool.connect();
+    try{
+      await client.query('begin');
+      await client.query("select set_config('app.user_id',$1,true),set_config('app.business_id',$2,true)",[scope.user,scope.business]);
+      const value=await action(client);await client.query('commit');return value;
+    }catch(error){await client.query('rollback');throw error;}finally{client.release();}
+  };
+  const fixture=await scoped(async client=>{
+    await client.query(`insert into mc.users(id,display_name) values($1,'Verified store owner')`,[scope.user]);
+    await client.query(`insert into mc.businesses(id,name) values($1,'Verified store business')`,[scope.business]);
+    await client.query(`insert into mc.memberships(business_id,user_id,role) values($1,$2,'owner')`,[scope.business,scope.user]);
+    await client.query(`insert into mc.stores(id,business_id,external_account_id,name,status) values($1,$2,'verified-store','Verified store','active')`,[scope.store,scope.business]);
+    const catalog=(await client.query(`insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness) values($1,$2,'wb_api','catalog','verified-store-catalog','complete') returning id`,[scope.business,scope.store])).rows[0];
+    const products=[];
+    for(const [article,seller] of [[720001,'SALE'],[720002,'NO-SALE']])products.push((await client.query(
+      `insert into mc.products(business_id,store_id,wb_article,seller_article) values($1,$2,$3,$4) returning id`,[scope.business,scope.store,article,seller]
+    )).rows[0]);
+    const variant=(await client.query(`insert into mc.variants(business_id,store_id,product_id,external_variant_id) values($1,$2,$3,'default') returning id`,[scope.business,scope.store,products[0].id])).rows[0];
+    await client.query(`insert into mc.variant_identifiers(business_id,store_id,variant_id,identifier_type,identifier_value) values($1,$2,$3,'barcode','4720000000001')`,[scope.business,scope.store,variant.id]);
+    await client.query(`select mc.confirm_product_selection($1,$2,$3::uuid[])`,[scope.store,catalog.id,products.map(product=>product.id)]);
+    const cost=(await client.query(`insert into mc.variant_costs(business_id,store_id,product_id,variant_id,effective_from) values($1,$2,$3,$4,'2026-09-01') returning id`,[scope.business,scope.store,products[0].id,variant.id])).rows[0];
+    const costVersion=(await client.query(`insert into mc.cost_versions(business_id,store_id,cost_id,version_no,unit_cost,origin,changed_by) values($1,$2,$3,1,40,'manual',$4) returning id`,[scope.business,scope.store,cost.id,scope.user])).rows[0];
+    await client.query(`update mc.variant_costs set current_version_id=$1 where id=$2`,[costVersion.id,cost.id]);
+    const setting=(await client.query(`insert into mc.tax_settings(business_id,effective_from) values($1,'2026-01-01') returning id`,[scope.business])).rows[0];
+    const tax=(await client.query(`insert into mc.tax_setting_versions(business_id,tax_setting_id,version_no,regime_code,usn_rate_fraction,vat_mode,changed_by) values($1,$2,1,'usn_income',0.06,'exempt',$3) returning id`,[scope.business,setting.id,scope.user])).rows[0];
+    await client.query(`update mc.tax_settings set current_version_id=$1 where id=$2`,[tax.id,setting.id]);
+    const stream=(await client.query(`insert into mc.sync_streams(business_id,store_id,source_type,status) values($1,$2,'financial_reports','active') returning id`,[scope.business,scope.store])).rows[0];
+    const run=(await client.query(`insert into mc.sync_runs(business_id,store_id,stream_id,requested_from,requested_to,status,started_at) values($1,$2,$3,'2026-09-07','2026-09-13','running',now()) returning id`,[scope.business,scope.store,stream.id])).rows[0];
+    return{productIds:products.map(product=>product.id),streamId:stream.id,runId:run.id};
+  });
+  const rows=[
+    {externalRowKey:'sale',rowChecksum:'verified-sale',rawData:{reportId:9200,rrDate:'2026-09-08',docTypeName:'Продажа',sellerOperName:'Продажа',nmId:720001,sku:'4720000000001',quantity:1,retailAmount:'100',forPay:'100'}},
+    {externalRowKey:'storage',rowChecksum:'verified-storage',rawData:{reportId:9200,rrDate:'2026-09-09',docTypeName:'',sellerOperName:'Хранение',nmId:0,paidStorage:'5.51'}},
+    {externalRowKey:'promotion',rowChecksum:'verified-promotion',rawData:{reportId:9200,rrDate:'2026-09-10',docTypeName:'',sellerOperName:'Удержание',bonusTypeName:'Оказание услуг «WB Продвижение», документ №315213683',nmId:0,deduction:'304'}},
+    {externalRowKey:'pvz',rowChecksum:'verified-pvz',rawData:{reportId:9200,rrDate:'2026-09-11',docTypeName:'Продажа',sellerOperName:'Возмещение за выдачу и возврат товаров на ПВЗ',nmId:0,ppvzReward:'16.2900',vw:'-13.3522',vwNds:'-2.9400'}}
+  ];
+  await completeFinancialSync(scope.user,{business_id:scope.business,store_id:scope.store,stream_id:fixture.streamId,run_id:fixture.runId,date_from:'2026-09-07',date_to:'2026-09-13'},
+    {documentId:randomUUID(),reports:[{externalReportId:'9200',periodStart:'2026-09-07',periodEnd:'2026-09-13',checksum:'verified-store-report',rows}]});
+  const calculated=await runFinancialCalculation(scope.user,scope.store);
+  assert.equal(calculated.quality,'complete');
+  assert.deepEqual(calculated.missingReasons,[]);
+  assert.equal(calculated.totals.storeLevelResultBeforeTax,'-309.5122');
+  const persisted=await scoped(async client=>({
+    issues:(await client.query(`select code from mc.data_issues where store_id=$1 and status='open' and code in('financial_operation_unclassified','financial_components_unverified','financial_product_not_in_catalog')`,[scope.store])).rows,
+    tax:(await client.query(`select product_id,taxable_base::text,tax_amount::text from mc.tax_computations where run_id=$1 order by product_id`,[calculated.runId])).rows
+  }));
+  assert.deepEqual(persisted.issues,[]);
+  assert.equal(persisted.tax.length,2);
+  assert.deepEqual(persisted.tax.find(row=>row.product_id===fixture.productIds[1]),{product_id:fixture.productIds[1],taxable_base:'0.0000',tax_amount:'0.0000'});
+});
+
 test('financial sync reselects a previously accepted checksum without duplicating its version',async()=>{
   const fixture=await context(async client=>{
     await client.query(`insert into mc.sync_streams(business_id,store_id,source_type) values($1,$2,'financial_reports') on conflict(store_id,source_type) do nothing`,[ids.business,ids.store]);
@@ -308,7 +362,7 @@ test('P0.3 persists exact weekly results, links return cost fail-closed and isol
   assert.equal(pair.current.period_result_id,second.period_result_id);
   assert.equal(pair.previous.period_result_id,first.period_result_id);
   assert.equal(pair.publication_id,second.publication_id);
-  assert.equal(pair.method_version,'financial-result-v5');
+  assert.equal(pair.method_version,'financial-result-v6');
   assert.equal(pair.timezone,'Europe/Moscow');
   assert.deepEqual(pair.scope,{type:'selected_products',productIds:[fixture.productId]});
   assert.ok(pair.current.source_freshness);

@@ -54,7 +54,7 @@ test('a structurally covered range with an unavailable child exposes no values',
   assert.equal(result.quality,'unavailable');
   assert.equal(result.totals,null);
   assert.deepEqual(result.lines,[]);
-  assert.doesNotThrow(()=>buildFinancialPeriodOverview({...result,publication_id:'publication-1',method_version:'financial-result-v5',scope:'selected_products'}));
+  assert.doesNotThrow(()=>buildFinancialPeriodOverview({...result,publication_id:'publication-1',method_version:'financial-result-v6',scope:'selected_products'}));
 });
 
 test('mixed tax availability removes tax lines and keeps the aggregate before tax',()=>{
@@ -71,7 +71,7 @@ test('mixed tax availability removes tax lines and keeps the aggregate before ta
   assert.equal(result.totals.availableResultBeforeTax,'20.0000');
   assert.equal(result.totals.availableResultAfterTax,null);
   assert.equal(result.lines.some(line=>line.category_code==='estimated_usn_tax'),false);
-  const overview=buildFinancialPeriodOverview({...result,publication_id:'publication-1',method_version:'financial-result-v5',scope:'selected_products'});
+  const overview=buildFinancialPeriodOverview({...result,publication_id:'publication-1',method_version:'financial-result-v6',scope:'selected_products'});
   assert.deepEqual(overview.displayResult,{amount:'20.0000',basis:'before_tax'});
 });
 

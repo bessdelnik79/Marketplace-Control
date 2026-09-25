@@ -122,7 +122,7 @@ test('unverified WB remuneration fields remain separate informational components
 });
 
 test('verified non-product WB charges have store scope only for exact field, document, operation and positive value', () => {
-  assert.equal(financialParserVersion, 'wb-finance-v4');
+  assert.equal(financialParserVersion, 'wb-finance-v5');
   const cases = [
     ['deliveryService', 'Логистика', 'logistics'],
     ['deliveryService', 'Доставка', 'logistics'],
@@ -150,6 +150,52 @@ test('verified non-product WB charges have store scope only for exact field, doc
     assert.equal(financialComponentScope(source, { operationType: 'sale' }, component), 'product_expected');
     assert.equal(financialComponentScope(source, operation, { ...component, categoryCode: 'unclassified_financial_field' }), 'product_expected');
   }
+});
+
+test('zero sentinels do not create a product link for verified store storage',()=>{
+  const source=row({nmId:0,sku:'000',saName:'',srid:null,shkId:'0',barcode:'',retailAmount:null,docTypeName:'',sellerOperName:'Хранение',paidStorage:'5.51'});
+  const operation=normalizeFinancialOperation(source);
+  assert.equal(operation.wbArticle,null);
+  assert.equal(operation.variantBarcode,null);
+  const storage=operation.components.find(component=>component.sourceField==='paidStorage');
+  assert.equal(financialComponentScope(source,operation,storage),'store');
+  assert.equal(financialComponentScope({...source,nmId:'517676362'},operation,storage),'product_expected');
+});
+
+test('verified WB promotion is a distinct store expense while generic deductions stay generic',()=>{
+  const source=row({nmId:0,retailAmount:null,docTypeName:'',sellerOperName:'Удержание',bonusTypeName:'Оказание услуг «WB Продвижение», документ №315213683',deduction:'304'});
+  const operation=normalizeFinancialOperation(source);
+  const deduction=operation.components.find(component=>component.sourceField==='deduction');
+  assert.equal(deduction.categoryCode,'promotion');
+  assert.equal(financialComponentScope(source,operation,deduction),'store');
+  const generic={...source,bonusTypeName:'Иная услуга'};
+  assert.equal(normalizeFinancialOperation(generic).components.find(component=>component.sourceField==='deduction').categoryCode,'deduction');
+  const similar={...source,bonusTypeName:'Оказание услуг «WB Продвижение», иной документ'};
+  assert.equal(normalizeFinancialOperation(similar).components.find(component=>component.sourceField==='deduction').categoryCode,'deduction');
+  const linked={...source,nmId:'517676362'};
+  assert.equal(normalizeFinancialOperation(linked).components.find(component=>component.sourceField==='deduction').categoryCode,'deduction');
+});
+
+test('each exact PVZ source component is an independent store result without netting requirements',()=>{
+  const source=row({nmId:0,retailAmount:null,docTypeName:'Продажа',sellerOperName:'Возмещение за выдачу и возврат товаров на ПВЗ',ppvzReward:'16.2900',vw:'-13.3522',vwNds:'-2.9400'});
+  const operation=normalizeFinancialOperation(source);
+  assert.equal(operation.operationType,'other');
+  assert.deepEqual(operation.components.map(component=>[component.sourceField,financialComponentScope(source,operation,component)]),[
+    ['vw','store'],['vwNds','store'],['ppvzReward','store']
+  ]);
+  assert.deepEqual(unverifiedFinancialComponents(source,operation,false),[]);
+  const rewardOnly={...source,vw:null,vwNds:null};
+  const rewardOperation=normalizeFinancialOperation(rewardOnly);
+  assert.equal(rewardOperation.operationType,'other');
+  assert.deepEqual(rewardOperation.components.map(component=>[component.sourceField,financialComponentScope(rewardOnly,rewardOperation,component)]),[['ppvzReward','store']]);
+  const linked={...source,nmId:'517676362'};
+  const linkedOperation=normalizeFinancialOperation(linked);
+  assert.equal(linkedOperation.operationType,'unclassified');
+  assert.deepEqual(unverifiedFinancialComponents(linked,linkedOperation,false),['ppvzReward','vw','vwNds']);
+  const wrongSign={...rewardOnly,ppvzReward:'-16.29'};
+  const wrongSignOperation=normalizeFinancialOperation(wrongSign);
+  assert.equal(financialComponentScope(wrongSign,wrongSignOperation,wrongSignOperation.components[0]),'product_expected');
+  assert.deepEqual(unverifiedFinancialComponents(wrongSign,wrongSignOperation,false),['ppvzReward']);
 });
 
 test('unverified PVZ, loyalty and unrelated fields cannot become store expenses', () => {

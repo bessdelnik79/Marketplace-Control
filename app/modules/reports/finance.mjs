@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export const financialReportsEndpoint = 'https://finance-api.wildberries.ru/api/finance/v1/sales-reports/detailed';
-export const financialParserVersion = 'wb-finance-v4';
+export const financialParserVersion = 'wb-finance-v5';
 const unverifiedMoneyFields = [
   'sellerPromo','installmentCoFinancingAmount','cashbackAmount','cashbackDiscount',
   'cashbackCommissionChange','sellerPromoDiscount','loyaltyDiscount','agencyVat'
@@ -32,6 +32,43 @@ const storeServiceFields = new Map([
   ['penalty', { category: 'penalty', operation: 'adjustment', names: new Set(['штраф']) }],
   ['deduction', { category: 'deduction', operation: 'adjustment', names: new Set(['удержание']) }]
 ]);
+
+function hasRealItemIdentifier(row) {
+  return itemIdentifierFields.some(field => {
+    const value = row?.[field];
+    if (value === null || value === undefined) return false;
+    const text = String(value).trim();
+    return text !== '' && !/^0+(?:\.0+)?$/.test(text);
+  });
+}
+
+function realIdentifier(value) {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  return text !== '' && !/^0+(?:\.0+)?$/.test(text) ? text : null;
+}
+
+function isVerifiedPromotionRow(row) {
+  const deduction = decimal(row?.deduction);
+  return !hasRealItemIdentifier(row) && deduction !== null && deduction !== '0' && !deduction.startsWith('-') &&
+    String(row?.docTypeName ?? '').trim() === '' && String(row?.sellerOperName ?? '').trim() === 'Удержание' &&
+    /^Оказание услуг «WB Продвижение», документ №\d+$/.test(String(row?.bonusTypeName ?? '').trim());
+}
+
+function isVerifiedPvzStoreRow(row) {
+  return !hasRealItemIdentifier(row) && String(row?.docTypeName ?? '').trim() === 'Продажа' &&
+    String(row?.sellerOperName ?? '').trim() === 'Возмещение за выдачу и возврат товаров на ПВЗ';
+}
+
+function isVerifiedPvzComponent(row, component) {
+  if (!isVerifiedPvzStoreRow(row)) return false;
+  const raw = decimal(row?.[component.sourceField]);
+  if (raw === null || raw === '0') return false;
+  if (component.sourceField === 'ppvzReward') return component.categoryCode === 'pickup_reward' && !raw.startsWith('-');
+  if (component.sourceField === 'vw') return component.categoryCode === 'wb_reward_without_vat' && raw.startsWith('-');
+  if (component.sourceField === 'vwNds') return component.categoryCode === 'wb_reward_vat' && raw.startsWith('-');
+  return false;
+}
 
 function apiError(message, response, retryAfterMs) {
   const error = new Error(message);
@@ -104,7 +141,8 @@ export function normalizeFinancialOperation(row) {
   const docType = String(row?.docTypeName ?? '').trim().toLocaleLowerCase('ru-RU');
   const operationName = String(row?.sellerOperName ?? '').trim().toLocaleLowerCase('ru-RU');
   let operationType = 'unclassified';
-  if (docType === 'возврат' && operationName === 'возврат') operationType = 'return';
+  if (isVerifiedPvzStoreRow(row)) operationType = 'other';
+  else if (docType === 'возврат' && operationName === 'возврат') operationType = 'return';
   else if (docType === 'продажа' && operationName === 'продажа') operationType = 'sale';
   else if (hasMoney(row, ['deliveryService','rebillLogisticCost','paidStorage','paidAcceptance','ppvzSalesCommission','acquiringFee'])) operationType = 'service_charge';
   else if (hasMoney(row, ['penalty','deduction','additionalPayment'])) operationType = 'adjustment';
@@ -133,7 +171,7 @@ export function normalizeFinancialOperation(row) {
   add('paidStorage', 'storage', 'expense');
   add('paidAcceptance', 'acceptance', 'expense');
   add('penalty', 'penalty', 'expense');
-  add('deduction', 'deduction', 'expense');
+  add('deduction', isVerifiedPromotionRow(row) ? 'promotion' : 'deduction', 'expense');
   add('additionalPayment', 'commission_adjustment', 'expense');
   add('forPay', 'payout', 'settlement');
   for(const field of unverifiedMoneyFields)add(field,'unclassified_financial_field','source');
@@ -146,9 +184,9 @@ export function normalizeFinancialOperation(row) {
     accountingDate: dateValue(row?.rrDate),
     sourceOccurredAt: row?.saleDt || row?.orderDt || null,
     quantity,
-    wbArticle: row?.nmId == null ? null : String(row.nmId),
-    variantBarcode: row?.sku == null ? null : String(row.sku),
-    srid: row?.srid == null ? null : String(row.srid),
+    wbArticle: realIdentifier(row?.nmId),
+    variantBarcode: realIdentifier(row?.sku),
+    srid: realIdentifier(row?.srid),
     components
   };
 }
@@ -256,15 +294,18 @@ export function financialDateRange(now = new Date(), days = 91) {
 }
 
 export function financialComponentScope(row, operation, component, productMatched = false) {
+  if (operation.operationType === 'other' && isVerifiedPvzComponent(row,component)) return 'store';
   if (productMatched) return 'selected_product';
   const rule = storeServiceFields.get(component.sourceField);
   const raw = decimal(row?.[component.sourceField]);
-  const hasItemIdentifier = itemIdentifierFields.some(field => row?.[field] !== null && row?.[field] !== undefined && String(row[field]).trim() !== '');
+  const hasItemIdentifier = hasRealItemIdentifier(row);
   const document = String(row?.docTypeName ?? '').trim().toLocaleLowerCase('ru-RU');
   const name = String(row?.sellerOperName ?? '').trim().toLocaleLowerCase('ru-RU');
   if (rule && !hasItemIdentifier && document === '' && rule.names.has(name) &&
       operation.operationType === rule.operation && component.categoryCode === rule.category &&
       raw !== null && raw !== '0' && !raw.startsWith('-')) return 'store';
+  if (component.sourceField === 'deduction' && component.categoryCode === 'promotion' &&
+      operation.operationType === 'adjustment' && isVerifiedPromotionRow(row)) return 'store';
   return 'product_expected';
 }
 
@@ -275,6 +316,7 @@ const unverifiedResultCategories = new Set([
 
 export function unverifiedFinancialComponents(row,operation,productMatched=false){
   return operation.components.filter(component=>{
+    if(operation.operationType==='other' && isVerifiedPvzComponent(row,component))return false;
     if(unverifiedResultCategories.has(component.categoryCode))return true;
     const raw=decimal(row?.[component.sourceField]);
     if(raw?.startsWith('-'))return true;
