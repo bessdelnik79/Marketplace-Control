@@ -4,6 +4,15 @@ import { calculateFinancialResult, calculateStoreTaxReference, createInputFinger
 
 const qualityRank={complete:0,partial:1,unavailable:2};
 
+function shiftCalendarDate(value,days){
+  const text=String(value??'');
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(text))throw new Error('calculation_invalid_period');
+  const date=new Date(`${text}T00:00:00Z`);
+  if(Number.isNaN(date.getTime()))throw new Error('calculation_invalid_period');
+  date.setUTCDate(date.getUTCDate()+days);
+  return date.toISOString().slice(0,10);
+}
+
 function fixed4(value){
   const match=String(value).match(/^(-?)(\d+)(?:\.(\d{1,4}))?$/);
   if(!match)throw new Error('calculation_invalid_persisted_total');
@@ -267,6 +276,8 @@ export async function getPublishedFinancialPeriodPair(userId,storeId,{periodStar
       )).rows[0];
       if(!latest)return{...publication,current:null,previous:null};
       periodStart=latest.period_start;periodEnd=latest.period_end;
+      previousPeriodStart=shiftCalendarDate(periodStart,-7);
+      previousPeriodEnd=shiftCalendarDate(periodEnd,-7);
     }
     const current=await getPeriodEnvelope(client,publication.run_id,periodStart,periodEnd);
     const previous=previousPeriodStart&&previousPeriodEnd

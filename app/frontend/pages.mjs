@@ -25,11 +25,8 @@ const themeBoot = `try{const t=localStorage.getItem('mc-theme')||'system';docume
 function frame(user, route, body, stores=[{name:'Дом и уют',status:'active',connected:true,demo:true}]) {
   user = { ...user, id: user.user_id || user.id };
   if (Array.isArray(user.stores)) stores = user.stores;
-  if (route === '/overview' && stores.length) {
-    const mobileBody = stores.some(store => store.demo)
-      ? mobileOverview()
-      : `<div class="mobile-overview">${body}</div>`;
-    body = `<div class="desktop-overview">${body}</div>${mobileBody}`;
+  if (route === '/overview' && stores[0]?.demo === true) {
+    body = `<div class="desktop-overview">${body}</div>${mobileOverview()}`;
   }
   const title = uiRoutes.get(route) || 'Обзор';
   const selected=stores[0];
@@ -57,9 +54,56 @@ export function emptyOverviewPage(user, stores=[]) {
   const action=hasStore?'<a class="outline-button primary-button" href="/settings#store">Открыть подключение</a>':'<a class="outline-button primary-button" href="/onboarding/store">Добавить магазин</a>';
   return frame({...user,stores},'/overview',`<section class="empty-state"><span class="empty-state-icon">${icon('stock')}</span><p class="eyebrow">Начало работы</p><h1>${title}</h1><p>${text}</p><div>${action}<a href="/settings">Перейти в настройки →</a></div></section>`,stores);
 }
-export function overviewPage(user, stores=user.stores) {
-  if (Array.isArray(stores) && !stores.some(store=>store.demo)) return emptyOverviewPage(user,stores);
-  return populatedOverviewPage({...user,stores});
+const overviewReasonLabels={
+  cost_missing:'не указана себестоимость части товаров',tax_setting_missing:'не настроен налог',operation_unclassified:'есть неразобранные операции WB',
+  published_period_missing:'нет опубликованного расчёта за эту неделю',published_financial_result_missing:'финансовый расчёт ещё не опубликован',
+  operational_snapshot_missing:'оперативная загрузка ещё не завершена',operational_metric_unavailable:'часть дней или товаров недоступна',
+  operational_history_insufficient:'ещё нет четырёх сопоставимых периодов',operational_current_incomplete:'текущий оперативный период неполный',
+  incomparable_coverage:'покрытие периодов различается',previous_period_unavailable:'предыдущая неделя недоступна',previous_zero:'в предыдущей неделе нулевой результат',
+  situation_rules_not_evaluated:'правила ситуаций ещё не рассчитаны',financial_situation_inputs_unavailable:'для правил пока не хватает финансовых данных',
+  return_growth_rule_disabled:'правило роста возвратов пока отключено: не зафиксированы знаменатель, минимальный объём и пороги',product_loss_inputs_incomplete:'правило убытка по товару не рассчитано из-за неполного покрытия'
+};
+const overviewDate=value=>{const match=String(value??'').match(/^(\d{4})-(\d{2})-(\d{2})$/);return match?`${match[3]}.${match[2]}.${match[1]}`:'';};
+const overviewPeriod=period=>period?.start&&period?.end?`${overviewDate(period.start)} — ${overviewDate(period.end)}`:'период не определён';
+const overviewMoney=value=>{if(value===null||value===undefined)return'—';const text=String(value),negative=text.startsWith('-'),absolute=negative?text.slice(1):text;return`${negative?'−':''}${money(absolute)} ₽`;};
+const overviewCount=value=>value===null||value===undefined?'—':`${exactDecimal(value,{maximumFractionDigits:4})} шт.`;
+const overviewFreshness=value=>{const date=new Date(value);return value&&!Number.isNaN(date.getTime())?date.toLocaleString('ru-RU',{timeZone:'Europe/Moscow',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}):'ещё не обновлялось';};
+const overviewReasons=value=>(Array.isArray(value)?value:[]).map(reason=>overviewReasonLabels[reason]||String(reason).replaceAll('_',' '));
+function statusBadge(status,quality){const level=quality||status,value=level==='unavailable'?'нет данных':level==='complete'?'полные данные':level==='partial'?'частичные данные':'доступно';return`<span class="overview-status ${esc(level)}">${value}</span>`;}
+function reasonList(reasons){const items=overviewReasons(reasons);return items.length?`<ul class="overview-reasons">${items.map(item=>`<li>${esc(item)}</li>`).join('')}</ul>`:'';}
+function financialOverviewCard(financial){
+  const unavailable=financial?.status!=='available'||financial?.quality==='unavailable'||!financial.displayResult||financial.displayResult.basis==='unavailable'||financial.displayResult.amount===null||financial.displayResult.amount===undefined;
+  if(unavailable)return`<section class="live-card financial-card"><div class="live-card-heading"><div><p class="eyebrow">Финансы</p><h2>Результат за неделю</h2></div>${statusBadge('unavailable','unavailable')}</div><p class="overview-period">${esc(overviewPeriod(financial?.requestedPeriod))}</p><div class="overview-unavailable"><strong>Расчёт пока недоступен</strong><p>Покажем сумму после публикации финансового результата.</p>${reasonList(financial?.missingReasons)}</div></section>`;
+  const comparison=financial.comparison?.comparable&&financial.comparison.changePercent!==null?`<p class="overview-comparison">Изменение к предыдущей неделе: <strong>${esc(exactDecimal(financial.comparison.changePercent,{maximumFractionDigits:4}))}%</strong></p>`:`<p class="muted overview-comparison">Сравнение не показано: ${esc(overviewReasonLabels[financial.comparison?.reason]||'периоды пока несопоставимы')}.</p>`;
+  const crossBorder=financial.crossBorderBuyout?.present===true?`<div class="cross-border-notice">Продажи за границу (выкуп WB) включены в расчёт по API, но не отражены в печатной форме основного отчёта.</div>`:'';
+  return`<section class="live-card financial-card"><div class="live-card-heading"><div><p class="eyebrow">Финансы</p><h2>${financial.displayResult.basis==='after_tax'?'Результат после налога':'Результат по доступным данным до налога'}</h2></div>${statusBadge(financial.status,financial.quality)}</div><p class="overview-period">${esc(overviewPeriod(financial.period||financial.requestedPeriod))}</p><strong class="overview-result">${overviewMoney(financial.displayResult.amount)}</strong>${comparison}<dl class="live-metrics"><div><dt>Выручка</dt><dd>${overviewMoney(financial.totals?.revenue)}</dd></div><div><dt>Расходы</dt><dd>${overviewMoney(financial.totals?.expenses)}</dd></div><div><dt>Налог</dt><dd>${overviewMoney(financial.totals?.tax)}</dd></div></dl>${reasonList(financial.missingReasons)}${crossBorder}<p class="overview-meta">Источник обновлён: ${esc(overviewFreshness(financial.sourceFreshness||financial.publishedAt))}</p></section>`;
+}
+function operationalOverviewCard(operational){
+  const unavailable=operational?.status!=='available'||!operational.orders;
+  if(unavailable)return`<section class="live-card operational-card"><div class="live-card-heading"><div><p class="eyebrow">Сейчас</p><h2>Заказы и выкупы</h2></div>${statusBadge('unavailable','unavailable')}</div><div class="overview-unavailable"><strong>Оперативные показатели пока недоступны</strong><p>Они появятся после принятого снимка Sales Funnel.</p>${reasonList(operational?.missingReasons)}</div></section>`;
+  const baseline=operational.comparison?.available?`Среднее за 4 периода: ${overviewCount(operational.comparison.orders?.count)} · ${overviewMoney(operational.comparison.orders?.amount)}`:`Сравнение не показано: ${overviewReasonLabels[operational.comparison?.reason]||'нет сопоставимой базы'}.`;
+  const series=operational.dailySeries?.map(day=>`<div class="daily-row ${esc(day.quality)}"><time datetime="${esc(day.date)}">${overviewDate(day.date)}</time><span><b>${overviewCount(day.orders?.count)}</b><small>${overviewMoney(day.orders?.amount)}</small></span><span><b>${overviewCount(day.buyouts?.count)}</b><small>${overviewMoney(day.buyouts?.amount)}</small></span></div>`).join('')||'';
+  return`<section class="live-card operational-card"><div class="live-card-heading"><div><p class="eyebrow">Сейчас</p><h2>Заказы и выкупы</h2></div>${statusBadge(operational.status,operational.quality)}</div><p class="overview-period">${esc(overviewPeriod(operational.period))}</p><div class="operational-totals"><div><span>Заказы</span><strong>${overviewCount(operational.orders.count)}</strong><small>${overviewMoney(operational.orders.amount)}</small></div><div><span>Выкупы</span><strong>${overviewCount(operational.buyouts?.count)}</strong><small>${overviewMoney(operational.buyouts?.amount)}</small></div></div><p class="muted overview-comparison">${esc(baseline)}</p><div class="daily-series"><div class="daily-head"><span>День</span><span>Заказы</span><span>Выкупы</span></div>${series}</div>${reasonList(operational.missingReasons)}<p class="overview-meta">Обновлено: ${esc(overviewFreshness(operational.updatedAt))}</p></section>`;
+}
+function situationsOverviewCard(situations){
+  const items=Array.isArray(situations?.items)?situations.items:[];
+  if(situations?.status==='unavailable')return`<section class="live-card situations-card"><div class="live-card-heading"><div><p class="eyebrow">Ситуации</p><h2>Требует внимания</h2></div>${statusBadge('unavailable')}</div><div class="overview-unavailable"><strong>Автоматические ситуации ещё не рассчитаны</strong><p>Ситуации появятся после доступного финансового расчёта.</p>${reasonList(situations?.missingReasons||[situations?.reason].filter(Boolean))}</div></section>`;
+  const titles={product_loss:'Убыток по товару до налога',penalty:'Штрафы и пени'};
+  const renderedItems=items.map(item=>{const amount=item.metric?.absoluteValue??item.metric?.value;return`<article><span class="signal-mark ${item.severity==='danger'?'danger':''}">!</span><div><strong>${esc(titles[item.kind]||item.title||item.kind||'Ситуация')}</strong>${amount!==undefined?`<p>${overviewMoney(amount)}</p>`:''}${item.productId?`<small>Товар: ${esc(item.productId)}</small>`:''}</div></article>`;}).join('');
+  return`<section class="live-card situations-card"><div class="live-card-heading"><div><p class="eyebrow">Ситуации</p><h2>Требует внимания · ${esc(situations.total??items.length)}</h2></div>${statusBadge(situations.status,situations.quality||situations.status)}</div>${items.length?`<div class="situation-list">${renderedItems}</div>`:'<div class="overview-unavailable"><strong>Новых ситуаций нет</strong><p>По рассчитанным правилам внимание сейчас не требуется.</p></div>'}${reasonList(situations.missingReasons)}</section>`;
+}
+function liveOverviewPage(user,stores,state,{selectedStoreId,selectedWeek}={}){
+  const selected=stores.find(store=>store.id===(selectedStoreId||state.store?.id))||stores[0],ordered=[selected,...stores.filter(store=>store!==selected)];
+  const controls=`<form class="overview-controls" method="get" action="/overview"><label>Магазин<select name="storeId">${stores.map(store=>`<option value="${esc(store.id)}" ${store.id===selected.id?'selected':''}>${esc(store.name)}</option>`).join('')}</select></label><label>Финансовая неделя<input type="date" name="week" value="${esc(selectedWeek||state.financial?.requestedPeriod?.start||'')}" required></label><button class="outline-button" type="submit">Показать</button></form>`;
+  return frame({...user,stores:ordered},'/overview',`<section class="live-overview"><header class="live-overview-title"><div><p class="eyebrow">Реальные данные магазина</p><h1>Обзор результатов</h1><p>Финансовый результат и текущая воронка продаж показаны в своих фактических периодах.</p></div>${controls}</header><div class="live-overview-grid">${financialOverviewCard(state.financial)}${operationalOverviewCard(state.operational)}${situationsOverviewCard(state.situations)}</div></section>`,ordered);
+}
+export function overviewPage(user, stores=user.stores, state=null, options={}) {
+  const availableStores=Array.isArray(stores)?stores:[{name:'Дом и уют',status:'active',connected:true,demo:true}];
+  if(state)return liveOverviewPage(user,availableStores,state,options);
+  const selected=availableStores.find(store=>store.id===options.selectedStoreId)||availableStores[0];
+  const ordered=selected?[selected,...availableStores.filter(store=>store!==selected)]:availableStores;
+  if(selected?.demo===true)return populatedOverviewPage({...user,stores:ordered});
+  return emptyOverviewPage(user,ordered);
 }
 export function storeOnboardingPage(user,{error='',value=''}={}) {
   return `<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Добавление магазина · Marketplace Control</title><link rel="icon" href="/favicon.svg"><script>${themeBoot}</script><link rel="stylesheet" href="/ui.css"></head><body class="onboarding-page"><header class="onboarding-header"><a class="mc-brand" href="/"><img src="/brand.png" alt=""><span>Marketplace<br>Control</span></a><form method="post" action="/logout"><button class="text-button" type="submit">Выйти</button></form></header><main class="onboarding-main"><section class="onboarding-card"><span class="onboarding-step">ШАГ 1 ИЗ 2</span><span class="empty-state-icon">${icon('stock')}</span><h1>Как назовём магазин?</h1><p>Название увидите только вы. Оно поможет различать магазины в отчётах и настройках.</p>${error?`<div class="form-error" role="alert">${esc(error)}</div>`:''}<form method="post" action="/stores"><label for="store-name">Название магазина</label><input id="store-name" name="name" value="${esc(value)}" minlength="2" maxlength="80" placeholder="Например, Дом и уют" autocomplete="organization" required autofocus><button class="primary-button" type="submit">Продолжить</button></form><p class="onboarding-note">API-токен Wildberries подключим следующим шагом. Пока он не сохраняется и не передаётся.</p></section></main></body></html>`;

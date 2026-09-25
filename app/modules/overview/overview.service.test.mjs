@@ -11,9 +11,9 @@ function period(start, end, { quality = 'complete', missingReasons = [] } = {}) 
     source_freshness: new Date(`${end}T23:00:00Z`),
     covered_period: { start, end },
     lines: [
-      { result_scope: 'selected_product', accounting_date: start, category_code: 'revenue', amount_signed: '100.0000', quality },
-      { result_scope: 'selected_product', accounting_date: end, category_code: 'commission', amount_signed: '-20.0000', quality },
-      { result_scope: 'selected_product', accounting_date: end, category_code: 'estimated_usn_tax', amount_signed: '-6.0000', quality }
+      { result_scope: 'selected_product', product_id:'product-a', accounting_date: start, category_code: 'revenue', amount_signed: '100.0000', quality },
+      { result_scope: 'selected_product', product_id:'product-a', accounting_date: end, category_code: 'commission', amount_signed: '-20.0000', quality },
+      { result_scope: 'selected_product', product_id:'product-a', accounting_date: end, category_code: 'estimated_usn_tax', amount_signed: '-6.0000', quality }
     ],
     totals: {
       selectedProductsResultBeforeTax: '80.0000',
@@ -89,6 +89,14 @@ test('missing persisted week returns an explicit unavailable model without recal
   assert.equal(overview.comparison.changePercent, null);
 });
 
+test('missing selected week loads the latest published week and its previous period',async()=>{
+  let request;
+  const overview=await getFinancialOverview('user-1','store-1',null,{loadPeriodPair:async(...args)=>{request=args;return pair();}});
+  assert.deepEqual(request,['user-1','store-1',{}]);
+  assert.deepEqual(overview.period,{start:'2026-09-14',end:'2026-09-20',timezone:'Europe/Moscow'});
+  assert.equal(overview.comparison.comparable,true);
+});
+
 test('service rejects invalid date and foreign or missing publication stays absent', async () => {
   await assert.rejects(() => getFinancialOverview('user-1', 'store-1', '2026-02-29', { loadPeriodPair: async () => pair() }), { message: 'overview_invalid_date' });
   assert.equal(await getFinancialOverview('user-1', 'foreign-store', '2026-09-14', { loadPeriodPair: async () => null }), null);
@@ -103,7 +111,9 @@ test('unified overview keeps independent periods and stable empty situations',as
   assert.equal(state.store.name,'Основной');
   assert.equal(state.financial.status,'available');
   assert.equal(state.operational.status,'unavailable');
-  assert.deepEqual(state.situations,{status:'unavailable',reason:'situation_rules_not_evaluated',items:[],total:null});
+  assert.equal(state.situations.status,'partial');
+  assert.equal(state.situations.total,0);
+  assert.deepEqual(state.situations.disabledRules,['return_growth']);
 });
 
 test('unified overview returns null for a foreign store without reading finance',async()=>{
@@ -123,4 +133,5 @@ test('unified overview keeps a stable unavailable financial envelope',async()=>{
   assert.equal(state.financial.publicationId,null);
   assert.equal(state.financial.totals,null);
   assert.deepEqual(state.financial.crossBorderBuyout,{present:null,reportCount:null});
+  assert.equal(state.situations.total,null);
 });

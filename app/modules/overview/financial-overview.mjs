@@ -158,7 +158,24 @@ function normalizeLine(line, period, quality) {
   const accountingDate = validateCalendarDate(valueFrom(line, 'accountingDate', 'accounting_date'));
   if (accountingDate < period.start || accountingDate > period.end) invalid('overview_line_period_mismatch');
   if (normalizeQuality(line.quality) !== quality) invalid('overview_line_quality_mismatch');
-  return { scope, category, amount: parseScale4Money(valueFrom(line, 'amountSigned', 'amount_signed')) };
+  const rawProductId=valueFrom(line,'productId','product_id');
+  const productId=rawProductId===null||rawProductId===undefined?null:requiredText(rawProductId,'overview_invalid_line');
+  return { scope, productId, category, amount: parseScale4Money(valueFrom(line, 'amountSigned', 'amount_signed')) };
+}
+
+function buildSituationEvidence(lines,coverage,quality,missingReasons){
+  const products=new Map();
+  for(const line of lines){
+    if(line.scope!=='selected_product'||line.category==='estimated_usn_tax'||!line.productId)continue;
+    products.set(line.productId,(products.get(line.productId)??0n)+line.amount);
+  }
+  const penalty=lines.filter(line=>line.category==='penalty').reduce((sum,line)=>sum+line.amount,0n);
+  return{
+    productLossEligible:quality==='complete'&&!missingReasons.includes('product_link_missing'),
+    coveredProductIds:coverage.productIds,
+    productResultsBeforeTax:[...products].sort(([left],[right])=>left.localeCompare(right)).map(([productId,amount])=>({productId,amount:formatScale4Money(amount)})),
+    penaltyAmount:formatScale4Money(penalty)
+  };
 }
 
 function normalizeTotals(value) {
@@ -211,7 +228,8 @@ export function buildFinancialPeriodOverview(envelope, { timezone = 'Europe/Mosc
     return {
       publicationId, methodVersion, scope, period, quality, missingReasons, coverage,
       totals: { revenue: null, expenses: null, tax: null, availableResultBeforeTax: null, availableResultAfterTax: null },
-      displayResult: { amount: null, basis: 'unavailable' }
+      displayResult: { amount: null, basis: 'unavailable' },
+      situationEvidence:null
     };
   }
 
@@ -243,7 +261,8 @@ export function buildFinancialPeriodOverview(envelope, { timezone = 'Europe/Mosc
       availableResultBeforeTax: formatScale4Money(persisted.beforeTax),
       availableResultAfterTax: tax.afterTax === null ? null : formatScale4Money(tax.afterTax)
     },
-    displayResult: { amount: formatScale4Money(displayAmount), basis: tax.basis }
+    displayResult: { amount: formatScale4Money(displayAmount), basis: tax.basis },
+    situationEvidence:buildSituationEvidence(lines,coverage,quality,missingReasons)
   };
 }
 

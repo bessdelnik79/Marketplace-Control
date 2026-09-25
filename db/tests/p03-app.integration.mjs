@@ -305,7 +305,7 @@ test('P0.3 persists exact weekly results, links return cost fail-closed and isol
   assert.equal(await getPublishedFinancialPeriodPair(ids.user,isolated.store,{periodStart:'2026-08-10',periodEnd:'2026-08-16'}),null);
   const latest=await getPublishedFinancialPeriodPair(isolated.user,isolated.store);
   assert.equal(latest.current.period_start,'2026-08-10');
-  assert.equal(latest.previous,null);
+  assert.equal(latest.previous.period_result_id,first.period_result_id);
   const returnEvidence=await isolatedContext(async client=>(await client.query(
     `select e.contribution_amount::text,e.quantity::text,l.status,
             (select count(*)::int from mc.calculation_request_inputs i where i.request_id=r.request_id and i.operation_link_id=e.operation_link_id) as frozen
