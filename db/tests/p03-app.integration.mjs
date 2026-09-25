@@ -341,7 +341,7 @@ test('P0.3 persists exact weekly results, links return cost fail-closed and isol
     {documentId:randomUUID(),reports:[{externalReportId:'9004',periodStart:'2026-08-17',periodEnd:'2026-08-23',checksum:'invalid-row-period',rows:[{externalRowKey:'1',rowChecksum:'invalid-row-period',rawData:{...secondWeek,reportId:9004,rrDate:'2026-08-24'}}]}]}),/financial_row_period_mismatch/);
 });
 
-test('latest normalization resolves superseded data issues and sync count ignores them',async()=>{
+test('latest normalization resolves legacy unlinked data issues and sync count ignores them',async()=>{
   const fixture=await context(async client=>{
     const document=(await client.query(`insert into mc.source_documents(business_id,store_id,origin,document_type,external_document_id,checksum,completeness)
       values($1,$2,'wb_api','weekly_realization','issue-lifecycle','issue-lifecycle-source','complete') returning id`,[ids.business,ids.store])).rows[0];
@@ -357,19 +357,44 @@ test('latest normalization resolves superseded data issues and sync count ignore
     const method=(await client.query(`select id from mc.method_versions where code='wb_finance_import' and implementation_version='wb-finance-v2'`)).rows[0];
     const normalization=(await client.query(`insert into mc.report_normalizations(business_id,store_id,report_version_id,method_version_id,normalization_key,status)
       values($1,$2,$3,$4,$5,'succeeded') returning id`,[ids.business,ids.store,version.id,method.id,`wb-finance-v2:${version.id}`])).rows[0];
-    await client.query(`insert into mc.data_issues(business_id,store_id,document_id,report_row_id,report_normalization_id,code,severity)
-      values($1,$2,$3,$4,$5,'financial_operation_unclassified','blocking')`,[ids.business,ids.store,document.id,row.id,normalization.id]);
+    const issues=(await client.query(`insert into mc.data_issues(business_id,store_id,document_id,report_row_id,code,severity)
+      values($1,$2,$3,$4,'financial_operation_unclassified','blocking'),
+            ($1,$2,$3,$4,'financial_operation_unclassified','blocking') returning id`,[ids.business,ids.store,document.id,row.id])).rows;
     const stream=(await client.query(`select id from mc.sync_streams where store_id=$1 and source_type='financial_reports'`,[ids.store])).rows[0];
     const run=(await client.query(`insert into mc.sync_runs(business_id,store_id,stream_id,requested_from,requested_to,status,started_at) values($1,$2,$3,'2026-09-07','2026-09-13','running',now()) returning id`,[ids.business,ids.store,stream.id])).rows[0];
-    return{normalizationId:normalization.id,streamId:stream.id,runId:run.id};
+    return{normalizationId:normalization.id,issueIds:issues.map(issue=>issue.id),streamId:stream.id,runId:run.id};
   });
   const source={externalReportId:'889900',periodStart:'2026-09-07',periodEnd:'2026-09-13',checksum:'issue-lifecycle-v2',rows:[{externalRowKey:'1',rowChecksum:'issue-lifecycle-row-v2',rawData:{reportId:889900,docTypeName:'Продажа',sellerOperName:'Продажа',rrDate:'2026-09-08',nmId:700001,sku:'4600000000001',quantity:1,retailAmount:'100',forPay:'100'}}]};
   await completeFinancialSync(ids.user,{business_id:ids.business,store_id:ids.store,stream_id:fixture.streamId,run_id:fixture.runId,date_from:'2026-09-07',date_to:'2026-09-13'},
     {documentId:randomUUID(),reports:[source]});
-  const lifecycle=await context(async client=>(await client.query(`select status,resolved_at is not null as resolved,resolved_by_normalization_id is not null as resolver from mc.data_issues where report_normalization_id=$1`,[fixture.normalizationId])).rows[0]);
-  assert.deepEqual(lifecycle,{status:'resolved',resolved:true,resolver:true});
+  const lifecycle=await context(async client=>(await client.query(`select status,resolved_at is not null as resolved,report_normalization_id,resolved_by_normalization_id from mc.data_issues where id=any($1::uuid[]) order by id`,[fixture.issueIds])).rows);
+  assert.equal(lifecycle.length,2);
+  assert.ok(lifecycle.every(issue=>issue.status==='resolved'&&issue.resolved));
+  assert.ok(lifecycle.every(issue=>issue.report_normalization_id===fixture.normalizationId));
+  assert.ok(lifecycle.every(issue=>issue.resolved_by_normalization_id));
+  assert.equal(lifecycle.filter(issue=>issue.resolved_by_normalization_id===fixture.normalizationId).length,1);
+  assert.equal(lifecycle.filter(issue=>issue.resolved_by_normalization_id!==fixture.normalizationId).length,1);
   const state=await getFinancialSyncState(ids.user,ids.store);
   assert.equal(state.issue_count,0);
+
+  const current=await context(async client=>{
+    const version=(await client.query(`select current_version_id from mc.reports where store_id=$1 and external_report_id='889900'`,[ids.store])).rows[0];
+    const row=(await client.query(`select id from mc.report_rows where report_version_id=$1 and external_row_key='1'`,[version.current_version_id])).rows[0];
+    const document=(await client.query(`select document_id from mc.report_versions where id=$1`,[version.current_version_id])).rows[0];
+    const oldMethod=(await client.query(`select id from mc.method_versions where code='wb_finance_import' and implementation_version='wb-finance-v2'`)).rows[0];
+    await client.query(`insert into mc.report_normalizations(business_id,store_id,report_version_id,method_version_id,normalization_key,status)
+      values($1,$2,$3,$4,$5,'succeeded')`,[ids.business,ids.store,version.current_version_id,oldMethod.id,`wb-finance-v2:${version.current_version_id}`]);
+    const issue=(await client.query(`insert into mc.data_issues(business_id,store_id,document_id,report_row_id,code,severity)
+      values($1,$2,$3,$4,'financial_operation_unclassified','blocking') returning id`,[ids.business,ids.store,document.document_id,row.id])).rows[0];
+    const normalization=(await client.query(`select rn.id from mc.report_normalizations rn join mc.method_versions m on m.id=rn.method_version_id
+      where rn.report_version_id=$1 order by m.version_no desc,rn.normalized_at desc,rn.id desc limit 1`,[version.current_version_id])).rows[0];
+    const run=(await client.query(`insert into mc.sync_runs(business_id,store_id,stream_id,requested_from,requested_to,status,started_at) values($1,$2,$3,'2026-09-07','2026-09-13','running',now()) returning id`,[ids.business,ids.store,fixture.streamId])).rows[0];
+    return{issueId:issue.id,normalizationId:normalization.id,runId:run.id};
+  });
+  await completeFinancialSync(ids.user,{business_id:ids.business,store_id:ids.store,stream_id:fixture.streamId,run_id:current.runId,date_from:'2026-09-07',date_to:'2026-09-13'},
+    {documentId:randomUUID(),reports:[source]});
+  const currentIssue=await context(async client=>(await client.query(`select status,report_normalization_id,resolved_by_normalization_id from mc.data_issues where id=$1`,[current.issueId])).rows[0]);
+  assert.deepEqual(currentIssue,{status:'open',report_normalization_id:current.normalizationId,resolved_by_normalization_id:null});
 });
 
 test.after(async()=>{await pool.end();});

@@ -84,6 +84,55 @@ export async function updateFinancialSyncProgress(userId,job,progress){
   });
 }
 
+async function resolveLegacyDataIssues(client,businessId,storeId,reportId,resolverNormalizationId,preferPrevious=false){
+  await client.query(
+    `with candidates as (
+       select di.id,di.report_row_id,di.code,selected.id as normalization_id,
+              exists(
+                select 1 from mc.data_issues linked
+                 where linked.report_normalization_id=selected.id and linked.report_row_id=di.report_row_id
+                   and linked.code=di.code and linked.status='open'
+              ) as linked_exists,
+              row_number() over(partition by selected.id,di.report_row_id,di.code order by di.created_at,di.id) as position
+         from mc.data_issues di
+         join mc.report_rows rr on rr.id=di.report_row_id
+         join mc.report_versions old_version on old_version.id=rr.report_version_id
+         cross join lateral (
+           select rn.id
+             from mc.report_normalizations rn
+             join mc.method_versions m on m.id=rn.method_version_id
+            where rn.business_id=$1 and rn.store_id=$2 and rn.report_version_id=rr.report_version_id and rn.status='succeeded'
+            order by (case when $5 then (rn.id=$4)::int else 0 end),m.version_no desc,rn.normalized_at desc,rn.id desc
+            limit 1
+         ) selected
+        where di.business_id=$1 and di.store_id=$2 and old_version.report_id=$3
+          and di.status='open' and di.report_normalization_id is null
+     ), resolved_conflicts as (
+       update mc.data_issues di
+          set report_normalization_id=c.normalization_id,status='resolved',resolved_at=now(),resolved_by_normalization_id=c.normalization_id
+         from candidates c
+        where di.id=c.id and (c.linked_exists or c.position>1)
+       returning di.id
+     )
+     update mc.data_issues di
+        set report_normalization_id=c.normalization_id
+       from candidates c
+      where di.id=c.id and not c.linked_exists and c.position=1
+        and (select count(*) from resolved_conflicts)>=0`,
+    [businessId,storeId,reportId,resolverNormalizationId,preferPrevious]
+  );
+  await client.query(
+    `update mc.data_issues di
+        set status='resolved',resolved_at=now(),resolved_by_normalization_id=$1
+       from mc.report_rows rr
+       join mc.report_versions old_version on old_version.id=rr.report_version_id
+      where di.business_id=$2 and di.store_id=$3 and di.report_row_id=rr.id
+        and old_version.report_id=$4 and di.status='open'
+        and di.report_normalization_id is distinct from $1`,
+    [resolverNormalizationId,businessId,storeId,reportId]
+  );
+}
+
 export async function completeFinancialSync(userId,job,{documentId,reports,summaries=new Map(),summaryError=null,objects=[]}){
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
     if(businessId!==job.business_id)throw new Error('financial_context_mismatch');
@@ -131,6 +180,7 @@ export async function completeFinancialSync(userId,job,{documentId,reports,summa
             await client.query(`update mc.reports set current_version_id=$1 where id=$2`,[same.id,report.id]);
             reselectedReports++;
           }
+          await resolveLegacyDataIssues(client,businessId,job.store_id,report.id,existingNormalization.id);
           bankChecks[await recordBankCheck(client,businessId,job,source,same.id,summaries.get(source.externalReportId),summaryError)]++;
           continue;
         }
@@ -148,16 +198,7 @@ export async function completeFinancialSync(userId,job,{documentId,reports,summa
          values($1,$2,$3,$4,$5,'succeeded') returning id`,
         [businessId,job.store_id,version.id,method.id,`${financialParserVersion}:${version.id}`]
       )).rows[0];
-      await client.query(
-        `update mc.data_issues di
-            set status='resolved',resolved_at=now(),resolved_by_normalization_id=$1
-           from mc.report_rows rr
-           join mc.report_versions old_version on old_version.id=rr.report_version_id
-          where di.business_id=$2 and di.store_id=$3 and di.report_row_id=rr.id
-            and old_version.report_id=$4 and di.status='open'
-            and di.report_normalization_id is distinct from $1`,
-        [normalization.id,businessId,job.store_id,report.id]
-      );
+      await resolveLegacyDataIssues(client,businessId,job.store_id,report.id,normalization.id,true);
       let rowNumber=0;
       for(const sourceRow of source.rows){
         rowNumber++;
