@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export const financialReportsEndpoint = 'https://finance-api.wildberries.ru/api/finance/v1/sales-reports/detailed';
-export const financialParserVersion = 'wb-finance-v5';
+export const financialParserVersion = 'wb-finance-v6';
 const unverifiedMoneyFields = [
   'sellerPromo','installmentCoFinancingAmount','cashbackAmount','cashbackDiscount',
   'cashbackCommissionChange','sellerPromoDiscount','loyaltyDiscount','agencyVat'
@@ -24,7 +24,9 @@ export function financialReportPeriodMatches(existing,incoming){
 const identifierFields = ['reportId','rrdId','giId','nmId','shkId','ppvzOfficeId','orderId','trbxId','loyaltyId'];
 const identifierPattern = new RegExp(`("(?:${identifierFields.join('|')})"\\s*:\\s*)(-?\\d+)(?=\\s*[,}])`, 'g');
 const decimalPattern = /^-?\d+(?:\.\d+)?$/;
-const itemIdentifierFields = ['nmId', 'sku', 'saName', 'srid', 'shkId', 'barcode'];
+// srid and shkId identify a WB transaction/package, not a catalog item. WB also
+// sends them on store-level service rows where nmId and SKU are empty.
+const itemIdentifierFields = ['nmId', 'sku', 'saName', 'barcode'];
 const storeServiceFields = new Map([
   ['deliveryService', { category: 'logistics', operation: 'service_charge', names: new Set(['логистика', 'доставка', 'коррекция стоимости доставки']) }],
   ['paidStorage', { category: 'storage', operation: 'service_charge', names: new Set(['хранение', 'коррекция хранения']) }],

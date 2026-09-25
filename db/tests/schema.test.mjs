@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,23);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,24);
   pass('password identity and expiring session are stored by migration 2');
   const financialMethod=await one("select implementation_version from mc.method_versions where code='wb_finance_import' and version_no=1");
   assert.equal(financialMethod.implementation_version,'wb-finance-v1');
@@ -53,6 +53,9 @@ try {
   const financeMethodV5=await one("select implementation_version,parameters from mc.method_versions where code='wb_finance_import' and version_no=5");
   assert.equal(financeMethodV5.implementation_version,'wb-finance-v5');
   assert.equal(financeMethodV5.parameters.promotion,'wb-bonus-type-v1');
+  const financeMethodV6=await one("select implementation_version,parameters from mc.method_versions where code='wb_finance_import' and version_no=6");
+  assert.equal(financeMethodV6.implementation_version,'wb-finance-v6');
+  assert.equal(financeMethodV6.parameters.storeScope,'catalog-identifiers-v2');
   const resultMethodV3=await one("select implementation_version from mc.method_versions where code='financial_result' and version_no=3");
   assert.equal(resultMethodV3.implementation_version,'financial-result-v3');
   const resultMethodV4=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=4");

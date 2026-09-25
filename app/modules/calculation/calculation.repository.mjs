@@ -2,6 +2,10 @@ import { pool, withOwnedBusinessContext } from '../../infrastructure/database/cl
 import { financialParserVersion } from '../reports/finance.mjs';
 import { calculateFinancialResult, calculateStoreTaxReference, createInputFingerprint, isVerifiedWbResultComponent } from './calculation.mjs';
 
+export const compatibleFinancialParserVersions=Object.freeze([
+  financialParserVersion,'wb-finance-v5','wb-finance-v4','wb-finance-v3','wb-finance-v2'
+]);
+
 const qualityRank={complete:0,partial:1,unavailable:2};
 
 function shiftCalendarDate(value,days){
@@ -394,11 +398,11 @@ export async function prepareFinancialCalculation(userId,storeId){
          join mc.source_documents d on d.id=rv.document_id and d.origin='wb_api'
          left join lateral (
            select n.id from mc.report_normalizations n join mc.method_versions m on m.id=n.method_version_id
-            where n.report_version_id=rv.id and n.status='succeeded' and m.implementation_version in ($3,'wb-finance-v4','wb-finance-v3','wb-finance-v2')
-            order by case m.implementation_version when $3 then 0 when 'wb-finance-v4' then 1 when 'wb-finance-v3' then 2 else 3 end,m.version_no desc limit 1
+            where n.report_version_id=rv.id and n.status='succeeded' and m.implementation_version=any($3::text[])
+            order by array_position($3::text[],m.implementation_version),m.version_no desc limit 1
          ) rn on true
         where r.business_id=$1 and r.store_id=$2 and rv.status='accepted'
-        order by r.period_start,r.external_report_id`,[businessId,storeId,financialParserVersion]
+        order by r.period_start,r.external_report_id`,[businessId,storeId,compatibleFinancialParserVersions]
     )).rows;
     if(!reports.length)throw new Error('calculation_financial_inputs_missing');
     const normalized=reports.filter(row=>row.normalization_id);

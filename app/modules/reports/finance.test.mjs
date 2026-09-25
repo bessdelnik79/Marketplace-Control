@@ -122,7 +122,7 @@ test('unverified WB remuneration fields remain separate informational components
 });
 
 test('verified non-product WB charges have store scope only for exact field, document, operation and positive value', () => {
-  assert.equal(financialParserVersion, 'wb-finance-v5');
+  assert.equal(financialParserVersion, 'wb-finance-v6');
   const cases = [
     ['deliveryService', 'Логистика', 'logistics'],
     ['deliveryService', 'Доставка', 'logistics'],
@@ -140,9 +140,10 @@ test('verified non-product WB charges have store scope only for exact field, doc
     assert.equal(component.categoryCode, category);
     assert.equal(financialComponentScope(source, operation, component), 'store', `${field}/${name}`);
     assert.equal(financialComponentScope(source, operation, component, true), 'selected_product');
-    for (const itemField of ['nmId', 'sku', 'saName', 'srid', 'shkId', 'barcode']) {
+    for (const itemField of ['nmId', 'sku', 'saName', 'barcode']) {
       assert.equal(financialComponentScope({ ...source, [itemField]: '123' }, operation, component), 'product_expected', itemField);
     }
+    assert.equal(financialComponentScope({ ...source, srid: 'transaction-id', shkId: '56877337290' }, operation, component), 'store');
     assert.equal(financialComponentScope({ ...source, docTypeName: 'Продажа' }, operation, component), 'product_expected');
     assert.equal(financialComponentScope({ ...source, sellerOperName: 'Новая услуга' }, operation, component), 'product_expected');
     assert.equal(financialComponentScope({ ...source, [field]: '-10' }, operation, component), 'product_expected');
@@ -177,7 +178,7 @@ test('verified WB promotion is a distinct store expense while generic deductions
 });
 
 test('each exact PVZ source component is an independent store result without netting requirements',()=>{
-  const source=row({nmId:0,retailAmount:null,docTypeName:'Продажа',sellerOperName:'Возмещение за выдачу и возврат товаров на ПВЗ',ppvzReward:'16.2900',vw:'-13.3522',vwNds:'-2.9400'});
+  const source=row({nmId:0,sku:'',srid:'eAF.i9ad683fb4437520a3c2be26a00cb2b98.0.0',shkId:'56877337290',retailAmount:null,docTypeName:'Продажа',sellerOperName:'Возмещение за выдачу и возврат товаров на ПВЗ',ppvzReward:'16.2900',vw:'-13.3522',vwNds:'-2.9400'});
   const operation=normalizeFinancialOperation(source);
   assert.equal(operation.operationType,'other');
   assert.deepEqual(operation.components.map(component=>[component.sourceField,financialComponentScope(source,operation,component)]),[

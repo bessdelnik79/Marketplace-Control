@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { aggregatePublishedPeriodEnvelopes,loadPublishedPeriodEnvelopes } from './calculation.repository.mjs';
+import { aggregatePublishedPeriodEnvelopes,compatibleFinancialParserVersions,loadPublishedPeriodEnvelopes } from './calculation.repository.mjs';
 import { buildFinancialPeriodOverview } from '../overview/financial-overview.mjs';
 
 function envelope(start,end,{quality='complete',missingReasons=[],amount='10.0000',freshness=`${end}T10:00:00Z`,crossBorder=0}={}){
@@ -15,6 +15,10 @@ function envelope(start,end,{quality='complete',missingReasons=[],amount='10.000
     taxReference:{usable:true,includedInResult:true,taxableBase:amount,estimatedTax:'0.6000',products:[{productId:'product-1',taxableBase:amount,estimatedTax:'0.6000'}],segments:[]}
   };
 }
+
+test('current financial parser keeps v5 as the first compatibility fallback',()=>{
+  assert.deepEqual(compatibleFinancialParserVersions.slice(0,3),['wb-finance-v6','wb-finance-v5','wb-finance-v4']);
+});
 
 test('aggregates a fully covered arbitrary range using exact scale-4 persisted totals',()=>{
   const result=aggregatePublishedPeriodEnvelopes('2026-08-03','2026-08-16',[
