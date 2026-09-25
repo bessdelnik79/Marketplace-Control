@@ -108,7 +108,7 @@ test('calculation keeps confirmed store charges separate from selected SKU resul
       { id: 'fc-2', classificationStatus: 'confirmed', scopeCode: 'selected_product', productId: 'product-1', variantId: 'variant-1', accountingDate: '2026-07-13', categoryCode: 'commission', amountSigned: '-12.5000' },
       { id: 'fc-3', classificationStatus: 'confirmed', scopeCode: 'store', productId: null, accountingDate: '2026-07-14', categoryCode: 'storage', amountSigned: '-5.1250' },
       { id: 'fc-4', classificationStatus: 'confirmed', scopeCode: 'selected_product', productId: 'not-selected', accountingDate: '2026-07-13', categoryCode: 'revenue', amountSigned: '999.0000' },
-      { id: 'fc-5', classificationStatus: 'confirmed', scopeCode: 'reconciliation', accountingDate: '2026-07-13', categoryCode: 'payout', amountSigned: '82.3750' }
+      { id: 'fc-5', classificationStatus: 'unclassified', scopeCode: 'reconciliation', accountingDate: '2026-07-13', categoryCode: 'payout', amountSigned: '82.3750' }
     ]
   });
   assert.equal(result.quality, 'partial');

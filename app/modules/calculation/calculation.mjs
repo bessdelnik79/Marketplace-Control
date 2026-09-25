@@ -448,6 +448,7 @@ export function calculateFinancialResult({
     const componentId = uniqueSource(seenSources, component?.id, 'financial_component');
     validateScopeStructure(component);
     if (component?.productId && !selected.has(String(component.productId))) continue;
+    if (NON_RESULT_CATEGORIES.has(component?.categoryCode)) continue;
     if (component?.classificationStatus !== 'confirmed') {
       reasons.add('operation_unclassified');
       continue;
@@ -457,7 +458,7 @@ export function calculateFinancialResult({
       continue;
     }
     if (!RESULT_CATEGORIES.has(component?.categoryCode)) {
-      if (!NON_RESULT_CATEGORIES.has(component?.categoryCode)) reasons.add('operation_unclassified');
+      reasons.add('operation_unclassified');
       continue;
     }
     const scope = resolveScope(component, selected, reasons);
