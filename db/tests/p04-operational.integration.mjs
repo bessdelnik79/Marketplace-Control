@@ -150,4 +150,65 @@ test('operational failure cannot finish a run from another stream',async()=>{
   await failOperationalSync(ids.user,operationalJob,'operational_test_finished');
 });
 
+test('selection change rejects an obsolete snapshot and makes the stream due immediately',async()=>{
+  const job=await beginOperationalSync(ids.user,ids.store,{force:true,...week});
+  const secondProduct=randomUUID();
+  await context(ids.user,ids.business,async client=>{
+    await client.query(`insert into mc.products(id,business_id,store_id,wb_article,seller_article) values($1,$2,$3,7400002,'P04-2')`,[secondProduct,ids.business,ids.store]);
+    await client.query(`select mc.add_products_to_selection($1,$2::uuid[])`,[ids.store,[secondProduct]]);
+  });
+  const snapshotId=randomUUID();
+  await assert.rejects(()=>completeOperationalSync(ids.user,job,{documentId:randomUUID(),snapshotId,objects:[await storedObject('{"batch":"obsolete"}',snapshotId)],metrics:metrics(),storage}),{message:'operational_selection_changed'});
+  await failOperationalSync(ids.user,job,'operational_selection_changed');
+  const state=await getOperationalSyncState(ids.user,ids.store);
+  assert.equal(state.run_status,'failed');
+  assert.equal(state.error_code,'operational_selection_changed');
+  assert.ok(new Date(state.next_run_at)<=new Date(Date.now()+5000));
+  assert.equal(state.comparison_ready,false);
+});
+
+test('snapshot publication and selection extension share a database mutex',async()=>{
+  const job=await beginOperationalSync(ids.user,ids.store,{force:true,...week});
+  const snapshotId=randomUUID();
+  const allMetrics=job.products.flatMap(product=>Array.from({length:7},(_,index)=>{
+    const day=14+index;
+    return {nmId:product.nmId,date:`2026-09-${day}`,currency:'RUB',orderCount:day,orderSum:`${day}00.25`,buyoutCount:day-1,buyoutSum:`${day-1}00.10`};
+  }));
+  const object=await storedObject('{"batch":"mutex"}',snapshotId);
+  const blocker=await pool.connect();
+  await blocker.query('begin');
+  await blocker.query('lock table mc.source_documents in access exclusive mode');
+  const completion=completeOperationalSync(ids.user,job,{documentId:randomUUID(),snapshotId,objects:[object],metrics:allMetrics,storage});
+  let mutexObserved=false;
+  for(let attempt=0;attempt<50&&!mutexObserved;attempt++){
+    const probe=await pool.connect();
+    try{
+      await probe.query('begin');
+      await probe.query("select set_config('app.user_id',$1,true),set_config('app.business_id',$2,true)",[ids.user,ids.business]);
+      await probe.query('select 1 from mc.businesses where id=$1 for update nowait',[ids.business]);
+      await probe.query('rollback');
+    }catch(error){
+      await probe.query('rollback');
+      if(error.code==='55P03')mutexObserved=true;else throw error;
+    }finally{probe.release();}
+    if(!mutexObserved)await new Promise(resolve=>setTimeout(resolve,10));
+  }
+  assert.equal(mutexObserved,true);
+  const thirdProduct=randomUUID();
+  let extensionSettled=false;
+  const extension=context(ids.user,ids.business,async client=>{
+    await client.query(`insert into mc.products(id,business_id,store_id,wb_article,seller_article) values($1,$2,$3,7400003,'P04-3')`,[thirdProduct,ids.business,ids.store]);
+    await client.query(`select mc.add_products_to_selection($1,$2::uuid[])`,[ids.store,[thirdProduct]]);
+  }).finally(()=>{extensionSettled=true;});
+  await new Promise(resolve=>setTimeout(resolve,30));
+  assert.equal(extensionSettled,false);
+  await blocker.query('commit');
+  blocker.release();
+  const published=await completion;
+  await extension;
+  assert.equal(published.quality,'complete');
+  const state=await getOperationalSyncState(ids.user,ids.store);
+  assert.ok(new Date(state.next_run_at)<=new Date(Date.now()+5000));
+});
+
 test.after(async()=>{await pool.end();await rm(rawRoot,{recursive:true,force:true});});
