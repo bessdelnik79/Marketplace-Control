@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { aggregatePublishedPeriodEnvelopes,compatibleFinancialParserVersions,loadPublishedPeriodEnvelopes,reportPeriodsCoverRange,selectFullyNormalizedReportPeriods } from './calculation.repository.mjs';
+import { aggregatePublishedPeriodEnvelopes,classifyNormalizationRecovery,compatibleFinancialParserVersions,loadPublishedPeriodEnvelopes,missingNormalizationRanges,reportPeriodsCoverRange,selectFullyNormalizedReportPeriods } from './calculation.repository.mjs';
 import { buildFinancialPeriodOverview } from '../overview/financial-overview.mjs';
 
 function envelope(start,end,{quality='complete',missingReasons=[],amount='10.0000',freshness=`${end}T10:00:00Z`,crossBorder=0}={}){
@@ -54,6 +54,44 @@ test('recognizes an arbitrary target range covered across adjacent report period
   assert.equal(reportPeriodsCoverRange(reports,'2026-09-10','2026-09-19'),true);
   assert.equal(reportPeriodsCoverRange(reports,'2026-09-06','2026-09-19'),false);
   assert.equal(reportPeriodsCoverRange([reports[1]],'2026-09-10','2026-09-19'),false);
+});
+
+test('identifies accepted report periods that need the current normalization',()=>{
+  const reports=[
+    {period_start:'2026-08-10',period_end:'2026-08-16',normalization_id:null},
+    {period_start:'2026-08-17',period_end:'2026-08-23',normalization_id:'normalization-current'},
+    {period_start:'2026-08-24',period_end:'2026-08-30',normalization_id:null}
+  ];
+  assert.deepEqual(missingNormalizationRanges(reports,'2026-08-10','2026-08-19'),[
+    {periodStart:'2026-08-10',periodEnd:'2026-08-16'}
+  ]);
+});
+
+test('target normalization recovery stops after a durable failure and ignores stale runs',()=>{
+  const ranges=[{periodStart:'2026-08-10',periodEnd:'2026-08-16'}];
+  const candidates=[{period_start:'2026-08-10',period_end:'2026-08-16',normalization_id:null,accepted_at:'2026-09-26T10:00:00Z'}];
+  assert.deepEqual(classifyNormalizationRecovery(ranges,candidates,[]),{status:'normalization_required',ranges});
+  assert.deepEqual(classifyNormalizationRecovery(ranges,candidates,[{
+    requested_from:'2026-08-10',requested_to:'2026-08-16',status:'failed',started_at:'2026-09-26T09:00:00Z',error_code:'old_failure'
+  }],{now:new Date('2026-09-26T12:00:00Z')}),{status:'normalization_required',ranges});
+  assert.deepEqual(classifyNormalizationRecovery(ranges,candidates,[{
+    requested_from:'2026-08-10',requested_to:'2026-08-16',status:'failed',started_at:'2026-09-26T11:00:00Z',error_code:'financial_unauthorized'
+  }]),{status:'normalization_failed',reason:'financial_unauthorized',ranges});
+  assert.deepEqual(classifyNormalizationRecovery(ranges,candidates,[{
+    requested_from:'2026-08-10',requested_to:'2026-08-16',status:'running',started_at:'2026-09-26T11:00:00Z',error_code:null
+  }],{now:new Date('2026-09-26T12:00:00Z')}),{status:'normalization_running',ranges});
+  assert.deepEqual(classifyNormalizationRecovery(ranges,candidates,[{
+    requested_from:'2026-08-10',requested_to:'2026-08-16',status:'running',started_at:'2026-09-26T08:00:00Z',error_code:null
+  }],{now:new Date('2026-09-26T12:00:00Z')}),{status:'normalization_required',ranges});
+});
+
+test('successful targeted sync without a current normalization requires manual retry',()=>{
+  const ranges=[{periodStart:'2026-08-10',periodEnd:'2026-08-16'}],candidates=[{
+    period_start:'2026-08-10',period_end:'2026-08-16',normalization_id:null,accepted_at:'2026-09-26T10:00:00Z'
+  }];
+  assert.deepEqual(classifyNormalizationRecovery(ranges,candidates,[{
+    requested_from:'2026-08-10',requested_to:'2026-08-16',status:'succeeded',started_at:'2026-09-26T11:00:00Z',error_code:null
+  }]),{status:'normalization_failed',reason:'financial_target_normalization_missing',ranges});
 });
 
 test('aggregates a fully covered arbitrary range using exact scale-4 persisted totals',()=>{

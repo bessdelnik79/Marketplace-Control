@@ -43,7 +43,7 @@
   if(financialCalculation){
     $('[data-financial-refresh-now]',financialCalculation)?.addEventListener('click',()=>location.reload());
     if(financialCalculation.dataset.financialRefresh!=='false'){
-      const storedStarted=Number(financialPollStorage.get()),started=Number.isFinite(storedStarted)&&storedStarted>0?storedStarted:Date.now(),deadline=started+120000;
+      const storedStarted=Number(financialPollStorage.get()),started=Number.isFinite(storedStarted)&&storedStarted>0?storedStarted:Date.now(),deadline=started+600000;
       financialPollStorage.set(String(started));
       let financialRefreshTimer=null;
       const scheduleFinancialRefresh=()=>{clearTimeout(financialRefreshTimer);if(Date.now()>=deadline){$('[data-financial-poll-note]',financialCalculation).hidden=false;return}if(document.hidden)return;financialRefreshTimer=setTimeout(()=>{financialRefreshTimer=null;if(!document.hidden&&Date.now()<deadline)location.reload();else scheduleFinancialRefresh()},4000)};

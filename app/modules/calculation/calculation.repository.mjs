@@ -346,6 +346,15 @@ export function reportPeriodsCoverRange(reports,periodStart,periodEnd){
   return false;
 }
 
+export function missingNormalizationRanges(reports,periodStart,periodEnd){
+  const periods=groupBy(reports,row=>periodKey(String(row.period_start),String(row.period_end)));
+  return [...periods.values()]
+    .filter(rows=>rows.some(row=>!row.normalization_id))
+    .map(rows=>({periodStart:String(rows[0].period_start),periodEnd:String(rows[0].period_end)}))
+    .filter(period=>period.periodEnd>=periodStart&&period.periodStart<=periodEnd)
+    .sort((left,right)=>left.periodStart.localeCompare(right.periodStart)||left.periodEnd.localeCompare(right.periodEnd));
+}
+
 function normalizeTargetPeriod(targetPeriod){
   if(!targetPeriod)return null;
   const periodStart=String(targetPeriod.periodStart??targetPeriod.start??'');
@@ -358,7 +367,7 @@ function normalizeTargetPeriod(targetPeriod){
 
 async function loadCalculationReportCandidates(client,businessId,storeId){
   return (await client.query(
-    `select r.id as report_id,rv.id as report_version_id,r.period_start::text,r.period_end::text,rn.id as normalization_id
+    `select r.id as report_id,rv.id as report_version_id,rv.accepted_at,r.period_start::text,r.period_end::text,rn.id as normalization_id
        from mc.reports r join mc.report_versions rv on rv.id=r.current_version_id
        join mc.source_documents d on d.id=rv.document_id and d.origin='wb_api'
        left join lateral (
@@ -369,6 +378,27 @@ async function loadCalculationReportCandidates(client,businessId,storeId){
       where r.business_id=$1 and r.store_id=$2 and rv.status='accepted'
       order by r.period_start,r.external_report_id`,[businessId,storeId,[financialParserVersion]]
   )).rows;
+}
+
+export function classifyNormalizationRecovery(ranges,candidates,runs,{now=new Date()}={}){
+  const staleBefore=now.getTime()-3*60*60*1000;
+  const runsByRange=new Map(runs.map(run=>[periodKey(String(run.requested_from),String(run.requested_to)),run]));
+  for(const range of ranges){
+    const key=periodKey(range.periodStart,range.periodEnd);
+    const acceptedAt=candidates
+      .filter(row=>periodKey(String(row.period_start),String(row.period_end))===key&&!row.normalization_id)
+      .map(row=>new Date(row.accepted_at).getTime()).filter(Number.isFinite)
+      .reduce((latest,value)=>Math.max(latest,value),0);
+    const run=runsByRange.get(key);
+    if(!run||new Date(run.started_at).getTime()<acceptedAt)continue;
+    if(run.status==='running'||run.status==='queued'){
+      if(new Date(run.started_at).getTime()<=staleBefore)continue;
+      return{status:'normalization_running',ranges};
+    }
+    if(run.status==='failed'||run.status==='partial')return{status:'normalization_failed',reason:run.error_code??'financial_target_normalization_failed',ranges};
+    if(run.status==='succeeded')return{status:'normalization_failed',reason:'financial_target_normalization_missing',ranges};
+  }
+  return{status:'normalization_required',ranges};
 }
 
 export async function getFinancialPeriodRecoveryState(userId,storeId,periodStart,periodEnd){
@@ -390,10 +420,24 @@ export async function getFinancialPeriodRecoveryState(userId,storeId,periodStart
       if(latest.status==='failed')return{status:'failed',reason:latest.last_error_code??'calculation_failed'};
     }
     if(latest&&['pending','running'].includes(latest.status))return{status:'busy'};
-    const reports=selectFullyNormalizedReportPeriods(await loadCalculationReportCandidates(client,businessId,storeId));
-    return reportPeriodsCoverRange(reports,target.periodStart,target.periodEnd)
-      ?{status:'ready'}
-      :{status:'uncovered',reason:'calculation_period_coverage_incomplete'};
+    const candidates=await loadCalculationReportCandidates(client,businessId,storeId);
+    const reports=selectFullyNormalizedReportPeriods(candidates);
+    if(reportPeriodsCoverRange(reports,target.periodStart,target.periodEnd))return{status:'ready'};
+    if(reportPeriodsCoverRange(candidates,target.periodStart,target.periodEnd)){
+      const ranges=missingNormalizationRanges(candidates,target.periodStart,target.periodEnd);
+      if(ranges.length){
+        const targetedRuns=(await client.query(
+          `select distinct on(q.requested_from,q.requested_to)
+                  q.requested_from::text,q.requested_to::text,q.status,q.started_at,q.error_code
+             from mc.sync_runs q join mc.sync_streams s on s.id=q.stream_id
+            where q.business_id=$1 and q.store_id=$2 and s.source_type='financial_reports'
+              and q.progress->>'targeted'='true' and q.requested_from<=$4::date and q.requested_to>=$3::date
+            order by q.requested_from,q.requested_to,q.created_at desc`,[businessId,storeId,target.periodStart,target.periodEnd]
+        )).rows;
+        return classifyNormalizationRecovery(ranges,candidates,targetedRuns);
+      }
+    }
+    return{status:'uncovered',reason:'calculation_period_coverage_incomplete'};
   });
 }
 

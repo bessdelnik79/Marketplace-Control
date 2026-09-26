@@ -37,6 +37,7 @@ export function createOverviewRoutes({
   scheduleOperationalSync,
   getFinancialPeriodRecoveryState = async () => ({ status: 'uncovered' }),
   scheduleFinancialCalculation = () => false,
+  scheduleFinancialSync = () => false,
 }) {
   return async function handleOverview(req, res, url, current) {
     if (req.method !== 'GET' || !['/', '/overview'].includes(url.pathname)) return false;
@@ -90,12 +91,23 @@ export function createOverviewRoutes({
       &&(state.financial.missingReasons??[]).some(reason=>['published_period_missing','published_financial_result_missing','report_coverage_incomplete'].includes(reason));
     if(missingPublishedPeriod){
       const recovery=await getFinancialPeriodRecoveryState(current.user_id,store.id,period.start,period.end);
-      const retryFailed=recovery.status==='failed'&&url.searchParams.get('retryCalculation')==='1';
-      if(recovery.status==='ready'||retryFailed)scheduleFinancialCalculation(current.user_id,store.id,{targetPeriod:{periodStart:period.start,periodEnd:period.end}});
-      if(['ready','queued','running','busy'].includes(recovery.status)||retryFailed)state.financial={
-        ...state.financial,status:'calculating',calculationStage:recovery.status==='running'?'running':'queued',refresh:true
+      const retryRequested=url.searchParams.get('retryCalculation')==='1';
+      const retryFailed=recovery.status==='failed'&&retryRequested;
+      const retryNormalization=recovery.status==='normalization_failed'&&retryRequested;
+      if(['ready','queued'].includes(recovery.status)||retryFailed)scheduleFinancialCalculation(current.user_id,store.id,{targetPeriod:{periodStart:period.start,periodEnd:period.end}});
+      if(recovery.status==='normalization_required'||retryNormalization)scheduleFinancialSync(current.user_id,store.id,{
+        targetPeriod:{periodStart:period.start,periodEnd:period.end},targetRanges:recovery.ranges
+      });
+      if(retryRequested){
+        const cleanUrl=new URL(url);
+        cleanUrl.searchParams.delete('retryCalculation');
+        redirect(res,`${cleanUrl.pathname}${cleanUrl.search}`);
+        return true;
+      }
+      if(['ready','queued','running','busy','normalization_required','normalization_running'].includes(recovery.status))state.financial={
+        ...state.financial,status:'calculating',calculationStage:['normalization_required','normalization_running','normalization_failed'].includes(recovery.status)?'sources':recovery.status==='running'?'running':'queued',refresh:true
       };
-      else if(recovery.status==='failed')state.financial={...state.financial,status:'failed',calculationFailure:recovery.reason};
+      else if(['failed','normalization_failed'].includes(recovery.status))state.financial={...state.financial,status:'failed',calculationFailure:recovery.reason};
       else if(recovery.status==='uncovered')state.financial={...state.financial,missingReasons:[recovery.reason??'calculation_period_coverage_incomplete']};
     }
     send(res, 200, overviewPage(current, stores, state, pageOptions));

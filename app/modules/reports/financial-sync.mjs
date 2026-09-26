@@ -7,7 +7,7 @@ import { assertWbFinancialToken, decodeWbToken } from '../stores/wb.mjs';
 import { scheduleFinancialCalculation } from '../calculation/calculation-sync.mjs';
 import { loadWbFinancialSummaries } from './bank-reconciliation.mjs';
 
-const activeJobs = new Set();
+const activeJobs = new Map();
 const knownErrors = new Set([
   'financial_connection_unavailable','financial_invalid_request','financial_unauthorized','financial_payment_required',
   'financial_rate_limited','financial_unavailable','financial_invalid_response','financial_invalid_row','financial_invalid_amount',
@@ -44,26 +44,81 @@ export function financialSyncFailureDiagnostic(error, errorCode = financialSyncE
   return Object.fromEntries(Object.entries(diagnostic).filter(([, value]) => value !== undefined));
 }
 
-export function scheduleFinancialSync(userId, storeId, {
+const exactDate=value=>/^\d{4}-\d{2}-\d{2}$/.test(String(value??''))?String(value):null;
+
+export function normalizeTargetFinancialRanges(targetRanges){
+  if(!Array.isArray(targetRanges))return [];
+  const seen=new Set(),result=[];
+  for(const range of targetRanges){
+    const periodStart=exactDate(range?.periodStart??range?.dateFrom);
+    const periodEnd=exactDate(range?.periodEnd??range?.dateTo);
+    if(!periodStart||!periodEnd||periodStart>periodEnd)throw new Error('financial_invalid_request');
+    const key=`${periodStart}:${periodEnd}`;
+    if(!seen.has(key)){seen.add(key);result.push({periodStart,periodEnd});}
+  }
+  return result;
+}
+
+export function buildFinancialSyncRequests(targetPeriod,targetRanges){
+  const targeted=targetPeriod!==null||targetRanges!==null;
+  return targeted
+    ?normalizeTargetFinancialRanges(targetRanges).map(requestedRange=>({historical:true,requestedRange}))
+    :[{historical:false},{historical:true}];
+}
+
+const financialSyncRequestKey=request=>request.targetPeriod
+  ?`target:${String(request.targetPeriod.periodStart??request.targetPeriod.dateFrom??'')}:${String(request.targetPeriod.periodEnd??request.targetPeriod.dateTo??'')}`
+  :'general';
+
+export function mergeQueuedFinancialSyncRequests(queue,request){
+  const result=[...queue],key=financialSyncRequestKey(request);
+  const index=result.findIndex(item=>financialSyncRequestKey(item)===key);
+  if(index<0)return [...result,{...request,targetRanges:request.targetRanges==null?null:normalizeTargetFinancialRanges(request.targetRanges)}];
+  const current=result[index];
+  result[index]={...current,...request,force:Boolean(current.force||request.force)};
+  if(key!=='general')result[index].targetRanges=normalizeTargetFinancialRanges([...(current.targetRanges??[]),...(request.targetRanges??[])]);
+  return result;
+}
+
+export function scheduleFinancialSync(userId, storeId, options = {}) {
+  const key = `${userId}:${storeId}`;
+  const active = activeJobs.get(key);
+  if(active){
+    active.queue=mergeQueuedFinancialSyncRequests(active.queue,options);
+    return false;
+  }
+  startFinancialSync(userId,storeId,options,[]);
+  return true;
+}
+
+function startFinancialSync(userId, storeId, {
   force = false,
   fetchImpl = fetch,
   waitImpl,
   now = new Date(),
   sourceRoot,
   masterKey,
-  random = Math.random
-} = {}) {
+  random = Math.random,
+  targetPeriod = null,
+  targetRanges = null
+} = {}, queued = []) {
   const key = `${userId}:${storeId}`;
-  if (activeJobs.has(key)) return false;
-  activeJobs.add(key);
+  const state={queue:queued};
+  activeJobs.set(key,state);
   void (async () => {
     let job, documentId, stored;
     try {
       const wait = waitImpl ?? (ms => new Promise(resolve => setTimeout(resolve, ms)));
       const initialRange=financialDateRange(now,91),recentRange=financialDateRange(now,35);
-      for(const historical of [false,true]){
-        job=await beginFinancialSync(userId,storeId,{force:force||historical,historical,initialRange,recentRange});
-        if(!job?.started)return;
+      const targeted=targetPeriod!==null||targetRanges!==null;
+      const requests=buildFinancialSyncRequests(targetPeriod,targetRanges);
+      for(const request of requests){
+        const historical=request.historical;
+        job=await beginFinancialSync(userId,storeId,{force:force||historical,historical,initialRange,recentRange,requestedRange:request.requestedRange,targetPeriod});
+        if(!job?.started){
+          if(targeted&&job?.reason==='target_range_not_needed')continue;
+          return;
+        }
         const token=decryptSecret({ciphertext:job.ciphertext,nonce:job.nonce,authTag:job.auth_tag});
         assertWbFinancialToken(decodeWbToken(token));
         const financial=await loadWbFinancialReports(token,{
@@ -101,8 +156,9 @@ export function scheduleFinancialSync(userId, storeId, {
         stored=undefined;
         documentId=undefined;
         job=undefined;
-        scheduleFinancialCalculation(userId,storeId);
+        if(!targeted)scheduleFinancialCalculation(userId,storeId);
       }
+      if(targeted)scheduleFinancialCalculation(userId,storeId,{targetPeriod});
     } catch (error) {
       const code = financialSyncErrorCode(error);
       const retryDelaySeconds=code==='financial_rate_limited'?financialRequestDelaySeconds(random):70;
@@ -113,7 +169,8 @@ export function scheduleFinancialSync(userId, storeId, {
       }));
     } finally {
       activeJobs.delete(key);
+      const [next,...remaining]=state.queue;
+      if(next)startFinancialSync(userId,storeId,next,remaining);
     }
   })();
-  return true;
 }

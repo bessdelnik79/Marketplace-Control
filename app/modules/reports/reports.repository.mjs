@@ -35,8 +35,14 @@ export function selectHistoricalRenormalizationWeek(candidates,{initialRange,rec
     .sort((a,b)=>b.dateFrom.localeCompare(a.dateFrom)||b.dateTo.localeCompare(a.dateTo))[0]??null;
 }
 
-export async function beginFinancialSync(userId,storeId,{force=false,historical=false,initialRange,recentRange}={}){
+export async function beginFinancialSync(userId,storeId,{force=false,historical=false,initialRange,recentRange,requestedRange=null,targetPeriod=null}={}){
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
+    const requestedFrom=exactDate(requestedRange?.periodStart??requestedRange?.dateFrom);
+    const requestedTo=exactDate(requestedRange?.periodEnd??requestedRange?.dateTo);
+    const targetFrom=exactDate(targetPeriod?.periodStart??targetPeriod?.dateFrom);
+    const targetTo=exactDate(targetPeriod?.periodEnd??targetPeriod?.dateTo);
+    const targeted=Boolean(requestedRange||targetPeriod);
+    if(targeted&&(!requestedFrom||!requestedTo||!targetFrom||!targetTo||requestedFrom>requestedTo||targetFrom>targetTo))throw new Error('financial_invalid_request');
     const row=(await client.query(
       `select ss.id as stream_id,ss.next_run_at,ss.last_success_at,ss.cursor,cs.ciphertext,cs.nonce,cs.auth_tag,s.external_account_id as seller_id,
               exists(select 1 from mc.product_selections ps where ps.business_id=s.business_id and ps.store_id=s.id and ps.status='confirmed') as selected
@@ -54,7 +60,27 @@ export async function beginFinancialSync(userId,storeId,{force=false,historical=
     if(running&&new Date(running.started_at)>new Date(Date.now()-3*60*60*1000))return {started:false,reason:'running'};
     if(running)await client.query(`update mc.sync_runs set status='failed',finished_at=now(),error_code='financial_interrupted' where id=$1`,[running.id]);
     let range=row.last_success_at?recentRange:initialRange;
-    if(historical){
+    if(targeted){
+      const eligible=(await client.query(
+        `select 1
+           from mc.reports r
+           join mc.report_versions rv on rv.id=r.current_version_id and rv.status='accepted'
+          where r.business_id=$1 and r.store_id=$2 and r.report_type='weekly_realization'
+            and r.period_start=$3::date and r.period_end=$4::date
+            and r.period_start<=$6::date and r.period_end>=$5::date
+            and not exists(
+              select 1 from mc.report_normalizations rn
+              join mc.method_versions m on m.id=rn.method_version_id
+               where rn.report_version_id=rv.id and rn.status='succeeded'
+                 and m.code='wb_finance_import' and m.implementation_version=$7
+            )
+          limit 1`,
+        [businessId,storeId,requestedFrom,requestedTo,targetFrom,targetTo,financialParserVersion]
+      )).rows[0];
+      if(!eligible)return {started:false,reason:'target_range_not_needed'};
+      historical=true;
+      range={dateFrom:requestedFrom,dateTo:requestedTo};
+    }else if(historical){
       const missingCurrentNormalization=(await client.query(
         `select distinct r.period_start::text as date_from,r.period_end::text as date_to
            from mc.reports r
@@ -79,11 +105,11 @@ export async function beginFinancialSync(userId,storeId,{force=false,historical=
     if(!range?.dateFrom||!range?.dateTo)throw new Error('financial_invalid_request');
     const run=(await client.query(
       `insert into mc.sync_runs(business_id,store_id,stream_id,requested_from,requested_to,status,started_at,progress)
-       values($1,$2,$3,$4,$5,'running',now(),'{"stage":"loading","pages":0,"rows":0}') returning id`,
-      [businessId,storeId,row.stream_id,range.dateFrom,range.dateTo]
+       values($1,$2,$3,$4,$5,'running',now(),$6::jsonb) returning id`,
+      [businessId,storeId,row.stream_id,range.dateFrom,range.dateTo,JSON.stringify({stage:'loading',pages:0,rows:0,...(targeted?{targeted:true,targetPeriod:{periodStart:targetFrom,periodEnd:targetTo}}:{})})]
     )).rows[0];
     if(!historical)await client.query(`update mc.sync_streams set next_run_at=null where id=$1`,[row.stream_id]);
-    return {started:true,historical,business_id:businessId,store_id:storeId,stream_id:row.stream_id,run_id:run.id,date_from:range.dateFrom,date_to:range.dateTo,seller_id:row.seller_id,ciphertext:row.ciphertext,nonce:row.nonce,auth_tag:row.auth_tag};
+    return {started:true,historical,targeted,target_period:targeted?{periodStart:targetFrom,periodEnd:targetTo}:null,business_id:businessId,store_id:storeId,stream_id:row.stream_id,run_id:run.id,date_from:range.dateFrom,date_to:range.dateTo,seller_id:row.seller_id,ciphertext:row.ciphertext,nonce:row.nonce,auth_tag:row.auth_tag};
   });
 }
 
@@ -108,7 +134,7 @@ export async function reserveFinancialRequestSlot(userId,job,delaySeconds){
 export async function updateFinancialSyncProgress(userId,job,progress){
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
     if(businessId!==job.business_id)throw new Error('financial_context_mismatch');
-    await client.query(`update mc.sync_runs set progress=$2::jsonb where id=$1 and business_id=$3 and status='running'`,[job.run_id,JSON.stringify(progress),businessId]);
+    await client.query(`update mc.sync_runs set progress=coalesce(progress,'{}'::jsonb)||$2::jsonb where id=$1 and business_id=$3 and status='running'`,[job.run_id,JSON.stringify(progress),businessId]);
   });
 }
 
@@ -305,7 +331,7 @@ export async function completeFinancialSync(userId,job,{documentId,reports,summa
        on conflict(store_id) do update set requested_by=excluded.requested_by,
          reason=excluded.reason,generation_token=gen_random_uuid(),invalidated_at=excluded.invalidated_at`,[businessId,job.store_id,userId]
     );
-    const progress={stage:'complete',reports:reports.length,insertedReports,normalizedReports,reselectedReports,unchangedReports,rows:insertedRows,issues,bankChecks};
+    const progress={stage:'complete',reports:reports.length,insertedReports,normalizedReports,reselectedReports,unchangedReports,rows:insertedRows,issues,bankChecks,...(job.targeted?{targeted:true,targetPeriod:job.target_period}:{})};
     await client.query(`update mc.sync_runs set status='succeeded',finished_at=now(),error_code=null,progress=$2::jsonb where id=$1 and status='running'`,[job.run_id,JSON.stringify(progress)]);
     const cursor=job.historical
       ?{historicalWeekStart:job.date_from}

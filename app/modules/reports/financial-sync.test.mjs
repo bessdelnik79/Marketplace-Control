@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { financialSyncErrorCode, financialSyncFailureDiagnostic } from './financial-sync.mjs';
+import { buildFinancialSyncRequests, financialSyncErrorCode, financialSyncFailureDiagnostic, mergeQueuedFinancialSyncRequests, normalizeTargetFinancialRanges } from './financial-sync.mjs';
 
 test('financial sync preserves safe repository validation codes', () => {
   for (const code of [
@@ -36,4 +36,55 @@ test('financial sync diagnostics expose only bounded structured fields', () => {
   assert.deepEqual(financialSyncFailureDiagnostic(Object.assign(new Error('unknown'), {
     name: 'bad name with spaces', constraint: 'unsafe/constraint', code: 'x'.repeat(121)
   })), { errorCode: 'financial_internal_error' });
+});
+
+test('target financial ranges are validated, normalized and de-duplicated in order',()=>{
+  assert.deepEqual(normalizeTargetFinancialRanges([
+    {dateFrom:'2026-09-07',dateTo:'2026-09-13'},
+    {periodStart:'2026-09-14',periodEnd:'2026-09-20'},
+    {periodStart:'2026-09-07',periodEnd:'2026-09-13'}
+  ]),[
+    {periodStart:'2026-09-07',periodEnd:'2026-09-13'},
+    {periodStart:'2026-09-14',periodEnd:'2026-09-20'}
+  ]);
+  assert.deepEqual(normalizeTargetFinancialRanges(null),[]);
+  assert.throws(()=>normalizeTargetFinancialRanges([{periodStart:'2026-09-20',periodEnd:'2026-09-14'}]),/financial_invalid_request/);
+  assert.throws(()=>normalizeTargetFinancialRanges([{periodStart:'bad',periodEnd:'2026-09-14'}]),/financial_invalid_request/);
+});
+
+test('target financial sync processes requested weekly ranges sequentially before calculation',()=>{
+  assert.deepEqual(buildFinancialSyncRequests(
+    {periodStart:'2026-09-10',periodEnd:'2026-09-19'},
+    [{periodStart:'2026-09-07',periodEnd:'2026-09-13'},{periodStart:'2026-09-14',periodEnd:'2026-09-20'}]
+  ),[
+    {historical:true,requestedRange:{periodStart:'2026-09-07',periodEnd:'2026-09-13'}},
+    {historical:true,requestedRange:{periodStart:'2026-09-14',periodEnd:'2026-09-20'}}
+  ]);
+  assert.deepEqual(buildFinancialSyncRequests(null,null),[{historical:false},{historical:true}]);
+});
+
+test('financial sync queue preserves general and distinct targets while de-duplicating the same target',()=>{
+  let queue=mergeQueuedFinancialSyncRequests([],{
+    targetPeriod:{periodStart:'2026-09-10',periodEnd:'2026-09-19'},
+    targetRanges:[{periodStart:'2026-09-07',periodEnd:'2026-09-13'}]
+  });
+  queue=mergeQueuedFinancialSyncRequests(queue,{
+    force:true,
+    targetPeriod:{periodStart:'2026-09-10',periodEnd:'2026-09-19'},
+    targetRanges:[{periodStart:'2026-09-14',periodEnd:'2026-09-20'},{periodStart:'2026-09-07',periodEnd:'2026-09-13'}]
+  });
+  queue=mergeQueuedFinancialSyncRequests(queue,{force:false});
+  queue=mergeQueuedFinancialSyncRequests(queue,{
+    targetPeriod:{periodStart:'2026-08-10',periodEnd:'2026-08-16'},targetRanges:[]
+  });
+  assert.equal(queue.length,3);
+  assert.equal(queue[0].force,true);
+  assert.deepEqual(queue[0].targetRanges,[
+    {periodStart:'2026-09-07',periodEnd:'2026-09-13'},
+    {periodStart:'2026-09-14',periodEnd:'2026-09-20'}
+  ]);
+  assert.deepEqual(queue[1],{force:false,targetRanges:null});
+  assert.deepEqual(queue[2],{
+    targetPeriod:{periodStart:'2026-08-10',periodEnd:'2026-08-16'},targetRanges:[]
+  });
 });

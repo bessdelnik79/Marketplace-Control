@@ -72,6 +72,22 @@ test('overview starts one background calculation for a covered unpublished perio
   assert.equal(state.response.body.state.financial.refresh,true);
 });
 
+test('overview automatically updates legacy report normalizations before calculating',async()=>{
+  const calls=[];
+  const ranges=[{periodStart:'2026-08-10',periodEnd:'2026-08-16'}];
+  const state=setup({
+    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'unavailable',missingReasons:['report_coverage_incomplete']}}),
+    getFinancialPeriodRecoveryState:async()=>({status:'normalization_required',ranges}),
+    scheduleFinancialSync:(...args)=>calls.push(args)
+  });
+  await state.run('/overview?storeId=store-1&periodStart=2026-08-10&periodEnd=2026-08-16');
+  assert.deepEqual(calls,[['user-1','store-1',{
+    targetPeriod:{periodStart:'2026-08-10',periodEnd:'2026-08-16'},targetRanges:ranges
+  }]]);
+  assert.equal(state.response.body.state.financial.status,'calculating');
+  assert.equal(state.response.body.state.financial.calculationStage,'sources');
+});
+
 test('overview polls an existing target calculation without scheduling a duplicate',async()=>{
   let scheduled=false;
   const state=setup({
@@ -85,6 +101,53 @@ test('overview polls an existing target calculation without scheduling a duplica
   assert.equal(state.response.body.state.financial.calculationStage,'running');
 });
 
+test('overview resumes a durable queued target calculation after a process restart',async()=>{
+  const scheduled=[];
+  const state=setup({
+    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'unavailable',missingReasons:['published_period_missing']}}),
+    getFinancialPeriodRecoveryState:async()=>({status:'queued'}),
+    scheduleFinancialCalculation:(...args)=>scheduled.push(args)
+  });
+  await state.run('/overview?periodStart=2026-09-10&periodEnd=2026-09-19');
+  assert.equal(scheduled.length,1);
+  assert.equal(state.response.body.state.financial.status,'calculating');
+});
+
+test('failed target normalization stops automatic retries and retries only on request',async()=>{
+  const scheduled=[];
+  const ranges=[{periodStart:'2026-08-10',periodEnd:'2026-08-16'}];
+  const state=setup({
+    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'unavailable',missingReasons:['report_coverage_incomplete']}}),
+    getFinancialPeriodRecoveryState:async()=>({status:'normalization_failed',reason:'financial_unauthorized',ranges}),
+    scheduleFinancialSync:(...args)=>scheduled.push(args)
+  });
+  await state.run('/overview?periodStart=2026-08-10&periodEnd=2026-08-16');
+  assert.equal(state.response.body.state.financial.status,'failed');
+  assert.deepEqual(scheduled,[]);
+  await state.run('/overview?periodStart=2026-08-10&periodEnd=2026-08-16&retryCalculation=1');
+  assert.equal(state.response.status,303);
+  assert.equal(state.response.location,'/overview?periodStart=2026-08-10&periodEnd=2026-08-16');
+  assert.equal(scheduled.length,1);
+  await state.run('/overview?periodStart=2026-08-10&periodEnd=2026-08-16');
+  assert.equal(state.response.status,200);
+  assert.equal(state.response.body.state.financial.status,'failed');
+  assert.equal(scheduled.length,1);
+});
+
+test('stale retry parameter is always removed without duplicating an active job',async()=>{
+  let scheduled=0;
+  const state=setup({
+    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'unavailable',missingReasons:['report_coverage_incomplete']}}),
+    getFinancialPeriodRecoveryState:async()=>({status:'normalization_running'}),
+    scheduleFinancialSync:()=>{scheduled++;},
+    scheduleFinancialCalculation:()=>{scheduled++;}
+  });
+  await state.run('/overview?periodStart=2026-08-10&periodEnd=2026-08-16&retryCalculation=1');
+  assert.equal(state.response.status,303);
+  assert.equal(state.response.location,'/overview?periodStart=2026-08-10&periodEnd=2026-08-16');
+  assert.equal(scheduled,0);
+});
+
 test('failed target calculation stops automatic retries and only retries after an explicit action',async()=>{
   const scheduled=[];
   const state=setup({
@@ -96,7 +159,12 @@ test('failed target calculation stops automatic retries and only retries after a
   assert.equal(state.response.body.state.financial.status,'failed');
   assert.deepEqual(scheduled,[]);
   await state.run('/overview?periodStart=2026-09-10&periodEnd=2026-09-19&retryCalculation=1');
-  assert.equal(state.response.body.state.financial.status,'calculating');
+  assert.equal(state.response.status,303);
+  assert.equal(state.response.location,'/overview?periodStart=2026-09-10&periodEnd=2026-09-19');
+  assert.equal(scheduled.length,1);
+  await state.run('/overview?periodStart=2026-09-10&periodEnd=2026-09-19');
+  assert.equal(state.response.status,200);
+  assert.equal(state.response.body.state.financial.status,'failed');
   assert.equal(scheduled.length,1);
 });
 
