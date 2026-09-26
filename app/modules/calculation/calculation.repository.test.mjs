@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { aggregatePublishedPeriodEnvelopes,compatibleFinancialParserVersions,loadPublishedPeriodEnvelopes } from './calculation.repository.mjs';
+import { aggregatePublishedPeriodEnvelopes,compatibleFinancialParserVersions,loadPublishedPeriodEnvelopes,selectFullyNormalizedReportPeriods } from './calculation.repository.mjs';
 import { buildFinancialPeriodOverview } from '../overview/financial-overview.mjs';
 
 function envelope(start,end,{quality='complete',missingReasons=[],amount='10.0000',freshness=`${end}T10:00:00Z`,crossBorder=0}={}){
@@ -18,6 +18,32 @@ function envelope(start,end,{quality='complete',missingReasons=[],amount='10.000
 
 test('current financial parser keeps v6 as the first compatibility fallback after v7',()=>{
   assert.deepEqual(compatibleFinancialParserVersions.slice(0,3),['wb-finance-v7','wb-finance-v6','wb-finance-v5']);
+});
+
+test('excludes an entire report period when one accepted report lacks current normalization',()=>{
+  const reports=[
+    {report_id:'report-1',report_version_id:'version-1',period_start:'2026-09-01',period_end:'2026-09-07',normalization_id:'normalization-1'},
+    {report_id:'report-2',report_version_id:'version-2',period_start:'2026-09-01',period_end:'2026-09-07',normalization_id:null},
+    {report_id:'report-3',report_version_id:'version-3',period_start:'2026-09-08',period_end:'2026-09-14',normalization_id:'normalization-3'}
+  ];
+  assert.deepEqual(selectFullyNormalizedReportPeriods(reports),[reports[2]]);
+});
+
+test('retains a fully normalized latest period despite an older legacy period',()=>{
+  const latest={report_id:'report-latest',report_version_id:'version-latest',period_start:'2026-09-08',period_end:'2026-09-14',normalization_id:'normalization-latest'};
+  assert.deepEqual(selectFullyNormalizedReportPeriods([
+    latest,
+    {report_id:'report-legacy',report_version_id:'version-legacy',period_start:'2026-09-01',period_end:'2026-09-07',normalization_id:null}
+  ]),[latest]);
+});
+
+test('orders fully normalized periods and their reports deterministically',()=>{
+  const reports=[
+    {report_id:'report-b',report_version_id:'version-b',period_start:'2026-09-08',period_end:'2026-09-14',normalization_id:'normalization-b'},
+    {report_id:'report-c',report_version_id:'version-c',period_start:'2026-09-15',period_end:'2026-09-21',normalization_id:'normalization-c'},
+    {report_id:'report-a',report_version_id:'version-a',period_start:'2026-09-08',period_end:'2026-09-14',normalization_id:'normalization-a'}
+  ];
+  assert.deepEqual(selectFullyNormalizedReportPeriods(reports),[reports[2],reports[0],reports[1]]);
 });
 
 test('aggregates a fully covered arbitrary range using exact scale-4 persisted totals',()=>{

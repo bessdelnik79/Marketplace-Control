@@ -282,6 +282,17 @@ function groupBy(rows,keyFor){
   return groups;
 }
 
+export function selectFullyNormalizedReportPeriods(reports){
+  const periods=groupBy(reports,row=>periodKey(row.period_start,row.period_end));
+  return [...periods.values()]
+    .filter(rows=>rows.every(row=>row.normalization_id))
+    .flat()
+    .sort((left,right)=>left.period_start.localeCompare(right.period_start)
+      ||left.period_end.localeCompare(right.period_end)
+      ||String(left.report_id).localeCompare(String(right.report_id))
+      ||String(left.report_version_id).localeCompare(String(right.report_version_id)));
+}
+
 export async function loadPublishedPeriodEnvelopes(client,runId,periodStart,periodEnd){
   const periods=(await client.query(
     `select id as period_result_id,period_start::text,period_end::text,quality,missing_reasons,totals
@@ -392,7 +403,7 @@ export async function prepareFinancialCalculation(userId,storeId){
     const selection=(await client.query(`select id from mc.product_selections where business_id=$1 and store_id=$2 and status='confirmed'`,[businessId,storeId])).rows[0];
     if(!selection)throw new Error('calculation_selection_missing');
     const products=(await client.query(`select product_id from mc.product_selection_items where selection_id=$1 order by product_id`,[selection.id])).rows.map(row=>row.product_id);
-    const reports=(await client.query(
+    const reportCandidates=(await client.query(
       `select r.id as report_id,rv.id as report_version_id,r.period_start::text,r.period_end::text,rn.id as normalization_id
          from mc.reports r join mc.report_versions rv on rv.id=r.current_version_id
          join mc.source_documents d on d.id=rv.document_id and d.origin='wb_api'
@@ -404,9 +415,9 @@ export async function prepareFinancialCalculation(userId,storeId){
         where r.business_id=$1 and r.store_id=$2 and rv.status='accepted'
         order by r.period_start,r.external_report_id`,[businessId,storeId,[financialParserVersion]]
     )).rows;
+    const reports=selectFullyNormalizedReportPeriods(reportCandidates);
     if(!reports.length)throw new Error('calculation_financial_inputs_missing');
-    const normalized=reports.filter(row=>row.normalization_id);
-    if(normalized.length!==reports.length)throw new Error('calculation_financial_inputs_missing');
+    const normalized=reports;
     const periodStart=reports[0].period_start,periodEnd=reports.reduce((value,row)=>row.period_end>value?row.period_end:value,reports[0].period_end);
     const costs=(await client.query(
       `select v.id from mc.variant_costs c join mc.cost_versions v on v.id=c.current_version_id
