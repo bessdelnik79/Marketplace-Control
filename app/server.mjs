@@ -15,6 +15,7 @@ import { createTaxesRoutes } from './modules/taxes/taxes.routes.mjs';
 import { getOverviewState } from './modules/overview/overview.service.mjs';
 import { createOverviewRoutes } from './modules/overview/overview.routes.mjs';
 const port=Number(process.env.PORT??3000),days=30,dummyHash=await hashPassword('dummy-password-for-equal-work');
+const scheduleFinancialCalculationWithRefresh=(userId,storeId)=>scheduleFinancialCalculation(userId,storeId,{onInputsMissing:()=>scheduleFinancialSync(userId,storeId,{force:true})});
 const yandexEnabled=Boolean(process.env.YANDEX_CLIENT_ID&&process.env.YANDEX_CLIENT_SECRET&&process.env.PUBLIC_BASE_URL);
 function cookies(r){return Object.fromEntries(String(r.headers.cookie??'').split(';').map(x=>x.trim().split('=')).filter(([k])=>k));}
 function send(r,s,b,h={}){r.writeHead(s,{'content-type':'text/html; charset=utf-8',...h});r.end(b);}function redirect(r,l,c){r.writeHead(303,{location:l,...(c?{'set-cookie':c}:{})});r.end();}
@@ -50,9 +51,9 @@ async function sendSettings(res,status,current,stores,options={}){const store=st
 async function sendProducts(res,status,current,stores,options={}){const store=stores[0],catalog=store?await getCatalogState(current.user_id,store.id):null;return send(res,status,productsPage(current,stores,catalog,await getBillingSummary(current.user_id),options));}
 async function sendExpenses(res,status,current,stores,options={}){const store=stores[0],state=store?await getExpenseState(current.user_id,store.id):null;return send(res,status,expensesPage(current,stores,state,options));}
 async function sendTaxes(res,status,current,stores,options={}){return send(res,status,taxesPage(current,stores,await getTaxState(current.user_id),options));}
-const handleCosts = createCostsRoutes({ listStores, getCostState, importVariantCosts, costPage, send, sendBuffer, redirect, sameOrigin, takeLimit, multipart, scheduleFinancialCalculation });
-const handleExpenses = createExpensesRoutes({ listStores, getExpenseState, send, sendBuffer, redirect, sendExpenses, sameOrigin, takeLimit, form, saveExpense, scheduleFinancialCalculation, voidExpense, multipart, importExpenses });
-const handleTaxes = createTaxesRoutes({ listStores, send, redirect, sendTaxes, sameOrigin, takeLimit, form, saveTaxSetting, scheduleFinancialCalculation, voidTaxSetting });
+const handleCosts = createCostsRoutes({ listStores, getCostState, importVariantCosts, costPage, send, sendBuffer, redirect, sameOrigin, takeLimit, multipart, scheduleFinancialCalculation: scheduleFinancialCalculationWithRefresh });
+const handleExpenses = createExpensesRoutes({ listStores, getExpenseState, send, sendBuffer, redirect, sendExpenses, sameOrigin, takeLimit, form, saveExpense, scheduleFinancialCalculation: scheduleFinancialCalculationWithRefresh, voidExpense, multipart, importExpenses });
+const handleTaxes = createTaxesRoutes({ listStores, send, redirect, sendTaxes, sameOrigin, takeLimit, form, saveTaxSetting, scheduleFinancialCalculation: scheduleFinancialCalculationWithRefresh, voidTaxSetting });
 const handleOverview = createOverviewRoutes({ listStores, getOverviewState, overviewPage, send, redirect, scheduleOperationalSync });
 const server=http.createServer(async(req,res)=>{try{const url=new URL(req.url,`http://${req.headers.host??'localhost'}`);
  if(req.method==='GET'&&url.pathname==='/health')return send(res,200,'ok',{'content-type':'text/plain'});
@@ -82,4 +83,4 @@ const server=http.createServer(async(req,res)=>{try{const url=new URL(req.url,`h
  }catch(e){console.error(e);return send(res,500,'Не удалось выполнить запрос. Попробуйте ещё раз.');}});
 let operationalDispatchActive=false;
 async function dispatchOperationalSyncs(){if(operationalDispatchActive)return;operationalDispatchActive=true;try{for(const candidate of await listOperationalSyncCandidates())scheduleOperationalSync(candidate.user_id,candidate.store_id,{businessId:candidate.business_id});}catch(error){console.warn('[WB operational dispatch failed]',JSON.stringify({time:new Date().toISOString(),error:error?.message||'unknown'}));}finally{operationalDispatchActive=false;}}
-await migrate();for(const pending of await listFinancialCalculationInvalidations())scheduleFinancialCalculation(pending.requested_by,pending.store_id);await dispatchOperationalSyncs();const operationalDispatchInterval=setInterval(dispatchOperationalSyncs,5*60*1000);operationalDispatchInterval.unref();server.listen(port,'0.0.0.0',()=>console.log(`Marketplace Control: http://localhost:${port}`));async function stop(){clearInterval(operationalDispatchInterval);server.close();await pool.end();}process.on('SIGTERM',stop);process.on('SIGINT',stop);
+await migrate();for(const pending of await listFinancialCalculationInvalidations())scheduleFinancialCalculationWithRefresh(pending.requested_by,pending.store_id);await dispatchOperationalSyncs();const operationalDispatchInterval=setInterval(dispatchOperationalSyncs,5*60*1000);operationalDispatchInterval.unref();server.listen(port,'0.0.0.0',()=>console.log(`Marketplace Control: http://localhost:${port}`));async function stop(){clearInterval(operationalDispatchInterval);server.close();await pool.end();}process.on('SIGTERM',stop);process.on('SIGINT',stop);

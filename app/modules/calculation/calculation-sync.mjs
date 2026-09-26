@@ -8,14 +8,15 @@ const expectedUnavailable = new Set([
   'calculation_method_missing'
 ]);
 
-export function scheduleFinancialCalculation(userId, storeId) {
+export function scheduleFinancialCalculation(userId, storeId, { onInputsMissing } = {}) {
   const key = `${userId}:${storeId}`;
   const active = activeJobs.get(key);
   if (active) {
     active.rerun = true;
+    active.onInputsMissing ??= onInputsMissing;
     return false;
   }
-  const state = { rerun: false };
+  const state = { rerun: false, onInputsMissing };
   activeJobs.set(key, state);
   void getFinancialCalculationInvalidation(userId, storeId)
     .then(async invalidation => {
@@ -29,6 +30,7 @@ export function scheduleFinancialCalculation(userId, storeId) {
     })))
     .catch(error => {
       const code = String(error?.message ?? 'calculation_failed').slice(0, 100);
+      if (code === 'calculation_financial_inputs_missing') state.onInputsMissing?.();
       const log = expectedUnavailable.has(code) ? console.info : console.warn;
       log('[Financial calculation skipped or failed]', JSON.stringify({
         time: new Date().toISOString(), userId, storeId, error: code
@@ -36,7 +38,7 @@ export function scheduleFinancialCalculation(userId, storeId) {
     })
     .finally(() => {
       activeJobs.delete(key);
-      if (state.rerun) scheduleFinancialCalculation(userId, storeId);
+      if (state.rerun) scheduleFinancialCalculation(userId, storeId, { onInputsMissing: state.onInputsMissing });
     });
   return true;
 }
