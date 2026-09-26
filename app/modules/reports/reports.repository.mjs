@@ -20,6 +20,21 @@ async function recordBankCheck(client, businessId, job, source, versionId, summa
   return result.status;
 }
 
+const exactDate=value=>/^\d{4}-\d{2}-\d{2}$/.test(String(value??''))?String(value):null;
+
+export function selectHistoricalRenormalizationWeek(candidates,{initialRange,recentRange}={}){
+  const initialFrom=exactDate(initialRange?.dateFrom),initialTo=exactDate(initialRange?.dateTo);
+  const recentFrom=exactDate(recentRange?.dateFrom);
+  if(!initialFrom||!initialTo||!recentFrom)return null;
+  return candidates.map(candidate=>({dateFrom:exactDate(candidate?.date_from??candidate?.dateFrom),dateTo:exactDate(candidate?.date_to??candidate?.dateTo)}))
+    .filter(candidate=>{
+      if(!candidate.dateFrom||!candidate.dateTo||candidate.dateFrom<initialFrom||candidate.dateTo>initialTo||candidate.dateFrom>=recentFrom)return false;
+      const start=new Date(`${candidate.dateFrom}T00:00:00Z`),end=new Date(`${candidate.dateTo}T00:00:00Z`);
+      return start.getUTCDay()===1&&end.getUTCDay()===0&&end.getTime()-start.getTime()===6*86400000;
+    })
+    .sort((a,b)=>b.dateFrom.localeCompare(a.dateFrom)||b.dateTo.localeCompare(a.dateTo))[0]??null;
+}
+
 export async function beginFinancialSync(userId,storeId,{force=false,historical=false,initialRange,recentRange}={}){
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
     const row=(await client.query(
@@ -40,12 +55,25 @@ export async function beginFinancialSync(userId,storeId,{force=false,historical=
     if(running)await client.query(`update mc.sync_runs set status='failed',finished_at=now(),error_code='financial_interrupted' where id=$1`,[running.id]);
     let range=row.last_success_at?recentRange:initialRange;
     if(historical){
-      const earliest=(await client.query(
-        `select min(date_from)::text as earliest from mc.coverage_intervals
-          where business_id=$1 and store_id=$2 and stream_id=$3 and status='complete'`,
-        [businessId,storeId,row.stream_id]
-      )).rows[0]?.earliest;
-      range=financialHistoricalWeekRange(earliest,recentRange?.dateFrom,row.cursor?.historicalWeekStart);
+      const missingCurrentNormalization=(await client.query(
+        `select distinct r.period_start::text as date_from,r.period_end::text as date_to
+           from mc.reports r
+           join mc.report_versions rv on rv.id=r.current_version_id and rv.status='accepted'
+          where r.business_id=$1 and r.store_id=$2 and not exists(
+            select 1 from mc.report_normalizations rn join mc.method_versions m on m.id=rn.method_version_id
+             where rn.report_version_id=rv.id and rn.status='succeeded'
+               and m.code='wb_finance_import' and m.implementation_version=$3
+          ) and r.report_type='weekly_realization'`,[businessId,storeId,financialParserVersion]
+      )).rows;
+      range=selectHistoricalRenormalizationWeek(missingCurrentNormalization,{initialRange,recentRange});
+      if(!range){
+        const earliest=(await client.query(
+          `select min(date_from)::text as earliest from mc.coverage_intervals
+            where business_id=$1 and store_id=$2 and stream_id=$3 and status='complete'`,
+          [businessId,storeId,row.stream_id]
+        )).rows[0]?.earliest;
+        range=financialHistoricalWeekRange(earliest,recentRange?.dateFrom,row.cursor?.historicalWeekStart);
+      }
       if(!range)return {started:false,reason:'no_historical_week'};
     }
     if(!range?.dateFrom||!range?.dateTo)throw new Error('financial_invalid_request');

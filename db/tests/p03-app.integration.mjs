@@ -213,7 +213,7 @@ test('financial sync reselects a previously accepted checksum without duplicatin
 });
 
 test('historical check advances only after a complete weekly sync and preserves recent cursor',async()=>{
-  await context(async client=>{
+  const legacy=await context(async client=>{
     const connection=(await client.query(
       `insert into mc.connections(business_id,store_id,secret_ref,status) values($1,$2,'p03-history','active') returning id`,
       [ids.business,ids.store]
@@ -223,23 +223,55 @@ test('historical check advances only after a complete weekly sync and preserves 
        values($1,$2,decode('00','hex'),decode(repeat('00',12),'hex'),decode(repeat('00',16),'hex'))`,
       [ids.business,connection.id]
     );
+    const document=(await client.query(
+      `insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness)
+       values($1,$2,'wb_api','weekly_realization','p03-history-legacy','complete') returning id`,[ids.business,ids.store]
+    )).rows[0];
+    const report=(await client.query(
+      `insert into mc.reports(business_id,store_id,external_report_id,report_type,period_start,period_end)
+       values($1,$2,'p03-history-legacy','weekly_realization','2026-08-17','2026-08-23') returning id`,[ids.business,ids.store]
+    )).rows[0];
+    const version=(await client.query(
+      `insert into mc.report_versions(business_id,store_id,report_id,document_id,version_no,checksum,parser_version)
+       values($1,$2,$3,$4,1,'p03-history-legacy','wb-finance-v2') returning id`,[ids.business,ids.store,report.id,document.id]
+    )).rows[0];
+    await client.query(`update mc.report_versions set status='validated' where id=$1`,[version.id]);
+    await client.query(`update mc.report_versions set status='accepted',accepted_at=now() where id=$1`,[version.id]);
+    await client.query(`update mc.reports set current_version_id=$1 where id=$2`,[version.id,report.id]);
+    const oldMethod=(await client.query(
+      `select id from mc.method_versions where code='wb_finance_import' and implementation_version='wb-finance-v2'`
+    )).rows[0];
+    await client.query(
+      `insert into mc.report_normalizations(business_id,store_id,report_version_id,method_version_id,normalization_key,status)
+       values($1,$2,$3,$4,$5,'succeeded')`,[ids.business,ids.store,version.id,oldMethod.id,`wb-finance-v2:${version.id}`]
+    );
+    return{versionId:version.id};
   });
   const ranges={initialRange:{dateFrom:'2026-06-01',dateTo:'2026-09-21'},recentRange:{dateFrom:'2026-09-21',dateTo:'2026-09-24'}};
   const first=await beginFinancialSync(ids.user,ids.store,{force:true,historical:true,...ranges});
   assert.equal(first.started,true);
-  assert.deepEqual([first.date_from,first.date_to],['2026-08-10','2026-08-16']);
-  await completeFinancialSync(ids.user,first,{documentId:randomUUID(),reports:[]});
+  assert.deepEqual([first.date_from,first.date_to],['2026-08-17','2026-08-23']);
+  await failFinancialSync(ids.user,first,'financial_invalid_request');
+  await context(async client=>{
+    const currentMethod=(await client.query(
+      `select id from mc.method_versions where code='wb_finance_import' and implementation_version='wb-finance-v8'`
+    )).rows[0];
+    await client.query(
+      `insert into mc.report_normalizations(business_id,store_id,report_version_id,method_version_id,normalization_key,status)
+       values($1,$2,$3,$4,$5,'succeeded')`,[ids.business,ids.store,legacy.versionId,currentMethod.id,`wb-finance-v8:${legacy.versionId}`]
+    );
+  });
   const second=await beginFinancialSync(ids.user,ids.store,{force:true,historical:true,...ranges});
-  assert.deepEqual([second.date_from,second.date_to],['2026-08-17','2026-08-23']);
+  assert.deepEqual([second.date_from,second.date_to],['2026-08-10','2026-08-16']);
   await failFinancialSync(ids.user,second,'financial_invalid_request');
   const third=await beginFinancialSync(ids.user,ids.store,{force:true,historical:true,...ranges});
-  assert.deepEqual([third.date_from,third.date_to],['2026-08-17','2026-08-23']);
+  assert.deepEqual([third.date_from,third.date_to],['2026-08-10','2026-08-16']);
   await completeFinancialSync(ids.user,third,{documentId:randomUUID(),reports:[]});
   const cursor=await context(async client=>(await client.query(
     `select cursor from mc.sync_streams where business_id=$1 and store_id=$2 and source_type='financial_reports'`,
     [ids.business,ids.store]
   )).rows[0].cursor);
-  assert.equal(cursor.historicalWeekStart,'2026-08-17');
+  assert.equal(cursor.historicalWeekStart,'2026-08-10');
   assert.equal(cursor.dateTo,'2026-08-16');
 });
 
