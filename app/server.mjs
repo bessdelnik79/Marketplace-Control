@@ -58,7 +58,7 @@ const handleOverview = createOverviewRoutes({ listStores, getOverviewState, over
   getFinancialPeriodRecoveryState,scheduleFinancialCalculation:scheduleFinancialCalculationWithRefresh,scheduleFinancialSync });
 const server=http.createServer(async(req,res)=>{try{const url=new URL(req.url,`http://${req.headers.host??'localhost'}`);
  if(req.method==='GET'&&url.pathname==='/health')return send(res,200,'ok',{'content-type':'text/plain'});
- if(req.method==='GET'&&['/styles.css','/favicon.svg','/ui.css','/ui.js','/brand.png','/products.png','/interface.ttf'].includes(url.pathname)){const f=path.join(path.resolve('app/frontend/public'),url.pathname.slice(1));const types={'.css':'text/css','.svg':'image/svg+xml','.js':'text/javascript','.png':'image/png','.ttf':'font/ttf'};res.writeHead(200,{'content-type':types[path.extname(f)],'x-content-type-options':'nosniff'});return res.end(await readFile(f));}
+ if(req.method==='GET'&&['/styles.css','/favicon.svg','/ui.css','/ui.js','/financial-poll.js','/brand.png','/products.png','/interface.ttf'].includes(url.pathname)){const f=path.join(path.resolve('app/frontend/public'),url.pathname.slice(1));const types={'.css':'text/css','.svg':'image/svg+xml','.js':'text/javascript','.png':'image/png','.ttf':'font/ttf'};res.writeHead(200,{'content-type':types[path.extname(f)],'x-content-type-options':'nosniff'});return res.end(await readFile(f));}
  const current=await user(req);const page=(mode,extra={})=>authPage({mode,yandexEnabled,...extra});
  if(await handleCosts(req,res,url,current))return;
  if(await handleExpenses(req,res,url,current))return;

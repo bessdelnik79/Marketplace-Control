@@ -45,10 +45,7 @@
     if(financialCalculation.dataset.financialRefresh!=='false'){
       const storedStarted=Number(financialPollStorage.get()),started=Number.isFinite(storedStarted)&&storedStarted>0?storedStarted:Date.now(),deadline=started+600000;
       financialPollStorage.set(String(started));
-      let financialRefreshTimer=null;
-      const scheduleFinancialRefresh=()=>{clearTimeout(financialRefreshTimer);if(Date.now()>=deadline){$('[data-financial-poll-note]',financialCalculation).hidden=false;return}if(document.hidden)return;financialRefreshTimer=setTimeout(()=>{financialRefreshTimer=null;if(!document.hidden&&Date.now()<deadline)location.reload();else scheduleFinancialRefresh()},4000)};
-      document.addEventListener('visibilitychange',scheduleFinancialRefresh);
-      scheduleFinancialRefresh();
+      import('/financial-poll.js').then(({startFinancialResultPolling})=>startFinancialResultPolling({element:financialCalculation,storage:financialPollStorage,url:location.href,fetchImpl:fetch,parsePage:html=>new DOMParser().parseFromString(html,'text/html'),reload:()=>location.reload(),startedAt:started,isHidden:()=>document.hidden,addVisibilityListener:listener=>document.addEventListener('visibilitychange',listener)})).catch(()=>{$('[data-financial-poll-note]',financialCalculation).hidden=false});
     }
   }else financialPollStorage.remove();
   all('[data-period]').forEach(button=>button.addEventListener('click',()=>{all('[data-period]').forEach(b=>b.classList.toggle('selected',b===button));$('[data-calendar="mobile-profit"]').click()}));
