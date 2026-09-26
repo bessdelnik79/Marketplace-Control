@@ -197,11 +197,14 @@ function buildSituationEvidence(lines,coverage,quality,missingReasons){
   };
 }
 
-function normalizeTotals(value) {
+function normalizeTotals(value,methodVersion) {
   if (!value || typeof value !== 'object') invalid('overview_invalid_totals');
   const beforeTax = parseScale4Money(value.availableResultBeforeTax);
-  if (value.selectedProductsResultBeforeTax !== undefined && parseScale4Money(value.selectedProductsResultBeforeTax) !== beforeTax) {
-    invalid('overview_total_mismatch');
+  if(value.selectedProductsResultBeforeTax!==undefined){
+    const selected=parseScale4Money(value.selectedProductsResultBeforeTax);
+    const store=value.storeLevelResultBeforeTax===undefined?0n:parseScale4Money(value.storeLevelResultBeforeTax);
+    const expected=methodVersion==='financial-result-v7'?selected+store:selected;
+    if(expected!==beforeTax)invalid('overview_total_mismatch');
   }
   return {
     beforeTax,
@@ -259,8 +262,10 @@ export function buildFinancialPeriodOverview(envelope, { timezone = 'Europe/Mosc
   const taxLines = selected.filter(line => line.category === 'estimated_usn_tax');
   const selectedTotal = beforeTaxLines.reduce((sum, line) => sum + line.amount, 0n);
   const revenue = selected.filter(line => REVENUE_CATEGORIES.has(line.category)).reduce((sum, line) => sum + line.amount, 0n);
-  const persisted = normalizeTotals(envelope.totals);
-  if (selectedTotal !== persisted.beforeTax) invalid('overview_total_mismatch');
+  const storeTotal=lines.filter(line=>line.scope==='store'&&line.category!=='estimated_usn_tax').reduce((sum,line)=>sum+line.amount,0n);
+  const persisted = normalizeTotals(envelope.totals,methodVersion);
+  const calculatedTotal=methodVersion==='financial-result-v7'?selectedTotal+storeTotal:selectedTotal;
+  if(calculatedTotal!==persisted.beforeTax)invalid('overview_total_mismatch');
   const expenses = revenue - persisted.beforeTax;
   const tax = normalizeTax(envelope.taxReference, persisted, taxLines.reduce((sum, line) => sum + line.amount, 0n), taxLines.length > 0);
   const displayAmount = tax.basis === 'after_tax' ? tax.afterTax : persisted.beforeTax;

@@ -22,7 +22,10 @@ test('only verified WB field, operation and document combinations enter the resu
     ['paidStorage', 'storage', 'service_charge', '', 'Коррекция хранения'],
     ['paidAcceptance', 'acceptance', 'service_charge', '', 'Обработка товара'],
     ['penalty', 'penalty', 'adjustment', '', 'Штраф'],
-    ['deduction', 'deduction', 'adjustment', '', 'Удержание']
+    ['deduction', 'deduction', 'adjustment', '', 'Удержание'],
+    ['vw', 'wb_reward_without_vat', 'sale', 'Продажа', 'Продажа'],
+    ['vwNds', 'wb_reward_vat', 'return', 'Возврат', 'Возврат'],
+    ['rebillLogisticCost', 'rebill_logistic_compensation', 'service_charge', '', 'Логистика']
   ];
   for (const [sourceField, categoryCode, operationType, docTypeName, sellerOperName] of verified) {
     assert.equal(isVerifiedWbResultComponent({ sourceField, categoryCode, operationType, docTypeName, sellerOperName, rawValue: '10' }), true, sourceField);
@@ -31,9 +34,6 @@ test('only verified WB field, operation and document combinations enter the resu
     ['acquiringFee', 'acquiring', 'return', 'Возврат', 'Возврат'],
     ['deliveryService', 'logistics', 'service_charge', '', 'Новая услуга'],
     ['deliveryService', 'logistics', 'service_charge', 'Продажа', 'Логистика'],
-    ['ppvzReward', 'pickup_reward', 'unclassified', 'Продажа', 'Возмещение за выдачу и возврат товаров на ПВЗ'],
-    ['vw', 'wb_reward_without_vat', 'sale', 'Продажа', 'Продажа'],
-    ['vwNds', 'wb_reward_vat', 'sale', 'Продажа', 'Продажа'],
     ['cashbackDiscount', 'unclassified_financial_field', 'unclassified', 'Продажа', 'Компенсация скидки по программе лояльности'],
     ['additionalPayment', 'commission_adjustment', 'adjustment', '', 'Удержание']
   ];
@@ -46,6 +46,7 @@ test('only verified WB field, operation and document combinations enter the resu
   assert.equal(isVerifiedWbResultComponent({sourceField:'deduction',categoryCode:'promotion',operationType:'adjustment',docTypeName:'',sellerOperName:'Удержание',bonusTypeName:'Иная услуга',rawValue:'304'}),false);
   assert.equal(isVerifiedWbResultComponent({sourceField:'deduction',categoryCode:'promotion',operationType:'adjustment',docTypeName:'',sellerOperName:'Удержание',bonusTypeName:'Оказание услуг «WB Продвижение», иной документ',rawValue:'304'}),false);
   assert.equal(isVerifiedWbResultComponent({sourceField:'ppvzReward',categoryCode:'pickup_reward',operationType:'other',docTypeName:'Продажа',sellerOperName:'Возмещение за выдачу и возврат товаров на ПВЗ',rawValue:'16.29'}),true);
+  assert.equal(isVerifiedWbResultComponent({sourceField:'ppvzReward',categoryCode:'pickup_reward',operationType:'other',docTypeName:'Продажа',sellerOperName:'Возмещение за выдачу и возврат товаров на ПВЗ',rawValue:'-16.29'}),true);
   assert.equal(isVerifiedWbResultComponent({sourceField:'vw',categoryCode:'wb_reward_without_vat',operationType:'other',docTypeName:'Продажа',sellerOperName:'Возмещение за выдачу и возврат товаров на ПВЗ',rawValue:'-13.3522'}),true);
   assert.equal(isVerifiedWbResultComponent({sourceField:'vwNds',categoryCode:'wb_reward_vat',operationType:'other',docTypeName:'Продажа',sellerOperName:'Возмещение за выдачу и возврат товаров на ПВЗ',rawValue:'-2.94'}),true);
 });
@@ -104,7 +105,7 @@ test('even periodization truncates to four places and puts the exact remainder o
   assert.deepEqual(periodizeExpense(expense, { periodStart: '2026-07-14', periodEnd: '2026-07-15' }).map(row => row.amountSigned), ['-3.3333', '-3.3334']);
 });
 
-test('calculation keeps confirmed store charges separate from selected SKU result', () => {
+test('calculation combines confirmed store charges with selected SKU result and skips settlement commission', () => {
   const result = calculateFinancialResult({
     periodStart: '2026-07-13',
     periodEnd: '2026-07-19',
@@ -120,15 +121,14 @@ test('calculation keeps confirmed store charges separate from selected SKU resul
   assert.equal(result.quality, 'partial');
   assert.deepEqual(result.missingReasons, ['tax_setting_missing']);
   assert.deepEqual(result.totals, {
-    selectedProductsResultBeforeTax: '87.5000',
+    selectedProductsResultBeforeTax: '100.0000',
     storeLevelResultBeforeTax: '-5.1250',
-    availableResultBeforeTax: '87.5000',
+    availableResultBeforeTax: '94.8750',
     estimatedUsnTax: '0.0000',
     availableResultAfterTax: null,
     netProfit: null
   });
   assert.deepEqual(result.lines.map(line => [line.scopeCode, line.categoryCode, line.amountSigned]), [
-    ['selected_product', 'commission', '-12.5000'],
     ['selected_product', 'revenue', '100.0000'],
     ['store', 'storage', '-5.1250']
   ]);
@@ -160,17 +160,52 @@ test('signed commission adjustment is included while legacy additional payment i
   assert.deepEqual(result.missingReasons, ['operation_unclassified', 'tax_setting_missing']);
 });
 
-test('promotion and independent PVZ source fields are store results with their original signs',()=>{
+test('promotion and independent PVZ expense fields combine into the available result',()=>{
   const result=calculateFinancialResult({periodStart:'2026-09-07',periodEnd:'2026-09-13',selectedProductIds:['product-1'],financialComponents:[
     {id:'revenue',classificationStatus:'confirmed',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-09-07',categoryCode:'revenue',amountSigned:'100'},
     {id:'promotion',classificationStatus:'confirmed',scopeCode:'store',accountingDate:'2026-09-08',categoryCode:'promotion',amountSigned:'-304'},
-    {id:'pvz-reward',classificationStatus:'confirmed',scopeCode:'store',accountingDate:'2026-09-09',categoryCode:'pickup_reward',amountSigned:'16.29'},
-    {id:'pvz-vw',classificationStatus:'confirmed',scopeCode:'store',accountingDate:'2026-09-09',categoryCode:'wb_reward_without_vat',amountSigned:'-13.3522'},
-    {id:'pvz-vat',classificationStatus:'confirmed',scopeCode:'store',accountingDate:'2026-09-09',categoryCode:'wb_reward_vat',amountSigned:'-2.94'}
+    {id:'pvz-reward',classificationStatus:'confirmed',scopeCode:'store',accountingDate:'2026-09-09',categoryCode:'pickup_reward',amountSigned:'-16.29'},
+    {id:'pvz-vw',classificationStatus:'confirmed',scopeCode:'store',accountingDate:'2026-09-09',categoryCode:'wb_reward_without_vat',amountSigned:'13.35'},
+    {id:'pvz-vat',classificationStatus:'confirmed',scopeCode:'store',accountingDate:'2026-09-09',categoryCode:'wb_reward_vat',amountSigned:'2.94'}
   ]});
-  assert.equal(result.totals.storeLevelResultBeforeTax,'-304.0022');
+  assert.equal(result.totals.storeLevelResultBeforeTax,'-304.0000');
+  assert.equal(result.totals.availableResultBeforeTax,'-204.0000');
   assert.equal(result.missingReasons.includes('operation_unclassified'),false);
   assert.deepEqual(result.lines.map(line=>line.categoryCode),['revenue','promotion','pickup_reward','wb_reward_vat','wb_reward_without_vat']);
+});
+
+test('07-13 September regression preserves the verified WB expense total before COGS',()=>{
+  const sourceRows=[{id:'revenue',productId:'product-1',accountingDate:'2026-09-07',docTypeName:'Продажа',sellerOperName:'Продажа',retailAmount:'8442.79'}];
+  const taxReference=calculateStoreTaxReference({
+    periodStart:'2026-09-07',periodEnd:'2026-09-13',selectedProductIds:['product-1'],sourceRows,
+    taxSettings:[{id:'tax',effectiveFrom:'2026-01-01',regimeCode:'usn_income',usnRateFraction:'0.06'}]
+  });
+  const expenses=[
+    ['vw','wb_reward_without_vat','-1870.74'],
+    ['vw-vat','wb_reward_vat','-411.55'],
+    ['rebill','rebill_logistic_compensation','-100.24'],
+    ['delivery','logistics','-1403.00'],
+    ['acceptance','acceptance','-70.00'],
+    ['storage','storage','-5.51'],
+    ['acquiring','acquiring','-301.19'],
+    ['pvz','pickup_reward','-203.38'],
+    ['promotion','promotion','-304.00']
+  ];
+  const result=calculateFinancialResult({
+    periodStart:'2026-09-07',periodEnd:'2026-09-13',selectedProductIds:['product-1'],
+    financialComponents:[
+      {id:'revenue',classificationStatus:'confirmed',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-09-07',categoryCode:'revenue',amountSigned:'8442.79'},
+      ...expenses.map(([id,categoryCode,amountSigned])=>({id,classificationStatus:'confirmed',scopeCode:'store',accountingDate:'2026-09-08',categoryCode,amountSigned}))
+    ],
+    operations:[{id:'sale',operationType:'sale',productId:'product-1',variantId:'variant-1',accountingDate:'2026-09-07',quantity:'1'}],
+    costVersions:[{id:'cost',variantId:'variant-1',effectiveFrom:'2026-01-01',unitCost:'2849'}],
+    taxSetting:{regimeCode:'usn_income',usnRateFraction:'0.06',vatMode:'exempt'},taxReference
+  });
+  assert.equal(result.totals.storeLevelResultBeforeTax,'-4669.6100');
+  assert.equal(result.totals.selectedProductsResultBeforeTax,'5593.7900');
+  assert.equal(result.totals.availableResultBeforeTax,'924.1800');
+  assert.equal(result.totals.estimatedUsnTax,'506.5674');
+  assert.equal(result.totals.availableResultAfterTax,'417.6126');
 });
 
 test('verified charges affect partial result once while PVZ and WB reward fields remain excluded', () => {
@@ -218,6 +253,7 @@ test('store expenses stay separate from selected product expenses', () => {
   });
   assert.equal(result.totals.selectedProductsResultBeforeTax, '-6.0000');
   assert.equal(result.totals.storeLevelResultBeforeTax, '-2.5000');
+  assert.equal(result.totals.availableResultBeforeTax, '-8.5000');
   assert.ok(!result.missingReasons.includes('store_expense_unallocated'));
   assert.deepEqual(result.lines.map(line => [line.scopeCode, line.accountingDate, line.amountSigned]), [
     ['selected_product', '2026-07-14', '-3.0000'],
@@ -304,7 +340,7 @@ test('missing cost, unsupported return COGS, unclassified and lost product links
     financialComponents: [
       { id: 'unknown', classificationStatus: 'unclassified', scopeCode: 'selected_product', productId: 'product-1', accountingDate: '2026-07-13', categoryCode: 'deduction', amountSigned: '-1.0000' },
       { id: 'unknown-category', classificationStatus: 'confirmed', scopeCode: 'store', accountingDate: '2026-07-13', categoryCode: 'future_money_field', amountSigned: '-1.0000' },
-      { id: 'lost-link', classificationStatus: 'confirmed', scopeCode: 'product_expected', accountingDate: '2026-07-13', categoryCode: 'commission', amountSigned: '-1.0000' },
+      { id: 'lost-link', classificationStatus: 'confirmed', scopeCode: 'product_expected', accountingDate: '2026-07-13', categoryCode: 'rebill_logistic_compensation', amountSigned: '-1.0000' },
       { id: 'unreconciled', classificationStatus: 'confirmed', reconciliationStatus: 'failed', scopeCode: 'store', accountingDate: '2026-07-13', categoryCode: 'storage', amountSigned: '-1.0000' }
     ],
     operations: [

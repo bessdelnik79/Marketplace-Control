@@ -23,6 +23,8 @@ function envelope({
   revenue = '130.0000',
   expenseLine = '-30.0000',
   beforeTax = '100.0000',
+  selectedBeforeTax = beforeTax,
+  storeBeforeTax = '0.0000',
   tax = '6.0000',
   afterTax = '94.0000',
   scope = 'selected_products',
@@ -31,6 +33,7 @@ function envelope({
   const lines = [
     { result_scope: 'selected_product', accounting_date: periodStart, category_code: 'revenue', amount_signed: revenue, quality },
     { result_scope: 'selected_product', accounting_date: periodStart, category_code: 'commission', amount_signed: expenseLine, quality },
+    ...(storeBeforeTax === '0.0000' ? [] : [{ result_scope: 'store', accounting_date: periodStart, category_code: 'store_expenses', amount_signed: storeBeforeTax, quality }]),
     ...(tax === null ? [] : [{ result_scope: 'selected_product', accounting_date: periodEnd, category_code: 'estimated_usn_tax', amount_signed: `-${tax}`, quality }])
   ];
   return {
@@ -44,7 +47,8 @@ function envelope({
     ...(coverage === undefined ? {} : { coverage }),
     lines,
     totals: {
-      selectedProductsResultBeforeTax: beforeTax,
+      selectedProductsResultBeforeTax: selectedBeforeTax,
+      storeLevelResultBeforeTax: storeBeforeTax,
       availableResultBeforeTax: beforeTax,
       estimatedUsnTax: tax,
       availableResultAfterTax: afterTax
@@ -109,6 +113,19 @@ test('period overview derives revenue, expenses and after-tax display result fro
     availableResultAfterTax: '94.0000'
   });
   assert.deepEqual(overview.displayResult, { amount: '94.0000', basis: 'after_tax' });
+});
+
+test('v7 overview includes confirmed store expenses once in the 07-13 September result',()=>{
+  const overview=buildFinancialPeriodOverview(envelope({
+    methodVersion:'financial-result-v7',periodStart:'2026-09-07',periodEnd:'2026-09-13',
+    revenue:'8442.7900',expenseLine:'-2849.0000',selectedBeforeTax:'5593.7900',storeBeforeTax:'-4669.6100',
+    beforeTax:'924.1800',tax:'506.5674',afterTax:'417.6126'
+  }));
+  assert.deepEqual(overview.totals,{
+    revenue:'8442.7900',expenses:'7518.6100',tax:'506.5674',
+    availableResultBeforeTax:'924.1800',availableResultAfterTax:'417.6126'
+  });
+  assert.deepEqual(overview.displayResult,{amount:'417.6126',basis:'after_tax'});
 });
 
 test('revenue includes revenue_return and ignores store-scope lines in selected product result', () => {

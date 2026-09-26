@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export const financialReportsEndpoint = 'https://finance-api.wildberries.ru/api/finance/v1/sales-reports/detailed';
-export const financialParserVersion = 'wb-finance-v6';
+export const financialParserVersion = 'wb-finance-v7';
 const unverifiedMoneyFields = [
   'sellerPromo','installmentCoFinancingAmount','cashbackAmount','cashbackDiscount',
   'cashbackCommissionChange','sellerPromoDiscount','loyaltyDiscount','agencyVat'
@@ -66,9 +66,9 @@ function isVerifiedPvzComponent(row, component) {
   if (!isVerifiedPvzStoreRow(row)) return false;
   const raw = decimal(row?.[component.sourceField]);
   if (raw === null || raw === '0') return false;
-  if (component.sourceField === 'ppvzReward') return component.categoryCode === 'pickup_reward' && !raw.startsWith('-');
-  if (component.sourceField === 'vw') return component.categoryCode === 'wb_reward_without_vat' && raw.startsWith('-');
-  if (component.sourceField === 'vwNds') return component.categoryCode === 'wb_reward_vat' && raw.startsWith('-');
+  if (component.sourceField === 'ppvzReward') return component.categoryCode === 'pickup_reward';
+  if (component.sourceField === 'vw') return component.categoryCode === 'wb_reward_without_vat';
+  if (component.sourceField === 'vwNds') return component.categoryCode === 'wb_reward_vat';
   return false;
 }
 
@@ -132,6 +132,19 @@ export function decimal(value, { absolute = false, negative = false } = {}) {
   return result;
 }
 
+function roundedKopecks(value) {
+  const raw = decimal(value);
+  if (raw === null) return null;
+  const negative = raw.startsWith('-');
+  const [whole, fraction = ''] = raw.replace(/^-/, '').split('.');
+  let kopecks = BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0').slice(0, 2));
+  if ((fraction[2] ?? '0') >= '5') kopecks += 1n;
+  if (kopecks === 0n) return '0';
+  const integer = kopecks / 100n;
+  const remainder = String(kopecks % 100n).padStart(2, '0');
+  return decimal(`${negative ? '-' : ''}${integer}.${remainder}`);
+}
+
 function hasMoney(row, fields) {
   return fields.some(field => {
     const value = decimal(row[field]);
@@ -152,11 +165,15 @@ export function normalizeFinancialOperation(row) {
 
   const components = [];
   const add = (field, categoryCode, direction) => {
-    const raw = decimal(row?.[field]);
+    const raw = direction === 'rounded_expense' || direction === 'absolute_expense'
+      ? roundedKopecks(row?.[field])
+      : decimal(row?.[field]);
     if (raw === null || raw === '0') return;
     let amountSigned=raw;
     if(direction==='income')amountSigned=decimal(raw,{absolute:true});
     else if(direction==='expense')amountSigned=raw.startsWith('-')?decimal(raw,{absolute:true}):decimal(raw,{negative:true});
+    else if(direction==='rounded_expense')amountSigned=raw.startsWith('-')?decimal(raw,{absolute:true}):decimal(raw,{negative:true});
+    else if(direction==='absolute_expense')amountSigned=decimal(raw,{absolute:true,negative:true});
     else if(direction==='document')amountSigned=operationType==='return'?decimal(raw,{absolute:true}):operationType==='sale'?decimal(raw,{negative:true}):raw.startsWith('-')?decimal(raw,{absolute:true}):decimal(raw,{negative:true});
     else if(direction==='settlement')amountSigned=operationType==='return'?decimal(raw,{negative:true}):operationType==='sale'?decimal(raw,{absolute:true}):raw;
     components.push({ componentKey: field, categoryCode, amountSigned, sourceField: field });
@@ -164,12 +181,12 @@ export function normalizeFinancialOperation(row) {
   if (operationType === 'sale') add('retailAmount', 'revenue', 'income');
   if (operationType === 'return') add('retailAmount', 'revenue_return', 'expense');
   add('ppvzSalesCommission', 'commission', 'document');
-  add('vw', 'wb_reward_without_vat', 'source');
-  add('vwNds', 'wb_reward_vat', 'source');
-  add('ppvzReward', 'pickup_reward', 'source');
+  add('vw', 'wb_reward_without_vat', 'rounded_expense');
+  add('vwNds', 'wb_reward_vat', 'rounded_expense');
+  add('ppvzReward', 'pickup_reward', 'absolute_expense');
   add('acquiringFee', 'acquiring', 'document');
   add('deliveryService', 'logistics', 'document');
-  add('rebillLogisticCost', 'rebill_logistic_compensation', 'source');
+  add('rebillLogisticCost', 'rebill_logistic_compensation', 'rounded_expense');
   add('paidStorage', 'storage', 'expense');
   add('paidAcceptance', 'acceptance', 'expense');
   add('penalty', 'penalty', 'expense');
@@ -296,8 +313,8 @@ export function financialDateRange(now = new Date(), days = 91) {
 }
 
 export function financialComponentScope(row, operation, component, productMatched = false) {
-  if (operation.operationType === 'other' && isVerifiedPvzComponent(row,component)) return 'store';
   if (productMatched) return 'selected_product';
+  if (operation.operationType === 'other' && isVerifiedPvzComponent(row,component)) return 'store';
   const rule = storeServiceFields.get(component.sourceField);
   const raw = decimal(row?.[component.sourceField]);
   const hasItemIdentifier = hasRealItemIdentifier(row);
@@ -312,13 +329,19 @@ export function financialComponentScope(row, operation, component, productMatche
 }
 
 const unverifiedResultCategories = new Set([
-  'wb_reward_without_vat','wb_reward_vat','pickup_reward',
-  'rebill_logistic_compensation','unclassified_financial_field','commission_adjustment'
+  'unclassified_financial_field','commission_adjustment'
+]);
+
+const verifiedResultExpenseCategories = new Set([
+  'wb_reward_without_vat','wb_reward_vat','pickup_reward','rebill_logistic_compensation'
 ]);
 
 export function unverifiedFinancialComponents(row,operation,productMatched=false){
   return operation.components.filter(component=>{
-    if(operation.operationType==='other' && isVerifiedPvzComponent(row,component))return false;
+    if(verifiedResultExpenseCategories.has(component.categoryCode)){
+      if(productMatched)return false;
+      return !(operation.operationType==='other'&&isVerifiedPvzComponent(row,component));
+    }
     if(unverifiedResultCategories.has(component.categoryCode))return true;
     const raw=decimal(row?.[component.sourceField]);
     if(raw?.startsWith('-'))return true;

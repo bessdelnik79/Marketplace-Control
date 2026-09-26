@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,24);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,25);
   pass('password identity and expiring session are stored by migration 2');
   const financialMethod=await one("select implementation_version from mc.method_versions where code='wb_finance_import' and version_no=1");
   assert.equal(financialMethod.implementation_version,'wb-finance-v1');
@@ -56,6 +56,9 @@ try {
   const financeMethodV6=await one("select implementation_version,parameters from mc.method_versions where code='wb_finance_import' and version_no=6");
   assert.equal(financeMethodV6.implementation_version,'wb-finance-v6');
   assert.equal(financeMethodV6.parameters.storeScope,'catalog-identifiers-v2');
+  const financeMethodV7=await one("select implementation_version,parameters from mc.method_versions where code='wb_finance_import' and version_no=7");
+  assert.equal(financeMethodV7.implementation_version,'wb-finance-v7');
+  assert.equal(financeMethodV7.parameters.ppvzReward,'absolute-expense-v1');
   const resultMethodV3=await one("select implementation_version from mc.method_versions where code='financial_result' and version_no=3");
   assert.equal(resultMethodV3.implementation_version,'financial-result-v3');
   const resultMethodV4=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=4");
@@ -64,12 +67,15 @@ try {
   const resultMethodV6=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=6");
   assert.equal(resultMethodV6.implementation_version,'financial-result-v6');
   assert.equal(resultMethodV6.parameters.zeroSaleTaxBase,'complete-coverage-v1');
-  assert.deepEqual(await q("select code,class from mc.financial_categories where code in ('pickup_reward','wb_reward_without_vat','wb_reward_vat') order by code"),[
-    {code:'pickup_reward',class:'income'},{code:'wb_reward_vat',class:'expense'},{code:'wb_reward_without_vat',class:'expense'}
+  const resultMethodV7=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=7");
+  assert.equal(resultMethodV7.implementation_version,'financial-result-v7');
+  assert.equal(resultMethodV7.parameters.availableResult,'selected-plus-store-v1');
+  assert.deepEqual(await q("select code,class from mc.financial_categories where code in ('pickup_reward','rebill_logistic_compensation','wb_reward_without_vat','wb_reward_vat') order by code"),[
+    {code:'pickup_reward',class:'expense'},{code:'rebill_logistic_compensation',class:'expense'},{code:'wb_reward_vat',class:'expense'},{code:'wb_reward_without_vat',class:'expense'}
   ]);
   const guards=(await q("select proname,pg_get_functiondef(p.oid) as definition from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='mc' and proname in ('guard_period_result','guard_selected_tax_artifact','guard_selected_tax_finish','guard_run_finish') order by proname"));
   assert.equal(guards.length,4);
-  for(const guard of guards)assert.match(guard.definition,/financial-result-v6/,guard.proname);
+  for(const guard of guards)assert.match(guard.definition,/financial-result-v7/,guard.proname);
   const taxComputationColumns=(await q("select column_name from information_schema.columns where table_schema='mc' and table_name='tax_computations' order by column_name")).map(row=>row.column_name);
   assert.ok(taxComputationColumns.includes('product_id'));
   assert.ok(!taxComputationColumns.includes('tax_year')&&!taxComputationColumns.includes('tax_setting_version_id')&&!taxComputationColumns.includes('rate_fraction'));
@@ -356,6 +362,24 @@ try {
   const periodLine=await insert('result_lines',{...base,run_id:periodRun.id,financial_period_result_id:falsePeriod.id,product_id:products[0].id,variant_id:small.id,accounting_date:'2026-09-01',category_code:'revenue',amount_signed:2000,quality:'complete',result_scope:'selected_product'});
   await insert('result_evidence',{...base,result_line_id:periodLine.id,financial_component_id:component.id,contribution_amount:2000});
   await rejects("update mc.calculation_runs set status='succeeded',quality='complete',missing_reasons='[]',finished_at=now() where id=$1",[periodRun.id],/period result totals/,'persisted weekly totals cannot be sealed when they disagree with evidence');
+  const resultMethodV7Id=(await one("select id from mc.method_versions where code='financial_result' and version_no=7")).id;
+  const storeExpenseVersion=await one('select id,category,amount::text from mc.expense_versions where expense_id=$1 order by version_no limit 1',[storeExpense.id]);
+  const combinedRequest=await insert('calculation_requests',{...base,generation_no:91,selection_id:selection.id,method_version_id:resultMethodV7Id,period_start:'2026-08-31',period_end:'2026-09-06',input_fingerprint:'p03-v7-combined-total',is_latest:false});
+  await insert('calculation_request_products',{...base,request_id:combinedRequest.id,product_id:products[0].id});
+  await insert('calculation_request_inputs',{...base,request_id:combinedRequest.id,report_version_id:rv.id});
+  await insert('calculation_request_inputs',{...base,request_id:combinedRequest.id,report_normalization_id:normalization.id});
+  await insert('calculation_request_inputs',{...base,request_id:combinedRequest.id,expense_version_id:storeExpenseVersion.id});
+  const combinedRun=await insert('calculation_runs',{...base,selection_id:selection.id,method_version_id:resultMethodV7Id,period_start:'2026-08-31',period_end:'2026-09-06',input_fingerprint:'p03-v7-combined-total',request_id:combinedRequest.id,attempt_no:1});
+  await insert('calculation_inputs',{...base,run_id:combinedRun.id,report_version_id:rv.id});
+  await insert('calculation_inputs',{...base,run_id:combinedRun.id,report_normalization_id:normalization.id});
+  await insert('calculation_inputs',{...base,run_id:combinedRun.id,expense_version_id:storeExpenseVersion.id});
+  const combinedPeriod=await insert('financial_period_results',{...base,run_id:combinedRun.id,period_start:'2026-08-31',period_end:'2026-09-06',quality:'complete',missing_reasons:[],totals:{selectedProductsResultBeforeTax:'2000.0000',storeLevelResultBeforeTax:'-123.4567',availableResultBeforeTax:'1876.5433',estimatedUsnTax:'0.0000',availableResultAfterTax:null,netProfit:null}});
+  const combinedSelectedLine=await insert('result_lines',{...base,run_id:combinedRun.id,financial_period_result_id:combinedPeriod.id,product_id:products[0].id,variant_id:small.id,accounting_date:'2026-09-01',category_code:'revenue',amount_signed:2000,quality:'complete',result_scope:'selected_product'});
+  await insert('result_evidence',{...base,result_line_id:combinedSelectedLine.id,financial_component_id:component.id,contribution_amount:2000});
+  const combinedStoreLine=await insert('result_lines',{...base,run_id:combinedRun.id,financial_period_result_id:combinedPeriod.id,accounting_date:'2026-09-01',category_code:storeExpenseVersion.category,amount_signed:'-123.4567',quality:'complete',result_scope:'store'});
+  await insert('result_evidence',{...base,result_line_id:combinedStoreLine.id,expense_version_id:storeExpenseVersion.id,contribution_amount:'-123.4567'});
+  await q("update mc.calculation_runs set status='succeeded',quality='complete',missing_reasons='[]',finished_at=now() where id=$1",[combinedRun.id]);
+  pass('financial-result-v7 seals selected plus store totals without weakening evidence guards');
   const run = await insert('calculation_runs',{...base,selection_id:selection.id,method_version_id:method.id,period_start:'2026-08-31',period_end:'2026-09-06',input_fingerprint:'inputs-1'});
   await insert('calculation_inputs',{...base,run_id:run.id,report_version_id:rv.id});
   await insert('calculation_inputs',{...base,run_id:run.id,cost_version_id:costV1.id});

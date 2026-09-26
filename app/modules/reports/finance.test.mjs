@@ -108,21 +108,25 @@ test('financial corrections preserve reversal direction and names containing ret
   assert.equal(compensation.quantity,'1');
 });
 
-test('unverified WB remuneration fields remain separate informational components',()=>{
+test('verified WB expense fields use per-row kopeck rounding without floating point',()=>{
   const operation=normalizeFinancialOperation(row({vw:'12.5',vwNds:'2.5',ppvzReward:'3',rebillLogisticCost:'4',cashbackAmount:'5'}));
   assert.deepEqual(operation.components.filter(component=>['vw','vwNds','ppvzReward','rebillLogisticCost'].includes(component.componentKey)).map(({componentKey,categoryCode,amountSigned})=>({componentKey,categoryCode,amountSigned})),[
-    {componentKey:'vw',categoryCode:'wb_reward_without_vat',amountSigned:'12.5'},
-    {componentKey:'vwNds',categoryCode:'wb_reward_vat',amountSigned:'2.5'},
-    {componentKey:'ppvzReward',categoryCode:'pickup_reward',amountSigned:'3'},
-    {componentKey:'rebillLogisticCost',categoryCode:'rebill_logistic_compensation',amountSigned:'4'}
+    {componentKey:'vw',categoryCode:'wb_reward_without_vat',amountSigned:'-12.5'},
+    {componentKey:'vwNds',categoryCode:'wb_reward_vat',amountSigned:'-2.5'},
+    {componentKey:'ppvzReward',categoryCode:'pickup_reward',amountSigned:'-3'},
+    {componentKey:'rebillLogisticCost',categoryCode:'rebill_logistic_compensation',amountSigned:'-4'}
   ]);
   assert.deepEqual(operation.components.find(component=>component.componentKey==='cashbackAmount'),{
     componentKey:'cashbackAmount',categoryCode:'unclassified_financial_field',amountSigned:'5',sourceField:'cashbackAmount'
   });
+  const reversals=normalizeFinancialOperation(row({vw:'-12.505',vwNds:'-2.505',ppvzReward:'-3.005',rebillLogisticCost:'-4.005'}));
+  assert.deepEqual(Object.fromEntries(reversals.components.filter(component=>['vw','vwNds','ppvzReward','rebillLogisticCost'].includes(component.sourceField)).map(component=>[component.sourceField,component.amountSigned])),{
+    vw:'12.51',vwNds:'2.51',ppvzReward:'-3.01',rebillLogisticCost:'4.01'
+  });
 });
 
 test('verified non-product WB charges have store scope only for exact field, document, operation and positive value', () => {
-  assert.equal(financialParserVersion, 'wb-finance-v6');
+  assert.equal(financialParserVersion, 'wb-finance-v7');
   const cases = [
     ['deliveryService', 'Логистика', 'logistics'],
     ['deliveryService', 'Доставка', 'logistics'],
@@ -184,6 +188,9 @@ test('each exact PVZ source component is an independent store result without net
   assert.deepEqual(operation.components.map(component=>[component.sourceField,financialComponentScope(source,operation,component)]),[
     ['vw','store'],['vwNds','store'],['ppvzReward','store']
   ]);
+  assert.deepEqual(operation.components.map(component=>[component.sourceField,component.amountSigned]),[
+    ['vw','13.35'],['vwNds','2.94'],['ppvzReward','-16.29']
+  ]);
   assert.deepEqual(unverifiedFinancialComponents(source,operation,false),[]);
   const rewardOnly={...source,vw:null,vwNds:null};
   const rewardOperation=normalizeFinancialOperation(rewardOnly);
@@ -193,10 +200,34 @@ test('each exact PVZ source component is an independent store result without net
   const linkedOperation=normalizeFinancialOperation(linked);
   assert.equal(linkedOperation.operationType,'unclassified');
   assert.deepEqual(unverifiedFinancialComponents(linked,linkedOperation,false),['ppvzReward','vw','vwNds']);
+  assert.deepEqual(linkedOperation.components.map(component=>financialComponentScope(linked,linkedOperation,component,true)),['selected_product','selected_product','selected_product']);
+  assert.deepEqual(unverifiedFinancialComponents(linked,linkedOperation,true),[]);
   const wrongSign={...rewardOnly,ppvzReward:'-16.29'};
   const wrongSignOperation=normalizeFinancialOperation(wrongSign);
-  assert.equal(financialComponentScope(wrongSign,wrongSignOperation,wrongSignOperation.components[0]),'product_expected');
-  assert.deepEqual(unverifiedFinancialComponents(wrongSign,wrongSignOperation,false),['ppvzReward']);
+  assert.equal(wrongSignOperation.components[0].amountSigned,'-16.29');
+  assert.equal(financialComponentScope(wrongSign,wrongSignOperation,wrongSignOperation.components[0]),'store');
+  assert.deepEqual(unverifiedFinancialComponents(wrongSign,wrongSignOperation,false),[]);
+});
+
+test('WB expense rows reproduce production weekly field totals after per-row rounding',()=>{
+  const samples=[
+    row({rrdId:'1',vw:'1000.004',vwNds:'300.004',rebillLogisticCost:'100.235',ppvzReward:'200.004'}),
+    row({rrdId:'2',vw:'870.735',vwNds:'111.545',ppvzReward:'3.375'})
+  ];
+  const totals=new Map();
+  for(const source of samples){
+    for(const component of normalizeFinancialOperation(source).components){
+      if(!['vw','vwNds','rebillLogisticCost','ppvzReward'].includes(component.sourceField))continue;
+      const prior=totals.get(component.sourceField)??0n;
+      const negative=component.amountSigned.startsWith('-');
+      const [whole,fraction='']=component.amountSigned.replace('-','').split('.');
+      const cents=BigInt(whole)*100n+BigInt(fraction.padEnd(2,'0'));
+      totals.set(component.sourceField,prior+(negative?-cents:cents));
+    }
+  }
+  assert.deepEqual(Object.fromEntries(totals),{
+    vw:-187074n,vwNds:-41155n,rebillLogisticCost:-10024n,ppvzReward:-20338n
+  });
 });
 
 test('unverified PVZ, loyalty and unrelated fields cannot become store expenses', () => {

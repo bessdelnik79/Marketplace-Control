@@ -2,11 +2,12 @@ import { createHash } from 'node:crypto';
 
 const MONEY_SCALE = 4;
 const RESULT_CATEGORIES = new Set([
-  'revenue', 'revenue_return', 'commission', 'acquiring', 'logistics',
+  'revenue', 'revenue_return', 'acquiring', 'logistics',
   'storage', 'acceptance', 'penalty', 'deduction', 'commission_adjustment',
-  'other_adjustment', 'promotion', 'pickup_reward', 'wb_reward_without_vat', 'wb_reward_vat'
+  'other_adjustment', 'promotion', 'pickup_reward', 'wb_reward_without_vat', 'wb_reward_vat',
+  'rebill_logistic_compensation'
 ]);
-const NON_RESULT_CATEGORIES = new Set(['payout']);
+const NON_RESULT_CATEGORIES = new Set(['payout','commission']);
 const VERIFIED_WB_COMPONENTS = new Map([
   ['acquiringFee', { category: 'acquiring', operation: 'sale', document: 'продажа', names: new Set(['продажа']) }],
   ['deliveryService', { category: 'logistics', operation: 'service_charge', document: '', names: new Set(['логистика', 'доставка', 'коррекция стоимости доставки']) }],
@@ -74,10 +75,14 @@ export function normalizeMoney(value) {
 export function isVerifiedWbResultComponent({ categoryCode, sourceField, operationType, docTypeName, sellerOperName, bonusTypeName, rawValue }) {
   const value=String(rawValue??'').trim().replace(',', '.');
   if(!/^-?\d+(?:\.\d+)?$/.test(value)||!/[1-9]/.test(value))return false;
-  const pvzCategories=new Map([['ppvzReward','pickup_reward'],['vw','wb_reward_without_vat'],['vwNds','wb_reward_vat']]);
-  if(pvzCategories.get(sourceField)===categoryCode && operationType==='other' &&
-     String(docTypeName??'').trim()==='Продажа' && String(sellerOperName??'').trim()==='Возмещение за выдачу и возврат товаров на ПВЗ'){
-    return sourceField==='ppvzReward'?!value.startsWith('-'):value.startsWith('-');
+  if(sourceField==='ppvzReward'&&categoryCode==='pickup_reward')return true;
+  if(sourceField==='rebillLogisticCost'&&categoryCode==='rebill_logistic_compensation')return true;
+  if((sourceField==='vw'&&categoryCode==='wb_reward_without_vat')||(sourceField==='vwNds'&&categoryCode==='wb_reward_vat')){
+    const document=String(docTypeName??'').trim();
+    const name=String(sellerOperName??'').trim();
+    return(operationType==='sale'&&document==='Продажа'&&name==='Продажа')||
+      (operationType==='return'&&document==='Возврат'&&name==='Возврат')||
+      (operationType==='other'&&document==='Продажа'&&name==='Возмещение за выдачу и возврат товаров на ПВЗ');
   }
   if(value.startsWith('-'))return false;
   if (sourceField === 'retailAmount') {
@@ -427,9 +432,9 @@ function totalsFor(lines,taxUsable=false) {
   return {
     selectedProductsResultBeforeTax: formatDecimal(selected),
     storeLevelResultBeforeTax: formatDecimal(store),
-    availableResultBeforeTax: formatDecimal(selected),
+    availableResultBeforeTax: formatDecimal(selected+store),
     estimatedUsnTax:formatDecimal(tax),
-    availableResultAfterTax: taxUsable?formatDecimal(selected-tax):null,
+    availableResultAfterTax: taxUsable?formatDecimal(selected+store-tax):null,
     netProfit: null
   };
 }

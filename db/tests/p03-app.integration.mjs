@@ -38,13 +38,13 @@ await context(async client=>{
   await client.query(`update mc.variant_costs set current_version_id=$1 where id=$2`,[costVersion.id,cost.id]);
   const document=(await client.query(`insert into mc.source_documents(business_id,store_id,origin,document_type,external_document_id,checksum,completeness) values($1,$2,'wb_api','weekly_realization','p03-report','p03-report','complete') returning id`,[ids.business,ids.store])).rows[0];
   const report=(await client.query(`insert into mc.reports(business_id,store_id,external_report_id,period_start,period_end) values($1,$2,'785995400','2026-07-13','2026-07-19') returning id`,[ids.business,ids.store])).rows[0];
-  const reportVersion=(await client.query(`insert into mc.report_versions(business_id,store_id,report_id,document_id,version_no,checksum,parser_version) values($1,$2,$3,$4,1,'p03-v1','wb-finance-v2') returning id`,[ids.business,ids.store,report.id,document.id])).rows[0];
+  const reportVersion=(await client.query(`insert into mc.report_versions(business_id,store_id,report_id,document_id,version_no,checksum,parser_version) values($1,$2,$3,$4,1,'p03-v1','wb-finance-v7') returning id`,[ids.business,ids.store,report.id,document.id])).rows[0];
   const reportRow=(await client.query(`insert into mc.report_rows(business_id,store_id,report_version_id,external_row_key,row_number,raw_data,row_checksum) values($1,$2,$3,'1',1,$4::jsonb,'p03-row') returning id`,[ids.business,ids.store,reportVersion.id,JSON.stringify({docTypeName:'Продажа',sellerOperName:'Продажа',rrDate:'2026-07-15',nmId:700001,sku:'4600000000001',quantity:1,retailAmount:'100',forPay:'100'})])).rows[0];
   await client.query(`update mc.report_versions set status='validated' where id=$1`,[reportVersion.id]);
   await client.query(`update mc.report_versions set status='accepted',accepted_at=now() where id=$1`,[reportVersion.id]);
   await client.query(`update mc.reports set current_version_id=$1 where id=$2`,[reportVersion.id,report.id]);
-  const importMethod=(await client.query(`select id from mc.method_versions where code='wb_finance_import' and version_no=2`)).rows[0];
-  const normalization=(await client.query(`insert into mc.report_normalizations(business_id,store_id,report_version_id,method_version_id,normalization_key,status) values($1,$2,$3,$4,$5,'succeeded') returning id`,[ids.business,ids.store,reportVersion.id,importMethod.id,`wb-finance-v2:${reportVersion.id}`])).rows[0];
+  const importMethod=(await client.query(`select id from mc.method_versions where code='wb_finance_import' and version_no=7`)).rows[0];
+  const normalization=(await client.query(`insert into mc.report_normalizations(business_id,store_id,report_version_id,method_version_id,normalization_key,status) values($1,$2,$3,$4,$5,'succeeded') returning id`,[ids.business,ids.store,reportVersion.id,importMethod.id,`wb-finance-v7:${reportVersion.id}`])).rows[0];
   const operation=(await client.query(`insert into mc.operations(business_id,store_id,source_code,source_operation_key) values($1,$2,'wb_finance','785995400/1') returning id`,[ids.business,ids.store])).rows[0];
   const operationVersion=(await client.query(`insert into mc.operation_versions(business_id,store_id,operation_id,report_row_id,report_normalization_id,version_no,operation_type,product_id,variant_id,accounting_date,quantity) values($1,$2,$3,$4,$5,1,'sale',$6,$7,'2026-07-15',1) returning id`,[ids.business,ids.store,operation.id,reportRow.id,normalization.id,product.id,variant.id])).rows[0];
   await client.query(`insert into mc.financial_components(business_id,store_id,operation_version_id,component_key,category_code,amount_signed,method_version_id,source_field,result_scope_classification) values($1,$2,$3,'retailAmount','revenue',100,$4,'retailAmount','selected_product')`,[ids.business,ids.store,operationVersion.id,importMethod.id]);
@@ -127,7 +127,9 @@ test('verified 07-13 store sources do not create product-link issues and no-sale
   const calculated=await runFinancialCalculation(scope.user,scope.store);
   assert.equal(calculated.quality,'complete');
   assert.deepEqual(calculated.missingReasons,[]);
-  assert.equal(calculated.totals.storeLevelResultBeforeTax,'-309.5122');
+  assert.equal(calculated.totals.storeLevelResultBeforeTax,'-309.5100');
+  assert.equal(calculated.totals.availableResultBeforeTax,'-249.5100');
+  assert.equal(calculated.totals.availableResultAfterTax,'-255.5100');
   const persisted=await scoped(async client=>({
     issues:(await client.query(`select code from mc.data_issues where store_id=$1 and status='open' and code in('financial_operation_unclassified','financial_components_unverified','financial_product_not_in_catalog')`,[scope.store])).rows,
     tax:(await client.query(`select product_id,taxable_base::text,tax_amount::text from mc.tax_computations where run_id=$1 order by product_id`,[calculated.runId])).rows
@@ -362,7 +364,7 @@ test('P0.3 persists exact weekly results, links return cost fail-closed and isol
   assert.equal(pair.current.period_result_id,second.period_result_id);
   assert.equal(pair.previous.period_result_id,first.period_result_id);
   assert.equal(pair.publication_id,second.publication_id);
-  assert.equal(pair.method_version,'financial-result-v6');
+  assert.equal(pair.method_version,'financial-result-v7');
   assert.equal(pair.timezone,'Europe/Moscow');
   assert.deepEqual(pair.scope,{type:'selected_products',productIds:[fixture.productId]});
   assert.ok(pair.current.source_freshness);

@@ -16,8 +16,8 @@ function envelope(start,end,{quality='complete',missingReasons=[],amount='10.000
   };
 }
 
-test('current financial parser keeps v5 as the first compatibility fallback',()=>{
-  assert.deepEqual(compatibleFinancialParserVersions.slice(0,3),['wb-finance-v6','wb-finance-v5','wb-finance-v4']);
+test('current financial parser keeps v6 as the first compatibility fallback after v7',()=>{
+  assert.deepEqual(compatibleFinancialParserVersions.slice(0,3),['wb-finance-v7','wb-finance-v6','wb-finance-v5']);
 });
 
 test('aggregates a fully covered arbitrary range using exact scale-4 persisted totals',()=>{
