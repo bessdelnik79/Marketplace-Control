@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,26);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,27);
   pass('password identity and expiring session are stored by migration 2');
   const financialMethod=await one("select implementation_version from mc.method_versions where code='wb_finance_import' and version_no=1");
   assert.equal(financialMethod.implementation_version,'wb-finance-v1');
@@ -62,6 +62,9 @@ try {
   const financeMethodV8=await one("select implementation_version,parameters from mc.method_versions where code='wb_finance_import' and version_no=8");
   assert.equal(financeMethodV8.implementation_version,'wb-finance-v8');
   assert.equal(financeMethodV8.parameters.rebillLogisticCost,'reconciliation-v1');
+  const financeMethodV9=await one("select implementation_version,parameters from mc.method_versions where code='wb_finance_import' and version_no=9");
+  assert.equal(financeMethodV9.implementation_version,'wb-finance-v9');
+  assert.equal(financeMethodV9.parameters.storeScope,'missing-product-identifiers-v1');
   const resultMethodV3=await one("select implementation_version from mc.method_versions where code='financial_result' and version_no=3");
   assert.equal(resultMethodV3.implementation_version,'financial-result-v3');
   const resultMethodV4=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=4");
@@ -76,12 +79,15 @@ try {
   const resultMethodV8=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=8");
   assert.equal(resultMethodV8.implementation_version,'financial-result-v8');
   assert.equal(resultMethodV8.parameters.rebillLogisticCost,'reconciliation-only-v1');
+  const resultMethodV9=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=9");
+  assert.equal(resultMethodV9.implementation_version,'financial-result-v9');
+  assert.equal(resultMethodV9.parameters.storeScope,'missing-product-identifiers-v1');
   assert.deepEqual(await q("select code,class from mc.financial_categories where code in ('pickup_reward','rebill_logistic_compensation','wb_reward_without_vat','wb_reward_vat') order by code"),[
     {code:'pickup_reward',class:'expense'},{code:'rebill_logistic_compensation',class:'expense'},{code:'wb_reward_vat',class:'expense'},{code:'wb_reward_without_vat',class:'expense'}
   ]);
   const guards=(await q("select proname,pg_get_functiondef(p.oid) as definition from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='mc' and proname in ('guard_period_result','guard_selected_tax_artifact','guard_selected_tax_finish','guard_run_finish') order by proname"));
   assert.equal(guards.length,4);
-  for(const guard of guards)assert.match(guard.definition,/financial-result-v8/,guard.proname);
+  for(const guard of guards)assert.match(guard.definition,/financial-result-v9/,guard.proname);
   const taxComputationColumns=(await q("select column_name from information_schema.columns where table_schema='mc' and table_name='tax_computations' order by column_name")).map(row=>row.column_name);
   assert.ok(taxComputationColumns.includes('product_id'));
   assert.ok(!taxComputationColumns.includes('tax_year')&&!taxComputationColumns.includes('tax_setting_version_id')&&!taxComputationColumns.includes('rate_fraction'));
@@ -591,6 +597,41 @@ try {
     ]);
     pass('migration 26 upgrades populated v25 state, refreshes invalidation and restores FORCE RLS');
   }finally{await v26UpgradeDb.close();}
+
+  const v27UpgradeDb=new PGlite();
+  try{
+    for(const migration of migrations.filter(name=>Number(name.split('_')[0])<=26))await v27UpgradeDb.exec(await readFile(path.join(root,'db/migrations',migration),'utf8'));
+    const vq=async(sql,params=[])=>(await v27UpgradeDb.query(sql,params)).rows;
+    const vone=async(sql,params=[])=>(await vq(sql,params))[0];
+    const upgradeUser=await vone(`insert into mc.users(display_name) values('V27 owner') returning id`);
+    const upgradeBusiness=await vone(`insert into mc.businesses(name) values('V27 business') returning id`);
+    await vq(`insert into mc.memberships(business_id,user_id,role) values($1,$2,'owner')`,[upgradeBusiness.id,upgradeUser.id]);
+    await vq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[upgradeUser.id,upgradeBusiness.id]);
+    const upgradeStore=await vone(`insert into mc.stores(business_id,external_account_id,name,status) values($1,'v27-store','V27 store','active') returning id`,[upgradeBusiness.id]);
+    const catalog=await vone(`insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness) values($1,$2,'wb_api','catalog','v27-catalog','complete') returning id`,[upgradeBusiness.id,upgradeStore.id]);
+    const product=await vone(`insert into mc.products(business_id,store_id,wb_article,seller_article) values($1,$2,270001,'V27') returning id`,[upgradeBusiness.id,upgradeStore.id]);
+    await vone(`select mc.confirm_product_selection($1,$2,$3::uuid[]) as id`,[upgradeStore.id,catalog.id,[product.id]]);
+    const document=await vone(`insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness) values($1,$2,'wb_api','weekly_realization','v27-report','complete') returning id`,[upgradeBusiness.id,upgradeStore.id]);
+    const report=await vone(`insert into mc.reports(business_id,store_id,external_report_id,period_start,period_end) values($1,$2,'v27-report','2026-09-07','2026-09-13') returning id`,[upgradeBusiness.id,upgradeStore.id]);
+    const version=await vone(`insert into mc.report_versions(business_id,store_id,report_id,document_id,version_no,checksum,parser_version) values($1,$2,$3,$4,1,'v27-version','wb-finance-v8') returning id`,[upgradeBusiness.id,upgradeStore.id,report.id,document.id]);
+    await vq(`update mc.report_versions set status='validated' where id=$1`,[version.id]);
+    await vq(`update mc.report_versions set status='accepted',accepted_at=now() where id=$1`,[version.id]);
+    await vq(`update mc.reports set current_version_id=$1 where id=$2`,[version.id,report.id]);
+    const before=await vone(`insert into mc.calculation_invalidations(business_id,store_id,requested_by,reason) values($1,$2,$3,'before_v27')
+      on conflict(store_id) do update set requested_by=excluded.requested_by,reason=excluded.reason,generation_token=gen_random_uuid() returning generation_token`,[upgradeBusiness.id,upgradeStore.id,upgradeUser.id]);
+    await vq(`select set_config('app.user_id','',false),set_config('app.business_id','',false)`);
+    await v27UpgradeDb.exec(await readFile(path.join(root,'db/migrations/027_store_rows_without_product_method.sql'),'utf8'));
+    await vq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[upgradeUser.id,upgradeBusiness.id]);
+    const after=await vone(`select reason,generation_token from mc.calculation_invalidations where store_id=$1`,[upgradeStore.id]);
+    assert.equal(after.reason,'store_rows_without_product_method_v9');
+    assert.notEqual(after.generation_token,before.generation_token);
+    assert.deepEqual(await vq(`select relname,relforcerowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace
+      where n.nspname='mc' and relname in('stores','memberships','product_selections','reports') order by relname`),[
+      {relname:'memberships',relforcerowsecurity:true},{relname:'product_selections',relforcerowsecurity:true},
+      {relname:'reports',relforcerowsecurity:true},{relname:'stores',relforcerowsecurity:true}
+    ]);
+    pass('migration 27 upgrades populated v26 state, refreshes invalidation and restores FORCE RLS');
+  }finally{await v27UpgradeDb.close();}
 
   const operationalUpgradeDb=new PGlite();
   try{

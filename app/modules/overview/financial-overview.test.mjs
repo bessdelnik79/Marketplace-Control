@@ -128,6 +128,32 @@ test('v8 overview includes confirmed store expenses once in the 07-13 September 
   assert.deepEqual(overview.displayResult,{amount:'417.6126',basis:'after_tax'});
 });
 
+test('v9 overview includes result-affecting rows without a product as store expenses',()=>{
+  const overview=buildFinancialPeriodOverview(envelope({
+    methodVersion:'financial-result-v9',periodStart:'2026-08-24',periodEnd:'2026-08-30',
+    revenue:'3835.0000',expenseLine:'-1221.0000',selectedBeforeTax:'2614.0000',storeBeforeTax:'-4953.6200',
+    beforeTax:'-2339.6200',tax:'306.8000',afterTax:'-2646.4200'
+  }));
+  assert.deepEqual(overview.totals,{
+    revenue:'3835.0000',expenses:'6174.6200',tax:'306.8000',
+    availableResultBeforeTax:'-2339.6200',availableResultAfterTax:'-2646.4200'
+  });
+});
+
+test('v9 overview reports store-scoped revenue and returns as revenue instead of negative expenses',()=>{
+  const raw=envelope({methodVersion:'financial-result-v9',revenue:'0.0000',expenseLine:'0.0000',selectedBeforeTax:'0.0000',storeBeforeTax:'0.0000',beforeTax:'0.0000',tax:'0.0000',afterTax:'0.0000'});
+  raw.lines.splice(1,0,
+    {result_scope:'store',accounting_date:'2026-09-15',category_code:'revenue',amount_signed:'100.0000',quality:'complete'},
+    {result_scope:'store',accounting_date:'2026-09-15',category_code:'revenue_return',amount_signed:'-20.0000',quality:'complete'}
+  );
+  raw.totals.storeLevelResultBeforeTax='80.0000';
+  raw.totals.availableResultBeforeTax='80.0000';
+  raw.totals.availableResultAfterTax='80.0000';
+  const overview=buildFinancialPeriodOverview(raw);
+  assert.equal(overview.totals.revenue,'80.0000');
+  assert.equal(overview.totals.expenses,'0.0000');
+});
+
 test('revenue includes revenue_return and ignores store-scope lines in selected product result', () => {
   const raw = envelope({ revenue: '150.0000', expenseLine: '-30.0000' });
   raw.lines.splice(1, 0,

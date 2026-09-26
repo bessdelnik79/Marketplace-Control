@@ -49,6 +49,9 @@ test('only verified WB field, operation and document combinations enter the resu
   assert.equal(isVerifiedWbResultComponent({sourceField:'vw',categoryCode:'wb_reward_without_vat',operationType:'other',docTypeName:'Продажа',sellerOperName:'Возмещение за выдачу и возврат товаров на ПВЗ',rawValue:'-13.3522'}),true);
   assert.equal(isVerifiedWbResultComponent({sourceField:'vwNds',categoryCode:'wb_reward_vat',operationType:'other',docTypeName:'Продажа',sellerOperName:'Возмещение за выдачу и возврат товаров на ПВЗ',rawValue:'-2.94'}),true);
   assert.equal(isVerifiedWbResultComponent({sourceField:'rebillLogisticCost',categoryCode:'rebill_logistic_compensation',operationType:'service_charge',docTypeName:'',sellerOperName:'Логистика',rawValue:'10'}),false);
+  assert.equal(isVerifiedWbResultComponent({sourceField:'additionalPayment',categoryCode:'commission_adjustment',operationType:'adjustment',docTypeName:'',sellerOperName:'Любое основание',rawValue:'1458.34',scopeCode:'store'}),true);
+  assert.equal(isVerifiedWbResultComponent({sourceField:'additionalPayment',categoryCode:'commission_adjustment',operationType:'adjustment',docTypeName:'',sellerOperName:'Любое основание',rawValue:'-1458.34',scopeCode:'store'}),true);
+  assert.equal(isVerifiedWbResultComponent({sourceField:'additionalPayment',categoryCode:'deduction',operationType:'adjustment',docTypeName:'',sellerOperName:'Любое основание',rawValue:'1458.34',scopeCode:'store'}),false);
 });
 
 test('money normalization preserves four decimal places without Number precision loss', () => {
@@ -158,6 +161,17 @@ test('signed commission adjustment is included while legacy additional payment i
   assert.equal(result.lines[0].categoryCode, 'commission_adjustment');
   assert.equal(result.lines[0].amountSigned, '-3.2500');
   assert.deepEqual(result.missingReasons, ['operation_unclassified', 'tax_setting_missing']);
+});
+
+test('store-scoped commission adjustments are confirmed by source scope for charge and reversal',()=>{
+  const result=calculateFinancialResult({periodStart:'2026-09-07',periodEnd:'2026-09-13',selectedProductIds:['product-1'],financialComponents:[
+    {id:'revenue',classificationStatus:'confirmed',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-09-07',categoryCode:'revenue',amountSigned:'2000'},
+    {id:'charge',classificationStatus:'confirmed',scopeCode:'store',accountingDate:'2026-09-08',categoryCode:'commission_adjustment',amountSigned:'-1458.34'},
+    {id:'reversal',classificationStatus:'confirmed',scopeCode:'store',accountingDate:'2026-09-09',categoryCode:'commission_adjustment',amountSigned:'1458.34'}
+  ]});
+  assert.equal(result.missingReasons.includes('operation_unclassified'),false);
+  assert.equal(result.totals.storeLevelResultBeforeTax,'0.0000');
+  assert.equal(result.totals.availableResultBeforeTax,'2000.0000');
 });
 
 test('promotion and independent PVZ expense fields combine into the available result',()=>{

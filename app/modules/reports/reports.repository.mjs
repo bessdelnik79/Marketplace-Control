@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { withOwnedBusinessContext } from '../../infrastructure/database/client.mjs';
-import { financialComponentScope, financialHistoricalWeekRange, financialParserVersion, financialReportPeriodMatches, normalizeFinancialOperation, stableJson, unverifiedFinancialComponents } from './finance.mjs';
+import { financialComponentScope, financialHistoricalWeekRange, financialParserVersion, financialReportPeriodMatches, isResolvedNonProductOperation, normalizeFinancialOperation, stableJson, unverifiedFinancialComponents } from './finance.mjs';
 import { reconcileBankPayment } from './bank-reconciliation.mjs';
 import { buildSellerOffsetReference } from './full-report-credit.mjs';
 
@@ -257,8 +257,8 @@ export async function completeFinancialSync(userId,job,{documentId,reports,summa
         );};
         if(normalized.wbArticle&&!product)await addIssue('financial_product_not_in_catalog','warning',{wbArticle:normalized.wbArticle});
         if(product&&normalized.variantBarcode&&!variant)await addIssue('financial_variant_not_matched','warning',{wbArticle:normalized.wbArticle});
-        if(normalized.operationType==='unclassified')await addIssue('financial_operation_unclassified','blocking',{docTypeName:String(sourceRow.rawData.docTypeName??''),sellerOperName:String(sourceRow.rawData.sellerOperName??'')});
         const unverifiedFields=unverifiedFinancialComponents(sourceRow.rawData,normalized,Boolean(product));
+        if(normalized.operationType==='unclassified'&&!isResolvedNonProductOperation(sourceRow.rawData,normalized,Boolean(product)))await addIssue('financial_operation_unclassified','blocking',{docTypeName:String(sourceRow.rawData.docTypeName??''),sellerOperName:String(sourceRow.rawData.sellerOperName??'')});
         if(unverifiedFields.length)await addIssue('financial_components_unverified','blocking',{sourceFields:unverifiedFields});
         const sourceOperationKey=`${source.externalReportId}/${sourceRow.externalRowKey}`;
         let operation=(await client.query(`select id from mc.operations where store_id=$1 and source_code='wb_finance' and source_operation_key=$2`,[job.store_id,sourceOperationKey])).rows[0];

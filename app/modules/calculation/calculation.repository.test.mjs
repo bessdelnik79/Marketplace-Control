@@ -16,8 +16,8 @@ function envelope(start,end,{quality='complete',missingReasons=[],amount='10.000
   };
 }
 
-test('current financial parser keeps v7 as the first compatibility fallback after v8',()=>{
-  assert.deepEqual(compatibleFinancialParserVersions.slice(0,3),['wb-finance-v8','wb-finance-v7','wb-finance-v6']);
+test('current financial parser keeps v8 as the first compatibility fallback after v9',()=>{
+  assert.deepEqual(compatibleFinancialParserVersions.slice(0,3),['wb-finance-v9','wb-finance-v8','wb-finance-v7']);
 });
 
 test('excludes an entire report period when one accepted report lacks current normalization',()=>{

@@ -15,6 +15,19 @@ const VERIFIED_WB_COMPONENTS = new Map([
   ['penalty', { category: 'penalty', operation: 'adjustment', document: '', names: new Set(['штраф']) }],
   ['deduction', { category: 'deduction', operation: 'adjustment', document: '', names: new Set(['удержание']) }]
 ]);
+const VERIFIED_STORE_COMPONENTS = new Map([
+  ['retailAmount', new Set(['revenue','revenue_return'])],
+  ['acquiringFee', new Set(['acquiring'])],
+  ['deliveryService', new Set(['logistics'])],
+  ['paidStorage', new Set(['storage'])],
+  ['paidAcceptance', new Set(['acceptance'])],
+  ['penalty', new Set(['penalty'])],
+  ['deduction', new Set(['deduction','promotion'])],
+  ['additionalPayment', new Set(['commission_adjustment'])],
+  ['vw', new Set(['wb_reward_without_vat'])],
+  ['vwNds', new Set(['wb_reward_vat'])],
+  ['ppvzReward', new Set(['pickup_reward'])]
+]);
 const EXPENSE_CATEGORIES = new Set([
   'packaging', 'software_services', 'external_promotion', 'agency_services', 'other_external'
 ]);
@@ -71,9 +84,10 @@ export function normalizeMoney(value) {
   return formatDecimal(money(value));
 }
 
-export function isVerifiedWbResultComponent({ categoryCode, sourceField, operationType, docTypeName, sellerOperName, bonusTypeName, rawValue }) {
+export function isVerifiedWbResultComponent({ categoryCode, sourceField, operationType, docTypeName, sellerOperName, bonusTypeName, rawValue, scopeCode }) {
   const value=String(rawValue??'').trim().replace(',', '.');
   if(!/^-?\d+(?:\.\d+)?$/.test(value)||!/[1-9]/.test(value))return false;
+  if(scopeCode==='store')return VERIFIED_STORE_COMPONENTS.get(sourceField)?.has(categoryCode)===true;
   if(sourceField==='ppvzReward'&&categoryCode==='pickup_reward')return true;
   if(sourceField==='rebillLogisticCost'&&categoryCode==='rebill_logistic_compensation')return false;
   if((sourceField==='vw'&&categoryCode==='wb_reward_without_vat')||(sourceField==='vwNds'&&categoryCode==='wb_reward_vat')){
