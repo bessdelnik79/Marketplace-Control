@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,28);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,29);
   pass('password identity and expiring session are stored by migration 2');
   const financialMethod=await one("select implementation_version from mc.method_versions where code='wb_finance_import' and version_no=1");
   assert.equal(financialMethod.implementation_version,'wb-finance-v1');
@@ -84,14 +84,26 @@ try {
   assert.equal(resultMethodV9.parameters.storeScope,'missing-product-identifiers-v1');
   const resultMethodV10=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=10");
   assert.equal(resultMethodV10.implementation_version,'financial-result-v10');
+  const financeMethodV10=await one("select implementation_version,parameters from mc.method_versions where code='wb_finance_import' and version_no=10");
+  assert.equal(financeMethodV10.implementation_version,'wb-finance-v10');
+  assert.equal(financeMethodV10.parameters.loyaltyCompensation,'exact-operation-signed-income-v1');
+  assert.deepEqual(await one("select class,is_promotion from mc.financial_categories where code='loyalty_compensation'"),{class:'income',is_promotion:false});
+  const resultMethodV11=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=11");
+  const resultMethodV12=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=12");
+  assert.equal(resultMethodV11.implementation_version,'financial-result-v11');
+  assert.equal(resultMethodV12.implementation_version,'financial-result-v12');
+  assert.equal(resultMethodV12.parameters.targetPeriod,true);
   assert.equal(resultMethodV10.parameters.targetPeriod,true);
   assert.deepEqual(await q("select code,class from mc.financial_categories where code in ('pickup_reward','rebill_logistic_compensation','wb_reward_without_vat','wb_reward_vat') order by code"),[
     {code:'pickup_reward',class:'expense'},{code:'rebill_logistic_compensation',class:'expense'},{code:'wb_reward_vat',class:'expense'},{code:'wb_reward_without_vat',class:'expense'}
   ]);
   const guards=(await q("select proname,pg_get_functiondef(p.oid) as definition from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='mc' and proname in ('guard_period_result','guard_selected_tax_artifact','guard_selected_tax_finish','guard_run_finish') order by proname"));
   assert.equal(guards.length,4);
-  for(const guard of guards)assert.match(guard.definition,/financial-result-v9/,guard.proname);
-  assert.match((await one("select pg_get_functiondef('mc.guard_target_period_finish()'::regprocedure) as definition")).definition,/financial-result-v10/);
+  for(const guard of guards){assert.match(guard.definition,/financial-result-v9/,guard.proname);assert.match(guard.definition,/financial-result-v11/,guard.proname);}
+  const targetGuard=(await one("select pg_get_functiondef('mc.guard_target_period_finish()'::regprocedure) as definition")).definition;
+  assert.match(targetGuard,/financial-result-v10/);
+  assert.match(targetGuard,/financial-result-v12/);
+  assert.match(targetGuard,/wb-finance-v10/);
   const taxComputationColumns=(await q("select column_name from information_schema.columns where table_schema='mc' and table_name='tax_computations' order by column_name")).map(row=>row.column_name);
   assert.ok(taxComputationColumns.includes('product_id'));
   assert.ok(!taxComputationColumns.includes('tax_year')&&!taxComputationColumns.includes('tax_setting_version_id')&&!taxComputationColumns.includes('rate_fraction'));
@@ -636,6 +648,42 @@ try {
     ]);
     pass('migration 27 upgrades populated v26 state, refreshes invalidation and restores FORCE RLS');
   }finally{await v27UpgradeDb.close();}
+
+  const v29UpgradeDb=new PGlite();
+  try{
+    for(const migration of migrations.filter(name=>Number(name.split('_')[0])<=28))await v29UpgradeDb.exec(await readFile(path.join(root,'db/migrations',migration),'utf8'));
+    const vq=async(sql,params=[])=>(await v29UpgradeDb.query(sql,params)).rows;
+    const vone=async(sql,params=[])=>(await vq(sql,params))[0];
+    const upgradeUser=await vone(`insert into mc.users(display_name) values('V29 owner') returning id`);
+    const upgradeBusiness=await vone(`insert into mc.businesses(name) values('V29 business') returning id`);
+    await vq(`insert into mc.memberships(business_id,user_id,role) values($1,$2,'owner')`,[upgradeBusiness.id,upgradeUser.id]);
+    await vq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[upgradeUser.id,upgradeBusiness.id]);
+    const upgradeStore=await vone(`insert into mc.stores(business_id,external_account_id,name,status) values($1,'v29-store','V29 store','active') returning id`,[upgradeBusiness.id]);
+    const catalog=await vone(`insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness) values($1,$2,'wb_api','catalog','v29-catalog','complete') returning id`,[upgradeBusiness.id,upgradeStore.id]);
+    const product=await vone(`insert into mc.products(business_id,store_id,wb_article,seller_article) values($1,$2,290001,'V29') returning id`,[upgradeBusiness.id,upgradeStore.id]);
+    await vone(`select mc.confirm_product_selection($1,$2,$3::uuid[]) as id`,[upgradeStore.id,catalog.id,[product.id]]);
+    const document=await vone(`insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness) values($1,$2,'wb_api','weekly_realization','v29-report','complete') returning id`,[upgradeBusiness.id,upgradeStore.id]);
+    const report=await vone(`insert into mc.reports(business_id,store_id,external_report_id,period_start,period_end) values($1,$2,'v29-report','2026-08-17','2026-08-23') returning id`,[upgradeBusiness.id,upgradeStore.id]);
+    const version=await vone(`insert into mc.report_versions(business_id,store_id,report_id,document_id,version_no,checksum,parser_version) values($1,$2,$3,$4,1,'v29-version','wb-finance-v9') returning id`,[upgradeBusiness.id,upgradeStore.id,report.id,document.id]);
+    await vq(`update mc.report_versions set status='validated' where id=$1`,[version.id]);
+    await vq(`update mc.report_versions set status='accepted',accepted_at=now() where id=$1`,[version.id]);
+    await vq(`update mc.reports set current_version_id=$1 where id=$2`,[version.id,report.id]);
+    const before=await vone(`insert into mc.calculation_invalidations(business_id,store_id,requested_by,reason) values($1,$2,$3,'before_v29')
+      on conflict(store_id) do update set requested_by=excluded.requested_by,reason=excluded.reason,generation_token=gen_random_uuid() returning generation_token`,[upgradeBusiness.id,upgradeStore.id,upgradeUser.id]);
+    await vq(`select set_config('app.user_id','',false),set_config('app.business_id','',false)`);
+    await v29UpgradeDb.exec(await readFile(path.join(root,'db/migrations/029_loyalty_compensation_method.sql'),'utf8'));
+    await vq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[upgradeUser.id,upgradeBusiness.id]);
+    const after=await vone(`select reason,generation_token from mc.calculation_invalidations where store_id=$1`,[upgradeStore.id]);
+    assert.equal(after.reason,'loyalty_compensation_method_v10');
+    assert.notEqual(after.generation_token,before.generation_token);
+    assert.deepEqual(await vone(`select class,is_promotion from mc.financial_categories where code='loyalty_compensation'`),{class:'income',is_promotion:false});
+    assert.deepEqual(await vq(`select relname,relforcerowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace
+      where n.nspname='mc' and relname in('stores','memberships','product_selections','reports') order by relname`),[
+      {relname:'memberships',relforcerowsecurity:true},{relname:'product_selections',relforcerowsecurity:true},
+      {relname:'reports',relforcerowsecurity:true},{relname:'stores',relforcerowsecurity:true}
+    ]);
+    pass('migration 29 upgrades populated v28 state, refreshes invalidation and restores FORCE RLS');
+  }finally{await v29UpgradeDb.close();}
 
   const operationalUpgradeDb=new PGlite();
   try{

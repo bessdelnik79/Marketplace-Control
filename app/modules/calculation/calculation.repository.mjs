@@ -3,10 +3,11 @@ import { financialParserVersion } from '../reports/finance.mjs';
 import { calculateFinancialResult, calculateStoreTaxReference, createInputFingerprint, isVerifiedWbResultComponent } from './calculation.mjs';
 
 export const compatibleFinancialParserVersions=Object.freeze([
-  financialParserVersion,'wb-finance-v8','wb-finance-v7','wb-finance-v6','wb-finance-v5','wb-finance-v4','wb-finance-v3','wb-finance-v2'
+  financialParserVersion,'wb-finance-v9','wb-finance-v8','wb-finance-v7','wb-finance-v6','wb-finance-v5','wb-finance-v4','wb-finance-v3','wb-finance-v2'
 ]);
 
 const qualityRank={complete:0,partial:1,unavailable:2};
+const targetResultVersions=new Set(['financial-result-v10','financial-result-v12']);
 
 function shiftCalendarDate(value,days){
   const text=String(value??'');
@@ -214,7 +215,7 @@ export async function getCurrentFinancialResult(userId,storeId){
          from mc.result_lines where run_id=$1
         order by accounting_date,result_scope,product_id nulls last,variant_id nulls last,category_code,id`,[publication.run_id]
     )).rows;
-    if(['financial-result-v4','financial-result-v5','financial-result-v6','financial-result-v7','financial-result-v8','financial-result-v9','financial-result-v10'].includes(publication.method_version)){
+    if(['financial-result-v4','financial-result-v5','financial-result-v6','financial-result-v7','financial-result-v8','financial-result-v9','financial-result-v10','financial-result-v11','financial-result-v12'].includes(publication.method_version)){
       const computations=(await client.query(`select id,product_id,taxable_base::text,tax_amount::text from mc.tax_computations where run_id=$1 order by product_id`,[publication.run_id])).rows;
       const taxTotals=(await client.query(`select coalesce(sum(taxable_base),0)::text as taxable_base,coalesce(sum(tax_amount),0)::text as tax_amount from mc.tax_computations where run_id=$1`,[publication.run_id])).rows[0];
       const segments=(await client.query(`select s.tax_computation_id,c.product_id,s.tax_setting_version_id,s.segment_start::text,s.segment_end::text,s.taxable_base::text,s.rate_fraction::text
@@ -277,7 +278,7 @@ async function getHistoricalPublishedPeriod(client,businessId,storeId,periodStar
        select max(p.created_at) as created_at
          from mc.publications p join mc.calculation_runs r on r.id=p.run_id
          join mc.method_versions m on m.id=r.method_version_id
-        where p.business_id=$1 and p.store_id=$2 and m.implementation_version<>'financial-result-v10'
+        where p.business_id=$1 and p.store_id=$2 and m.implementation_version<>all($5::text[])
      )
      select p.id as publication_id,p.created_at as published_at,r.id as run_id,r.request_id,
             m.code as method_code,m.implementation_version as method_version,b.timezone
@@ -287,7 +288,7 @@ async function getHistoricalPublishedPeriod(client,businessId,storeId,periodStar
       where p.business_id=$1 and p.store_id=$2 and p.is_current=false
         and p.created_at>=coalesce(baseline.created_at,'-infinity'::timestamptz)
         and exists(select 1 from mc.financial_period_results f where f.run_id=r.id and f.period_start>=$3 and f.period_end<=$4)
-      order by p.created_at desc limit 12`,[businessId,storeId,periodStart,periodEnd]
+      order by p.created_at desc limit 12`,[businessId,storeId,periodStart,periodEnd,[...targetResultVersions]]
   )).rows;
   for(const publication of candidates){
     const period=await getPeriodEnvelope(client,publication.run_id,periodStart,periodEnd);
@@ -413,7 +414,7 @@ export async function getFinancialPeriodRecoveryState(userId,storeId,periodStart
          from mc.calculation_requests q join mc.method_versions m on m.id=q.method_version_id
         where q.business_id=$1 and q.store_id=$2 and q.is_latest`,[businessId,storeId]
     )).rows[0];
-    if(latest?.implementation_version==='financial-result-v10'
+    if(latest?.implementation_version==='financial-result-v12'
       &&latest.period_start===target.periodStart&&latest.period_end===target.periodEnd){
       if(latest.status==='pending')return{status:'queued'};
       if(latest.status==='running')return{status:'running'};
@@ -583,7 +584,7 @@ export async function prepareFinancialCalculation(userId,storeId,{targetPeriod=n
       `select v.id from mc.tax_settings s join mc.tax_setting_versions v on v.id=s.current_version_id
         where s.business_id=$1 and s.effective_from<=$2 order by s.effective_from,v.id`,[businessId,periodEnd]
     )).rows.map(row=>row.id);
-    const methodVersion=target?10:9;
+    const methodVersion=target?12:11;
     const method=(await client.query(`select id,implementation_version from mc.method_versions where code='financial_result' and version_no=$1`,[methodVersion])).rows[0];
     if(!method)throw new Error('calculation_method_missing');
     const operationLinks=await createConfirmedReturnLinks(client,businessId,storeId,normalized.map(row=>row.normalization_id),method.id);
@@ -673,15 +674,16 @@ async function executeFinancialCalculation(userId,requestId){
          left join mc.report_normalizations n on n.report_version_id=rv.id and n.id=any($2::uuid[])
         where rv.id=any($1::uuid[]) order by r.period_start,r.period_end,rv.id`,[reportVersionIds,normalizationIds]
     )).rows;
-    const periods=request.implementation_version==='financial-result-v10'
+    const targetCalculation=targetResultVersions.has(request.implementation_version);
+    const periods=targetCalculation
       ?[{periodStart:request.period_start,periodEnd:request.period_end,rows:reportPeriods}]
       :[...new Map(reportPeriods.map(row=>[`${row.period_start}/${row.period_end}`,{periodStart:row.period_start,periodEnd:row.period_end,rows:[]}])).values()];
-    if(request.implementation_version!=='financial-result-v10')for(const row of reportPeriods)periods.find(period=>period.periodStart===row.period_start&&period.periodEnd===row.period_end).rows.push(row);
+    if(!targetCalculation)for(const row of reportPeriods)periods.find(period=>period.periodStart===row.period_start&&period.periodEnd===row.period_end).rows.push(row);
     const periodResults=[];
     for(const period of periods){
       const periodNormalizationIds=period.rows.map(row=>row.normalization_id).filter(Boolean);
       const reportCoverageComplete=periodNormalizationIds.length===period.rows.length
-        &&(request.implementation_version!=='financial-result-v10'||reportPeriodsCoverRange(period.rows,period.periodStart,period.periodEnd));
+        &&(!targetCalculation||reportPeriodsCoverRange(period.rows,period.periodStart,period.periodEnd));
       const retailComponents=components.filter(row=>row.sourceField==='retailAmount');
       const retailOperationIds=new Set(retailComponents.map(row=>String(row.operationVersionId)));
       const missingRetailOperations=operations.filter(row=>!retailOperationIds.has(String(row.id))).map(row=>({id:`missing-retail:${row.id}`,productId:row.productId,accountingDate:row.accountingDate,retailAmount:null,docTypeName:row.docTypeName,sellerOperName:row.sellerOperName,state:row.state}));

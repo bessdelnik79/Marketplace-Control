@@ -126,7 +126,7 @@ test('verified WB expense fields use per-row kopeck rounding without floating po
 });
 
 test('result components without a real item identifier use store scope regardless of operation name and sign', () => {
-  assert.equal(financialParserVersion, 'wb-finance-v9');
+  assert.equal(financialParserVersion, 'wb-finance-v10');
   const cases = [
     ['deliveryService', 'Логистика', 'logistics'],
     ['deliveryService', 'Доставка', 'logistics'],
@@ -154,6 +154,41 @@ test('result components without a real item identifier use store scope regardles
     assert.equal(financialComponentScope(source, { operationType: 'sale' }, component), 'store');
     assert.equal(financialComponentScope(source, operation, { ...component, categoryCode: 'unclassified_financial_field' }), 'product_expected');
   }
+});
+
+test('exact loyalty discount compensation is signed income at product or store scope',()=>{
+  for(const [raw,amountSigned] of [['2','2'],['-2','-2']]){
+    const linked=row({nmId:'517676362',retailAmount:null,docTypeName:'Продажа',sellerOperName:'Компенсация скидки по программе лояльности',cashbackDiscount:raw});
+    const linkedOperation=normalizeFinancialOperation(linked);
+    const linkedComponent=linkedOperation.components.find(component=>component.sourceField==='cashbackDiscount');
+    assert.equal(linkedOperation.operationType,'adjustment');
+    assert.equal(linkedComponent.categoryCode,'loyalty_compensation');
+    assert.equal(linkedComponent.amountSigned,amountSigned);
+    assert.equal(financialComponentScope(linked,linkedOperation,linkedComponent),'product_expected');
+    assert.deepEqual(unverifiedFinancialComponents(linked,linkedOperation,false),['cashbackDiscount']);
+    assert.equal(financialComponentScope(linked,linkedOperation,linkedComponent,true),'selected_product');
+    assert.deepEqual(unverifiedFinancialComponents(linked,linkedOperation,true),[]);
+
+    const unlinked={...linked,nmId:0,sku:'',saName:'',barcode:''};
+    const unlinkedOperation=normalizeFinancialOperation(unlinked);
+    const unlinkedComponent=unlinkedOperation.components.find(component=>component.sourceField==='cashbackDiscount');
+    assert.equal(unlinkedComponent.categoryCode,'loyalty_compensation');
+    assert.equal(unlinkedComponent.amountSigned,amountSigned);
+    assert.equal(financialComponentScope(unlinked,unlinkedOperation,unlinkedComponent),'store');
+    assert.deepEqual(unverifiedFinancialComponents(unlinked,unlinkedOperation,false),[]);
+    assert.equal(isResolvedNonProductOperation(unlinked,unlinkedOperation,false),true);
+  }
+  const other=row({nmId:0,retailAmount:null,docTypeName:'Продажа',sellerOperName:'Иная компенсация',cashbackDiscount:'2'});
+  const otherOperation=normalizeFinancialOperation(other);
+  assert.equal(otherOperation.components.find(component=>component.sourceField==='cashbackDiscount').categoryCode,'unclassified_financial_field');
+  assert.deepEqual(unverifiedFinancialComponents(other,otherOperation,false),['cashbackDiscount']);
+  const wrongDocument=row({nmId:0,retailAmount:null,docTypeName:'Возврат',sellerOperName:'Компенсация скидки по программе лояльности',cashbackDiscount:'2'});
+  const wrongDocumentOperation=normalizeFinancialOperation(wrongDocument);
+  assert.equal(wrongDocumentOperation.components.find(component=>component.sourceField==='cashbackDiscount').categoryCode,'unclassified_financial_field');
+  assert.deepEqual(unverifiedFinancialComponents(wrongDocument,wrongDocumentOperation,false),['cashbackDiscount']);
+  const unexpectedRetail=row({nmId:'517676362',retailAmount:'100',docTypeName:'Продажа',sellerOperName:'Компенсация скидки по программе лояльности',cashbackDiscount:'2'});
+  const unexpectedRetailOperation=normalizeFinancialOperation(unexpectedRetail);
+  assert.deepEqual(unverifiedFinancialComponents(unexpectedRetail,unexpectedRetailOperation,true),['retailAmount']);
 });
 
 test('additional payment without item linkage is a store result for charge and reversal',()=>{
@@ -283,7 +318,7 @@ test('settlement commission is retained only for reconciliation',()=>{
   assert.deepEqual(unverifiedFinancialComponents(source,operation,false),[]);
 });
 
-test('known result fields without item linkage use store scope while loyalty stays unclassified', () => {
+test('known result fields without item linkage use store scope while unverified loyalty fields stay unclassified', () => {
   const source = row({ nmId: null, retailAmount: null, docTypeName: '', sellerOperName: 'Штраф', penalty: '10', ppvzReward: '2', cashbackDiscount: '3' });
   const operation = normalizeFinancialOperation(source);
   assert.deepEqual(operation.components.filter(component => financialComponentScope(source, operation, component) === 'store').map(component => component.sourceField), ['ppvzReward','penalty']);

@@ -4,7 +4,7 @@ const MONEY_SCALE = 4;
 const RESULT_CATEGORIES = new Set([
   'revenue', 'revenue_return', 'acquiring', 'logistics',
   'storage', 'acceptance', 'penalty', 'deduction', 'commission_adjustment',
-  'other_adjustment', 'promotion', 'pickup_reward', 'wb_reward_without_vat', 'wb_reward_vat',
+  'other_adjustment', 'promotion', 'loyalty_compensation', 'pickup_reward', 'wb_reward_without_vat', 'wb_reward_vat',
 ]);
 const NON_RESULT_CATEGORIES = new Set(['payout','commission']);
 const VERIFIED_WB_COMPONENTS = new Map([
@@ -26,7 +26,8 @@ const VERIFIED_STORE_COMPONENTS = new Map([
   ['additionalPayment', new Set(['commission_adjustment'])],
   ['vw', new Set(['wb_reward_without_vat'])],
   ['vwNds', new Set(['wb_reward_vat'])],
-  ['ppvzReward', new Set(['pickup_reward'])]
+  ['ppvzReward', new Set(['pickup_reward'])],
+  ['cashbackDiscount', new Set(['loyalty_compensation'])]
 ]);
 const EXPENSE_CATEGORIES = new Set([
   'packaging', 'software_services', 'external_promotion', 'agency_services', 'other_external'
@@ -87,6 +88,9 @@ export function normalizeMoney(value) {
 export function isVerifiedWbResultComponent({ categoryCode, sourceField, operationType, docTypeName, sellerOperName, bonusTypeName, rawValue, scopeCode }) {
   const value=String(rawValue??'').trim().replace(',', '.');
   if(!/^-?\d+(?:\.\d+)?$/.test(value)||!/[1-9]/.test(value))return false;
+  if(sourceField==='cashbackDiscount')return categoryCode==='loyalty_compensation'&&operationType==='adjustment'
+    &&String(docTypeName??'').trim()==='Продажа'
+    &&String(sellerOperName??'').trim()==='Компенсация скидки по программе лояльности';
   if(scopeCode==='store')return VERIFIED_STORE_COMPONENTS.get(sourceField)?.has(categoryCode)===true;
   if(sourceField==='ppvzReward'&&categoryCode==='pickup_reward')return true;
   if(sourceField==='rebillLogisticCost'&&categoryCode==='rebill_logistic_compensation')return false;

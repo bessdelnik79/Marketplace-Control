@@ -2,7 +2,7 @@ const MONEY_SCALE = 4;
 const DAY_MS = 86400000;
 const QUALITY_VALUES = new Set(['complete', 'partial', 'unavailable']);
 const QUALITY_RANK = new Map([['complete', 0], ['partial', 1], ['unavailable', 2]]);
-const REVENUE_CATEGORIES = new Set(['revenue', 'revenue_return']);
+const REVENUE_CATEGORIES = new Set(['revenue', 'revenue_return', 'loyalty_compensation']);
 const MISSING_REASON_ORDER = [
   'cost_missing',
   'return_original_sale_unmatched',
@@ -203,7 +203,7 @@ function normalizeTotals(value,methodVersion) {
   if(value.selectedProductsResultBeforeTax!==undefined){
     const selected=parseScale4Money(value.selectedProductsResultBeforeTax);
     const store=value.storeLevelResultBeforeTax===undefined?0n:parseScale4Money(value.storeLevelResultBeforeTax);
-    const expected=['financial-result-v7','financial-result-v8','financial-result-v9','financial-result-v10'].includes(methodVersion)?selected+store:selected;
+    const expected=['financial-result-v7','financial-result-v8','financial-result-v9','financial-result-v10','financial-result-v11','financial-result-v12'].includes(methodVersion)?selected+store:selected;
     if(expected!==beforeTax)invalid('overview_total_mismatch');
   }
   return {
@@ -264,7 +264,7 @@ export function buildFinancialPeriodOverview(envelope, { timezone = 'Europe/Mosc
   const revenue = lines.filter(line => (line.scope==='selected_product'||line.scope==='store')&&REVENUE_CATEGORIES.has(line.category)).reduce((sum, line) => sum + line.amount, 0n);
   const storeTotal=lines.filter(line=>line.scope==='store'&&line.category!=='estimated_usn_tax').reduce((sum,line)=>sum+line.amount,0n);
   const persisted = normalizeTotals(envelope.totals,methodVersion);
-  const calculatedTotal=['financial-result-v7','financial-result-v8','financial-result-v9','financial-result-v10'].includes(methodVersion)?selectedTotal+storeTotal:selectedTotal;
+  const calculatedTotal=['financial-result-v7','financial-result-v8','financial-result-v9','financial-result-v10','financial-result-v11','financial-result-v12'].includes(methodVersion)?selectedTotal+storeTotal:selectedTotal;
   if(calculatedTotal!==persisted.beforeTax)invalid('overview_total_mismatch');
   const expenses = revenue - persisted.beforeTax;
   const tax = normalizeTax(envelope.taxReference, persisted, taxLines.reduce((sum, line) => sum + line.amount, 0n), taxLines.length > 0);

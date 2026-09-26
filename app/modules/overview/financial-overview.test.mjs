@@ -128,16 +128,31 @@ test('v8 overview includes confirmed store expenses once in the 07-13 September 
   assert.deepEqual(overview.displayResult,{amount:'417.6126',basis:'after_tax'});
 });
 
-test('v9 overview includes result-affecting rows without a product as store expenses',()=>{
-  const overview=buildFinancialPeriodOverview(envelope({
-    methodVersion:'financial-result-v9',periodStart:'2026-08-24',periodEnd:'2026-08-30',
-    revenue:'3835.0000',expenseLine:'-1221.0000',selectedBeforeTax:'2614.0000',storeBeforeTax:'-4953.6200',
-    beforeTax:'-2339.6200',tax:'306.8000',afterTax:'-2646.4200'
-  }));
-  assert.deepEqual(overview.totals,{
-    revenue:'3835.0000',expenses:'6174.6200',tax:'306.8000',
-    availableResultBeforeTax:'-2339.6200',availableResultAfterTax:'-2646.4200'
-  });
+test('current and compatible overviews include result-affecting rows without a product',()=>{
+  for(const methodVersion of ['financial-result-v9','financial-result-v11','financial-result-v12']){
+    const overview=buildFinancialPeriodOverview(envelope({
+      methodVersion,periodStart:'2026-08-24',periodEnd:'2026-08-30',
+      revenue:'3835.0000',expenseLine:'-1221.0000',selectedBeforeTax:'2614.0000',storeBeforeTax:'-4953.6200',
+      beforeTax:'-2339.6200',tax:'306.8000',afterTax:'-2646.4200'
+    }));
+    assert.deepEqual(overview.totals,{
+      revenue:'3835.0000',expenses:'6174.6200',tax:'306.8000',
+      availableResultBeforeTax:'-2339.6200',availableResultAfterTax:'-2646.4200'
+    });
+  }
+});
+
+test('loyalty compensation changes revenue without distorting expenses',()=>{
+  const raw=envelope({methodVersion:'financial-result-v12',revenue:'100.0000',expenseLine:'-10.0000',selectedBeforeTax:'92.0000',storeBeforeTax:'-0.5000',beforeTax:'91.5000',tax:null,afterTax:null});
+  raw.lines=raw.lines.filter(line=>line.category_code!=='store_expenses');
+  raw.lines.push(
+    {result_scope:'selected_product',accounting_date:'2026-09-15',category_code:'loyalty_compensation',amount_signed:'2.0000',quality:'complete'},
+    {result_scope:'store',accounting_date:'2026-09-15',category_code:'loyalty_compensation',amount_signed:'-0.5000',quality:'complete'}
+  );
+  const overview=buildFinancialPeriodOverview(raw);
+  assert.equal(overview.totals.revenue,'101.5000');
+  assert.equal(overview.totals.expenses,'10.0000');
+  assert.equal(overview.totals.availableResultBeforeTax,'91.5000');
 });
 
 test('v9 overview reports store-scoped revenue and returns as revenue instead of negative expenses',()=>{

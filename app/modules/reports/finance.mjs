@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 
 export const financialReportsEndpoint = 'https://finance-api.wildberries.ru/api/finance/v1/sales-reports/detailed';
-export const financialParserVersion = 'wb-finance-v9';
+export const financialParserVersion = 'wb-finance-v10';
 const unverifiedMoneyFields = [
-  'sellerPromo','installmentCoFinancingAmount','cashbackAmount','cashbackDiscount',
+  'sellerPromo','installmentCoFinancingAmount','cashbackAmount',
   'cashbackCommissionChange','sellerPromoDiscount','loyaltyDiscount','agencyVat'
 ];
 
@@ -45,7 +45,8 @@ const resultComponentFields = new Map([
   ['additionalPayment', new Set(['commission_adjustment'])],
   ['vw', new Set(['wb_reward_without_vat'])],
   ['vwNds', new Set(['wb_reward_vat'])],
-  ['ppvzReward', new Set(['pickup_reward'])]
+  ['ppvzReward', new Set(['pickup_reward'])],
+  ['cashbackDiscount', new Set(['loyalty_compensation'])]
 ]);
 
 function isResultComponent(component) {
@@ -87,6 +88,11 @@ function isVerifiedPvzComponent(row, component) {
   if (component.sourceField === 'vw') return component.categoryCode === 'wb_reward_without_vat';
   if (component.sourceField === 'vwNds') return component.categoryCode === 'wb_reward_vat';
   return false;
+}
+
+function isVerifiedLoyaltyCompensationRow(row) {
+  return String(row?.docTypeName ?? '').trim() === 'Продажа' &&
+    String(row?.sellerOperName ?? '').trim() === 'Компенсация скидки по программе лояльности';
 }
 
 function apiError(message, response, retryAfterMs) {
@@ -174,6 +180,7 @@ export function normalizeFinancialOperation(row) {
   const operationName = String(row?.sellerOperName ?? '').trim().toLocaleLowerCase('ru-RU');
   let operationType = 'unclassified';
   if (isVerifiedPvzStoreRow(row)) operationType = 'other';
+  else if (isVerifiedLoyaltyCompensationRow(row) && hasMoney(row, ['cashbackDiscount'])) operationType = 'adjustment';
   else if (docType === 'возврат' && operationName === 'возврат') operationType = 'return';
   else if (docType === 'продажа' && operationName === 'продажа') operationType = 'sale';
   else if (hasMoney(row, ['deliveryService','rebillLogisticCost','paidStorage','paidAcceptance','ppvzSalesCommission','acquiringFee'])) operationType = 'service_charge';
@@ -210,6 +217,8 @@ export function normalizeFinancialOperation(row) {
   add('deduction', isVerifiedPromotionRow(row) ? 'promotion' : 'deduction', 'expense');
   add('additionalPayment', 'commission_adjustment', 'expense');
   add('forPay', 'payout', 'settlement');
+  add('cashbackDiscount', isVerifiedLoyaltyCompensationRow(row) ? 'loyalty_compensation' : 'unclassified_financial_field', 'source');
+  if(isVerifiedLoyaltyCompensationRow(row)&&hasMoney(row,['retailAmount']))add('retailAmount','unclassified_financial_field','source');
   for(const field of unverifiedMoneyFields)add(field,'unclassified_financial_field','source');
 
   let quantity = decimal(row?.quantity);
@@ -363,6 +372,7 @@ export function unverifiedFinancialComponents(row,operation,productMatched=false
     if(component.sourceField==='forPay'&&component.categoryCode==='payout')return false;
     if(component.sourceField==='ppvzSalesCommission'&&component.categoryCode==='commission')return false;
     if(!productMatched&&!hasRealItemIdentifier(row)&&isResultComponent(component))return false;
+    if(component.sourceField==='cashbackDiscount'&&component.categoryCode==='loyalty_compensation')return !productMatched&&hasRealItemIdentifier(row);
     if(verifiedResultExpenseCategories.has(component.categoryCode)){
       if(productMatched)return false;
       return !(operation.operationType==='other'&&isVerifiedPvzComponent(row,component));

@@ -8,7 +8,7 @@ const databaseName=new URL(integrationUrl).pathname.slice(1);
 if(!databaseName.toLowerCase().includes('test'))throw new Error('Refusing to run P0.3 integration tests outside a database whose name contains "test".');
 process.env.DATABASE_URL=integrationUrl;
 
-const {migrate,pool,runFinancialCalculation,beginFinancialSync,completeFinancialSync,failFinancialSync,getFinancialBankReconciliationState,getPublishedFinancialPeriod,getPublishedFinancialPeriodPair,getFinancialSellerOffsetReference,getFinancialSyncState}=await import('../../app/db.mjs');
+const {migrate,pool,runFinancialCalculation,beginFinancialSync,completeFinancialSync,failFinancialSync,getFinancialBankReconciliationState,getPublishedFinancialPeriod,getPublishedFinancialPeriodPair,getFinancialSellerOffsetReference,getFinancialSyncState,getFinancialCalculationInvalidation,acknowledgeFinancialCalculationInvalidation}=await import('../../app/db.mjs');
 const ids={user:randomUUID(),business:randomUUID(),store:randomUUID()};
 
 await migrate();
@@ -38,18 +38,18 @@ await context(async client=>{
   await client.query(`update mc.variant_costs set current_version_id=$1 where id=$2`,[costVersion.id,cost.id]);
   const document=(await client.query(`insert into mc.source_documents(business_id,store_id,origin,document_type,external_document_id,checksum,completeness) values($1,$2,'wb_api','weekly_realization','p03-report','p03-report','complete') returning id`,[ids.business,ids.store])).rows[0];
   const report=(await client.query(`insert into mc.reports(business_id,store_id,external_report_id,period_start,period_end) values($1,$2,'785995400','2026-07-13','2026-07-19') returning id`,[ids.business,ids.store])).rows[0];
-  const reportVersion=(await client.query(`insert into mc.report_versions(business_id,store_id,report_id,document_id,version_no,checksum,parser_version) values($1,$2,$3,$4,1,'p03-v1','wb-finance-v9') returning id`,[ids.business,ids.store,report.id,document.id])).rows[0];
+  const reportVersion=(await client.query(`insert into mc.report_versions(business_id,store_id,report_id,document_id,version_no,checksum,parser_version) values($1,$2,$3,$4,1,'p03-v1','wb-finance-v10') returning id`,[ids.business,ids.store,report.id,document.id])).rows[0];
   const reportRow=(await client.query(`insert into mc.report_rows(business_id,store_id,report_version_id,external_row_key,row_number,raw_data,row_checksum) values($1,$2,$3,'1',1,$4::jsonb,'p03-row') returning id`,[ids.business,ids.store,reportVersion.id,JSON.stringify({docTypeName:'Продажа',sellerOperName:'Продажа',rrDate:'2026-07-15',nmId:700001,sku:'4600000000001',quantity:1,retailAmount:'100',rebillLogisticCost:'100.24',forPay:'100'})])).rows[0];
+  const storeRow=(await client.query(`insert into mc.report_rows(business_id,store_id,report_version_id,external_row_key,row_number,raw_data,row_checksum) values($1,$2,$3,'2',2,$4::jsonb,'p03-store-row') returning id`,[ids.business,ids.store,reportVersion.id,JSON.stringify({docTypeName:'',sellerOperName:'Удержание',rrDate:'2026-07-15',nmId:0,additionalPayment:'1458.34'})])).rows[0];
   await client.query(`update mc.report_versions set status='validated' where id=$1`,[reportVersion.id]);
   await client.query(`update mc.report_versions set status='accepted',accepted_at=now() where id=$1`,[reportVersion.id]);
   await client.query(`update mc.reports set current_version_id=$1 where id=$2`,[reportVersion.id,report.id]);
-  const importMethod=(await client.query(`select id from mc.method_versions where code='wb_finance_import' and version_no=9`)).rows[0];
-  const normalization=(await client.query(`insert into mc.report_normalizations(business_id,store_id,report_version_id,method_version_id,normalization_key,status) values($1,$2,$3,$4,$5,'succeeded') returning id`,[ids.business,ids.store,reportVersion.id,importMethod.id,`wb-finance-v9:${reportVersion.id}`])).rows[0];
+  const importMethod=(await client.query(`select id from mc.method_versions where code='wb_finance_import' and version_no=10`)).rows[0];
+  const normalization=(await client.query(`insert into mc.report_normalizations(business_id,store_id,report_version_id,method_version_id,normalization_key,status) values($1,$2,$3,$4,$5,'succeeded') returning id`,[ids.business,ids.store,reportVersion.id,importMethod.id,`wb-finance-v10:${reportVersion.id}`])).rows[0];
   const operation=(await client.query(`insert into mc.operations(business_id,store_id,source_code,source_operation_key) values($1,$2,'wb_finance','785995400/1') returning id`,[ids.business,ids.store])).rows[0];
   const operationVersion=(await client.query(`insert into mc.operation_versions(business_id,store_id,operation_id,report_row_id,report_normalization_id,version_no,operation_type,product_id,variant_id,accounting_date,quantity) values($1,$2,$3,$4,$5,1,'sale',$6,$7,'2026-07-15',1) returning id`,[ids.business,ids.store,operation.id,reportRow.id,normalization.id,product.id,variant.id])).rows[0];
   await client.query(`insert into mc.financial_components(business_id,store_id,operation_version_id,component_key,category_code,amount_signed,method_version_id,source_field,result_scope_classification) values($1,$2,$3,'retailAmount','revenue',100,$4,'retailAmount','selected_product')`,[ids.business,ids.store,operationVersion.id,importMethod.id]);
   await client.query(`insert into mc.financial_components(business_id,store_id,operation_version_id,component_key,category_code,amount_signed,method_version_id,source_field,result_scope_classification) values($1,$2,$3,'rebillLogisticCost','rebill_logistic_compensation',-100.24,$4,'rebillLogisticCost','reconciliation')`,[ids.business,ids.store,operationVersion.id,importMethod.id]);
-  const storeRow=(await client.query(`insert into mc.report_rows(business_id,store_id,report_version_id,external_row_key,row_number,raw_data,row_checksum) values($1,$2,$3,'2',2,$4::jsonb,'p03-store-row') returning id`,[ids.business,ids.store,reportVersion.id,JSON.stringify({docTypeName:'',sellerOperName:'Удержание',rrDate:'2026-07-15',nmId:0,additionalPayment:'1458.34'})])).rows[0];
   const storeOperation=(await client.query(`insert into mc.operations(business_id,store_id,source_code,source_operation_key) values($1,$2,'wb_finance','785995400/2') returning id`,[ids.business,ids.store])).rows[0];
   const storeOperationVersion=(await client.query(`insert into mc.operation_versions(business_id,store_id,operation_id,report_row_id,report_normalization_id,version_no,operation_type,accounting_date) values($1,$2,$3,$4,$5,1,'adjustment','2026-07-15') returning id`,[ids.business,ids.store,storeOperation.id,storeRow.id,normalization.id])).rows[0];
   await client.query(`insert into mc.financial_components(business_id,store_id,operation_version_id,component_key,category_code,amount_signed,method_version_id,source_field,result_scope_classification) values($1,$2,$3,'additionalPayment','commission_adjustment',-1458.34,$4,'additionalPayment','store')`,[ids.business,ids.store,storeOperationVersion.id,importMethod.id]);
@@ -92,7 +92,7 @@ test('P0.3 persists selected-SKU USN, deducts it once and idempotently keeps one
             (select count(*)::int from mc.data_issues i where i.store_id=$1 and i.report_normalization_id=n.id) as issues
        from mc.report_normalizations n join mc.operation_versions o on o.report_normalization_id=n.id
        join mc.financial_components f on f.operation_version_id=o.id
-      where n.store_id=$1 and n.normalization_key like 'wb-finance-v9:%' group by n.id`,[ids.store]
+      where n.store_id=$1 and n.normalization_key like 'wb-finance-v10:%' group by n.id`,[ids.store]
   )).rows[0]);
   assert.deepEqual(rebill,{components:1,result_lines:0,issues:0});
 });
@@ -134,6 +134,7 @@ test('verified 07-13 store sources do not create product-link issues and no-sale
     {externalRowKey:'sale',rowChecksum:'verified-sale',rawData:{reportId:9200,rrDate:'2026-09-08',docTypeName:'Продажа',sellerOperName:'Продажа',nmId:720001,sku:'4720000000001',quantity:1,retailAmount:'100',forPay:'100'}},
     {externalRowKey:'storage',rowChecksum:'verified-storage',rawData:{reportId:9200,rrDate:'2026-09-09',docTypeName:'',sellerOperName:'Хранение',nmId:0,paidStorage:'5.51'}},
     {externalRowKey:'promotion',rowChecksum:'verified-promotion',rawData:{reportId:9200,rrDate:'2026-09-10',docTypeName:'',sellerOperName:'Удержание',bonusTypeName:'Оказание услуг «WB Продвижение», документ №315213683',nmId:0,deduction:'304'}},
+    {externalRowKey:'loyalty',rowChecksum:'verified-loyalty',rawData:{reportId:9200,rrDate:'2026-09-10',docTypeName:'Продажа',sellerOperName:'Компенсация скидки по программе лояльности',nmId:720001,cashbackDiscount:'2'}},
     {externalRowKey:'pvz',rowChecksum:'verified-pvz',rawData:{reportId:9200,rrDate:'2026-09-11',docTypeName:'Продажа',sellerOperName:'Возмещение за выдачу и возврат товаров на ПВЗ',nmId:0,ppvzReward:'16.2900',vw:'-13.3522',vwNds:'-2.9400'}}
   ];
   await completeFinancialSync(scope.user,{business_id:scope.business,store_id:scope.store,stream_id:fixture.streamId,run_id:fixture.runId,date_from:'2026-09-07',date_to:'2026-09-13'},
@@ -142,13 +143,15 @@ test('verified 07-13 store sources do not create product-link issues and no-sale
   assert.equal(calculated.quality,'complete');
   assert.deepEqual(calculated.missingReasons,[]);
   assert.equal(calculated.totals.storeLevelResultBeforeTax,'-309.5100');
-  assert.equal(calculated.totals.availableResultBeforeTax,'-249.5100');
-  assert.equal(calculated.totals.availableResultAfterTax,'-255.5100');
+  assert.equal(calculated.totals.availableResultBeforeTax,'-247.5100');
+  assert.equal(calculated.totals.availableResultAfterTax,'-253.5100');
   const persisted=await scoped(async client=>({
     issues:(await client.query(`select code from mc.data_issues where store_id=$1 and status='open' and code in('financial_operation_unclassified','financial_components_unverified','financial_product_not_in_catalog')`,[scope.store])).rows,
-    tax:(await client.query(`select product_id,taxable_base::text,tax_amount::text from mc.tax_computations where run_id=$1 order by product_id`,[calculated.runId])).rows
+    tax:(await client.query(`select product_id,taxable_base::text,tax_amount::text from mc.tax_computations where run_id=$1 order by product_id`,[calculated.runId])).rows,
+    loyalty:(await client.query(`select amount_signed::text,result_scope from mc.result_lines where run_id=$1 and category_code='loyalty_compensation'`,[calculated.runId])).rows
   }));
   assert.deepEqual(persisted.issues,[]);
+  assert.deepEqual(persisted.loyalty,[{amount_signed:'2.0000',result_scope:'selected_product'}]);
   assert.equal(persisted.tax.length,2);
   assert.deepEqual(persisted.tax.find(row=>row.product_id===fixture.productIds[1]),{product_id:fixture.productIds[1],taxable_base:'0.0000',tax_amount:'0.0000'});
 });
@@ -258,11 +261,11 @@ test('historical check advances only after a complete weekly sync and preserves 
   await failFinancialSync(ids.user,first,'financial_invalid_request');
   await context(async client=>{
     const currentMethod=(await client.query(
-      `select id from mc.method_versions where code='wb_finance_import' and implementation_version='wb-finance-v9'`
+      `select id from mc.method_versions where code='wb_finance_import' and implementation_version='wb-finance-v10'`
     )).rows[0];
     await client.query(
       `insert into mc.report_normalizations(business_id,store_id,report_version_id,method_version_id,normalization_key,status)
-       values($1,$2,$3,$4,$5,'succeeded')`,[ids.business,ids.store,legacy.versionId,currentMethod.id,`wb-finance-v9:${legacy.versionId}`]
+       values($1,$2,$3,$4,$5,'succeeded')`,[ids.business,ids.store,legacy.versionId,currentMethod.id,`wb-finance-v10:${legacy.versionId}`]
     );
   });
   const second=await beginFinancialSync(ids.user,ids.store,{force:true,historical:true,...ranges});
@@ -310,6 +313,7 @@ test('superseded financial run cannot change versions, coverage, or historical c
 });
 
 test('bank control stores a versioned summary without changing product profit',async()=>{
+  const before=await getPublishedFinancialPeriod(ids.user,ids.store,'2026-07-13','2026-07-19');
   const sync=await context(async client=>{
     const stream=(await client.query(`select id from mc.sync_streams where store_id=$1 and source_type='financial_reports'`,[ids.store])).rows[0];
     const run=(await client.query(`insert into mc.sync_runs(business_id,store_id,stream_id,requested_from,requested_to,status,started_at) values($1,$2,$3,'2026-07-13','2026-07-19','running',now()) returning id`,[ids.business,ids.store,stream.id])).rows[0];
@@ -327,8 +331,7 @@ test('bank control stores a versioned summary without changing product profit',a
   assert.equal(current.taxReference.includedInResult,true);
   assert.equal(current.taxReference.estimatedTax,'6.0000');
   assert.ok(!current.taxReference.missingReasons.includes('tax_source_unlinked'));
-  const profit=await context(async client=>(await client.query(`select sum(l.amount_signed)::text as amount from mc.publications p join mc.result_lines l on l.run_id=p.run_id where p.store_id=$1 and p.is_current`,[ids.store])).rows[0].amount);
-  assert.equal(profit,'54.0000');
+  assert.deepEqual(current.totals,before.totals);
   const snapshot=await context(async client=>(await client.query(`select s.id,s.raw_data->>'bankPaymentSum' as bank_payment from mc.financial_report_summary_versions s where s.store_id=$1`,[ids.store])).rows[0]);
   assert.equal(snapshot.bank_payment,'100');
   await assert.rejects(()=>context(client=>client.query(`update mc.financial_report_summary_versions set raw_data='{}' where id=$1`,[snapshot.id])),/immutable/);
@@ -393,7 +396,8 @@ test('P0.3 persists exact weekly results, links return cost fail-closed and isol
   const combined=await getPublishedFinancialPeriod(isolated.user,isolated.store,'2026-08-03','2026-08-16');
   assert.equal(combined.quality,'partial');
   assert.ok(combined.totals?.availableResultBeforeTax);
-  assert.equal(combined.lines.length,first.lines.length+second.lines.length);
+  const expectedCombinedLines=[...first.lines,...second.lines].filter(line=>line.category_code!=='estimated_usn_tax');
+  assert.equal(combined.lines.length,expectedCombinedLines.length);
   assert.deepEqual(combined.covered_period,{start:'2026-08-03',end:'2026-08-16'});
   assert.deepEqual(combined.cross_border_buyout,{present:true,reportCount:1});
   const boundaryGap=await getPublishedFinancialPeriod(isolated.user,isolated.store,'2026-08-01','2026-08-20');
@@ -410,7 +414,7 @@ test('P0.3 persists exact weekly results, links return cost fail-closed and isol
   assert.equal(pair.current.period_result_id,second.period_result_id);
   assert.equal(pair.previous.period_result_id,first.period_result_id);
   assert.equal(pair.publication_id,second.publication_id);
-  assert.equal(pair.method_version,'financial-result-v9');
+  assert.equal(pair.method_version,'financial-result-v11');
   assert.equal(pair.timezone,'Europe/Moscow');
   assert.deepEqual(pair.scope,{type:'selected_products',productIds:[fixture.productId]});
   assert.ok(pair.current.source_freshness);
@@ -435,10 +439,12 @@ test('P0.3 persists exact weekly results, links return cost fail-closed and isol
   assert.equal(linkCount,1);
   const secondRun=await runFinancialCalculation(isolated.user,isolated.store);
   assert.equal(secondRun.changed,false);
+  const invalidation=await getFinancialCalculationInvalidation(isolated.user,isolated.store);
+  assert.equal(await acknowledgeFinancialCalculationInvalidation(isolated.user,isolated.store,invalidation?.generation_token),true);
   const targetA=await runFinancialCalculation(isolated.user,isolated.store,{targetPeriod:{periodStart:'2026-08-04',periodEnd:'2026-08-10'}});
   assert.equal(targetA.changed,true);
   const publishedTargetA=await getPublishedFinancialPeriod(isolated.user,isolated.store,'2026-08-04','2026-08-10');
-  assert.equal(publishedTargetA.method_version,'financial-result-v10');
+  assert.equal(publishedTargetA.method_version,'financial-result-v12');
   assert.deepEqual([publishedTargetA.period_start,publishedTargetA.period_end],['2026-08-04','2026-08-10']);
   assert.ok(publishedTargetA.period_result_id);
   assert.ok(publishedTargetA.lines.every(line=>line.accounting_date>='2026-08-04'&&line.accounting_date<='2026-08-10'));

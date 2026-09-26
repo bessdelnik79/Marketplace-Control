@@ -52,6 +52,21 @@ test('only verified WB field, operation and document combinations enter the resu
   assert.equal(isVerifiedWbResultComponent({sourceField:'additionalPayment',categoryCode:'commission_adjustment',operationType:'adjustment',docTypeName:'',sellerOperName:'Любое основание',rawValue:'1458.34',scopeCode:'store'}),true);
   assert.equal(isVerifiedWbResultComponent({sourceField:'additionalPayment',categoryCode:'commission_adjustment',operationType:'adjustment',docTypeName:'',sellerOperName:'Любое основание',rawValue:'-1458.34',scopeCode:'store'}),true);
   assert.equal(isVerifiedWbResultComponent({sourceField:'additionalPayment',categoryCode:'deduction',operationType:'adjustment',docTypeName:'',sellerOperName:'Любое основание',rawValue:'1458.34',scopeCode:'store'}),false);
+  assert.equal(isVerifiedWbResultComponent({sourceField:'cashbackDiscount',categoryCode:'loyalty_compensation',operationType:'adjustment',docTypeName:'Продажа',sellerOperName:'Компенсация скидки по программе лояльности',rawValue:'2'}),true);
+  assert.equal(isVerifiedWbResultComponent({sourceField:'cashbackDiscount',categoryCode:'loyalty_compensation',operationType:'adjustment',docTypeName:'Продажа',sellerOperName:'Компенсация скидки по программе лояльности',rawValue:'-2',scopeCode:'store'}),true);
+  assert.equal(isVerifiedWbResultComponent({sourceField:'cashbackDiscount',categoryCode:'loyalty_compensation',operationType:'adjustment',docTypeName:'Продажа',sellerOperName:'Иная компенсация',rawValue:'2'}),false);
+});
+
+test('loyalty compensation contributes to product or store result with its source sign',()=>{
+  const result=calculateFinancialResult({periodStart:'2026-08-17',periodEnd:'2026-08-23',selectedProductIds:['product-1'],reportCoverageComplete:true,
+    financialComponents:[
+      {id:'linked',classificationStatus:'confirmed',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-08-19',categoryCode:'loyalty_compensation',amountSigned:'2'},
+      {id:'store-reversal',classificationStatus:'confirmed',scopeCode:'store',accountingDate:'2026-08-20',categoryCode:'loyalty_compensation',amountSigned:'-0.5'}
+    ]});
+  assert.equal(result.totals.selectedProductsResultBeforeTax,'2.0000');
+  assert.equal(result.totals.storeLevelResultBeforeTax,'-0.5000');
+  assert.equal(result.totals.availableResultBeforeTax,'1.5000');
+  assert.equal(result.missingReasons.includes('operation_unclassified'),false);
 });
 
 test('money normalization preserves four decimal places without Number precision loss', () => {
