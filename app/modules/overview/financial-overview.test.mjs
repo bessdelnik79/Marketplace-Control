@@ -115,9 +115,9 @@ test('period overview derives revenue, expenses and after-tax display result fro
   assert.deepEqual(overview.displayResult, { amount: '94.0000', basis: 'after_tax' });
 });
 
-test('v7 overview includes confirmed store expenses once in the 07-13 September result',()=>{
+test('v8 overview includes confirmed store expenses once in the 07-13 September result',()=>{
   const overview=buildFinancialPeriodOverview(envelope({
-    methodVersion:'financial-result-v7',periodStart:'2026-09-07',periodEnd:'2026-09-13',
+    methodVersion:'financial-result-v8',periodStart:'2026-09-07',periodEnd:'2026-09-13',
     revenue:'8442.7900',expenseLine:'-2849.0000',selectedBeforeTax:'5593.7900',storeBeforeTax:'-4669.6100',
     beforeTax:'924.1800',tax:'506.5674',afterTax:'417.6126'
   }));

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export const financialReportsEndpoint = 'https://finance-api.wildberries.ru/api/finance/v1/sales-reports/detailed';
-export const financialParserVersion = 'wb-finance-v7';
+export const financialParserVersion = 'wb-finance-v8';
 const unverifiedMoneyFields = [
   'sellerPromo','installmentCoFinancingAmount','cashbackAmount','cashbackDiscount',
   'cashbackCommissionChange','sellerPromoDiscount','loyaltyDiscount','agencyVat'
@@ -313,6 +313,7 @@ export function financialDateRange(now = new Date(), days = 91) {
 }
 
 export function financialComponentScope(row, operation, component, productMatched = false) {
+  if (component.sourceField === 'rebillLogisticCost' && component.categoryCode === 'rebill_logistic_compensation') return 'reconciliation';
   if (productMatched) return 'selected_product';
   if (operation.operationType === 'other' && isVerifiedPvzComponent(row,component)) return 'store';
   const rule = storeServiceFields.get(component.sourceField);
@@ -333,11 +334,12 @@ const unverifiedResultCategories = new Set([
 ]);
 
 const verifiedResultExpenseCategories = new Set([
-  'wb_reward_without_vat','wb_reward_vat','pickup_reward','rebill_logistic_compensation'
+  'wb_reward_without_vat','wb_reward_vat','pickup_reward'
 ]);
 
 export function unverifiedFinancialComponents(row,operation,productMatched=false){
   return operation.components.filter(component=>{
+    if(component.sourceField==='rebillLogisticCost'&&component.categoryCode==='rebill_logistic_compensation')return false;
     if(verifiedResultExpenseCategories.has(component.categoryCode)){
       if(productMatched)return false;
       return !(operation.operationType==='other'&&isVerifiedPvzComponent(row,component));

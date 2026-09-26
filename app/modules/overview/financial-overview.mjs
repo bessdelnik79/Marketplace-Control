@@ -203,7 +203,7 @@ function normalizeTotals(value,methodVersion) {
   if(value.selectedProductsResultBeforeTax!==undefined){
     const selected=parseScale4Money(value.selectedProductsResultBeforeTax);
     const store=value.storeLevelResultBeforeTax===undefined?0n:parseScale4Money(value.storeLevelResultBeforeTax);
-    const expected=methodVersion==='financial-result-v7'?selected+store:selected;
+    const expected=['financial-result-v7','financial-result-v8'].includes(methodVersion)?selected+store:selected;
     if(expected!==beforeTax)invalid('overview_total_mismatch');
   }
   return {
@@ -264,7 +264,7 @@ export function buildFinancialPeriodOverview(envelope, { timezone = 'Europe/Mosc
   const revenue = selected.filter(line => REVENUE_CATEGORIES.has(line.category)).reduce((sum, line) => sum + line.amount, 0n);
   const storeTotal=lines.filter(line=>line.scope==='store'&&line.category!=='estimated_usn_tax').reduce((sum,line)=>sum+line.amount,0n);
   const persisted = normalizeTotals(envelope.totals,methodVersion);
-  const calculatedTotal=methodVersion==='financial-result-v7'?selectedTotal+storeTotal:selectedTotal;
+  const calculatedTotal=['financial-result-v7','financial-result-v8'].includes(methodVersion)?selectedTotal+storeTotal:selectedTotal;
   if(calculatedTotal!==persisted.beforeTax)invalid('overview_total_mismatch');
   const expenses = revenue - persisted.beforeTax;
   const tax = normalizeTax(envelope.taxReference, persisted, taxLines.reduce((sum, line) => sum + line.amount, 0n), taxLines.length > 0);

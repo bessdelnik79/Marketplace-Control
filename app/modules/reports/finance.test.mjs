@@ -126,7 +126,7 @@ test('verified WB expense fields use per-row kopeck rounding without floating po
 });
 
 test('verified non-product WB charges have store scope only for exact field, document, operation and positive value', () => {
-  assert.equal(financialParserVersion, 'wb-finance-v7');
+  assert.equal(financialParserVersion, 'wb-finance-v8');
   const cases = [
     ['deliveryService', 'Логистика', 'logistics'],
     ['deliveryService', 'Доставка', 'logistics'],
@@ -228,6 +228,15 @@ test('WB expense rows reproduce production weekly field totals after per-row rou
   assert.deepEqual(Object.fromEntries(totals),{
     vw:-187074n,vwNds:-41155n,rebillLogisticCost:-10024n,ppvzReward:-20338n
   });
+});
+
+test('rebill logistic cost is retained for reconciliation without creating a result issue',()=>{
+  const source=row({rebillLogisticCost:'100.235'});
+  const operation=normalizeFinancialOperation(source);
+  const component=operation.components.find(item=>item.sourceField==='rebillLogisticCost');
+  assert.equal(component.amountSigned,'-100.24');
+  assert.equal(financialComponentScope(source,operation,component,true),'reconciliation');
+  assert.deepEqual(unverifiedFinancialComponents(source,operation,true),[]);
 });
 
 test('unverified PVZ, loyalty and unrelated fields cannot become store expenses', () => {

@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,25);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,26);
   pass('password identity and expiring session are stored by migration 2');
   const financialMethod=await one("select implementation_version from mc.method_versions where code='wb_finance_import' and version_no=1");
   assert.equal(financialMethod.implementation_version,'wb-finance-v1');
@@ -59,6 +59,9 @@ try {
   const financeMethodV7=await one("select implementation_version,parameters from mc.method_versions where code='wb_finance_import' and version_no=7");
   assert.equal(financeMethodV7.implementation_version,'wb-finance-v7');
   assert.equal(financeMethodV7.parameters.ppvzReward,'absolute-expense-v1');
+  const financeMethodV8=await one("select implementation_version,parameters from mc.method_versions where code='wb_finance_import' and version_no=8");
+  assert.equal(financeMethodV8.implementation_version,'wb-finance-v8');
+  assert.equal(financeMethodV8.parameters.rebillLogisticCost,'reconciliation-v1');
   const resultMethodV3=await one("select implementation_version from mc.method_versions where code='financial_result' and version_no=3");
   assert.equal(resultMethodV3.implementation_version,'financial-result-v3');
   const resultMethodV4=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=4");
@@ -70,12 +73,15 @@ try {
   const resultMethodV7=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=7");
   assert.equal(resultMethodV7.implementation_version,'financial-result-v7');
   assert.equal(resultMethodV7.parameters.availableResult,'selected-plus-store-v1');
+  const resultMethodV8=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=8");
+  assert.equal(resultMethodV8.implementation_version,'financial-result-v8');
+  assert.equal(resultMethodV8.parameters.rebillLogisticCost,'reconciliation-only-v1');
   assert.deepEqual(await q("select code,class from mc.financial_categories where code in ('pickup_reward','rebill_logistic_compensation','wb_reward_without_vat','wb_reward_vat') order by code"),[
     {code:'pickup_reward',class:'expense'},{code:'rebill_logistic_compensation',class:'expense'},{code:'wb_reward_vat',class:'expense'},{code:'wb_reward_without_vat',class:'expense'}
   ]);
   const guards=(await q("select proname,pg_get_functiondef(p.oid) as definition from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='mc' and proname in ('guard_period_result','guard_selected_tax_artifact','guard_selected_tax_finish','guard_run_finish') order by proname"));
   assert.equal(guards.length,4);
-  for(const guard of guards)assert.match(guard.definition,/financial-result-v7/,guard.proname);
+  for(const guard of guards)assert.match(guard.definition,/financial-result-v8/,guard.proname);
   const taxComputationColumns=(await q("select column_name from information_schema.columns where table_schema='mc' and table_name='tax_computations' order by column_name")).map(row=>row.column_name);
   assert.ok(taxComputationColumns.includes('product_id'));
   assert.ok(!taxComputationColumns.includes('tax_year')&&!taxComputationColumns.includes('tax_setting_version_id')&&!taxComputationColumns.includes('rate_fraction'));
@@ -362,14 +368,29 @@ try {
   const periodLine=await insert('result_lines',{...base,run_id:periodRun.id,financial_period_result_id:falsePeriod.id,product_id:products[0].id,variant_id:small.id,accounting_date:'2026-09-01',category_code:'revenue',amount_signed:2000,quality:'complete',result_scope:'selected_product'});
   await insert('result_evidence',{...base,result_line_id:periodLine.id,financial_component_id:component.id,contribution_amount:2000});
   await rejects("update mc.calculation_runs set status='succeeded',quality='complete',missing_reasons='[]',finished_at=now() where id=$1",[periodRun.id],/period result totals/,'persisted weekly totals cannot be sealed when they disagree with evidence');
-  const resultMethodV7Id=(await one("select id from mc.method_versions where code='financial_result' and version_no=7")).id;
+  const resultMethodV8Id=(await one("select id from mc.method_versions where code='financial_result' and version_no=8")).id;
   const storeExpenseVersion=await one('select id,category,amount::text from mc.expense_versions where expense_id=$1 order by version_no limit 1',[storeExpense.id]);
-  const combinedRequest=await insert('calculation_requests',{...base,generation_no:91,selection_id:selection.id,method_version_id:resultMethodV7Id,period_start:'2026-08-31',period_end:'2026-09-06',input_fingerprint:'p03-v7-combined-total',is_latest:false});
+  const wrongCombinedRequest=await insert('calculation_requests',{...base,generation_no:91,selection_id:selection.id,method_version_id:resultMethodV8Id,period_start:'2026-08-31',period_end:'2026-09-06',input_fingerprint:'p03-v8-wrong-combined-total',is_latest:false});
+  await insert('calculation_request_products',{...base,request_id:wrongCombinedRequest.id,product_id:products[0].id});
+  await insert('calculation_request_inputs',{...base,request_id:wrongCombinedRequest.id,report_version_id:rv.id});
+  await insert('calculation_request_inputs',{...base,request_id:wrongCombinedRequest.id,report_normalization_id:normalization.id});
+  await insert('calculation_request_inputs',{...base,request_id:wrongCombinedRequest.id,expense_version_id:storeExpenseVersion.id});
+  const wrongCombinedRun=await insert('calculation_runs',{...base,selection_id:selection.id,method_version_id:resultMethodV8Id,period_start:'2026-08-31',period_end:'2026-09-06',input_fingerprint:'p03-v8-wrong-combined-total',request_id:wrongCombinedRequest.id,attempt_no:1});
+  await insert('calculation_inputs',{...base,run_id:wrongCombinedRun.id,report_version_id:rv.id});
+  await insert('calculation_inputs',{...base,run_id:wrongCombinedRun.id,report_normalization_id:normalization.id});
+  await insert('calculation_inputs',{...base,run_id:wrongCombinedRun.id,expense_version_id:storeExpenseVersion.id});
+  const wrongCombinedPeriod=await insert('financial_period_results',{...base,run_id:wrongCombinedRun.id,period_start:'2026-08-31',period_end:'2026-09-06',quality:'complete',missing_reasons:[],totals:{selectedProductsResultBeforeTax:'2000.0000',storeLevelResultBeforeTax:'-123.4567',availableResultBeforeTax:'2000.0000',estimatedUsnTax:'0.0000',availableResultAfterTax:null,netProfit:null}});
+  const wrongCombinedSelectedLine=await insert('result_lines',{...base,run_id:wrongCombinedRun.id,financial_period_result_id:wrongCombinedPeriod.id,product_id:products[0].id,variant_id:small.id,accounting_date:'2026-09-01',category_code:'revenue',amount_signed:2000,quality:'complete',result_scope:'selected_product'});
+  await insert('result_evidence',{...base,result_line_id:wrongCombinedSelectedLine.id,financial_component_id:component.id,contribution_amount:2000});
+  const wrongCombinedStoreLine=await insert('result_lines',{...base,run_id:wrongCombinedRun.id,financial_period_result_id:wrongCombinedPeriod.id,accounting_date:'2026-09-01',category_code:storeExpenseVersion.category,amount_signed:'-123.4567',quality:'complete',result_scope:'store'});
+  await insert('result_evidence',{...base,result_line_id:wrongCombinedStoreLine.id,expense_version_id:storeExpenseVersion.id,contribution_amount:'-123.4567'});
+  await rejects("update mc.calculation_runs set status='succeeded',quality='complete',missing_reasons='[]',finished_at=now() where id=$1",[wrongCombinedRun.id],/period result totals/,'financial-result-v8 rejects a total that omits store scope');
+  const combinedRequest=await insert('calculation_requests',{...base,generation_no:92,selection_id:selection.id,method_version_id:resultMethodV8Id,period_start:'2026-08-31',period_end:'2026-09-06',input_fingerprint:'p03-v8-combined-total',is_latest:false});
   await insert('calculation_request_products',{...base,request_id:combinedRequest.id,product_id:products[0].id});
   await insert('calculation_request_inputs',{...base,request_id:combinedRequest.id,report_version_id:rv.id});
   await insert('calculation_request_inputs',{...base,request_id:combinedRequest.id,report_normalization_id:normalization.id});
   await insert('calculation_request_inputs',{...base,request_id:combinedRequest.id,expense_version_id:storeExpenseVersion.id});
-  const combinedRun=await insert('calculation_runs',{...base,selection_id:selection.id,method_version_id:resultMethodV7Id,period_start:'2026-08-31',period_end:'2026-09-06',input_fingerprint:'p03-v7-combined-total',request_id:combinedRequest.id,attempt_no:1});
+  const combinedRun=await insert('calculation_runs',{...base,selection_id:selection.id,method_version_id:resultMethodV8Id,period_start:'2026-08-31',period_end:'2026-09-06',input_fingerprint:'p03-v8-combined-total',request_id:combinedRequest.id,attempt_no:1});
   await insert('calculation_inputs',{...base,run_id:combinedRun.id,report_version_id:rv.id});
   await insert('calculation_inputs',{...base,run_id:combinedRun.id,report_normalization_id:normalization.id});
   await insert('calculation_inputs',{...base,run_id:combinedRun.id,expense_version_id:storeExpenseVersion.id});
@@ -379,7 +400,7 @@ try {
   const combinedStoreLine=await insert('result_lines',{...base,run_id:combinedRun.id,financial_period_result_id:combinedPeriod.id,accounting_date:'2026-09-01',category_code:storeExpenseVersion.category,amount_signed:'-123.4567',quality:'complete',result_scope:'store'});
   await insert('result_evidence',{...base,result_line_id:combinedStoreLine.id,expense_version_id:storeExpenseVersion.id,contribution_amount:'-123.4567'});
   await q("update mc.calculation_runs set status='succeeded',quality='complete',missing_reasons='[]',finished_at=now() where id=$1",[combinedRun.id]);
-  pass('financial-result-v7 seals selected plus store totals without weakening evidence guards');
+  pass('financial-result-v8 seals selected plus store totals without weakening evidence guards');
   const run = await insert('calculation_runs',{...base,selection_id:selection.id,method_version_id:method.id,period_start:'2026-08-31',period_end:'2026-09-06',input_fingerprint:'inputs-1'});
   await insert('calculation_inputs',{...base,run_id:run.id,report_version_id:rv.id});
   await insert('calculation_inputs',{...base,run_id:run.id,cost_version_id:costV1.id});
@@ -534,6 +555,42 @@ try {
     assert.deepEqual(upgradedIssues,[{status:'open',n:1},{status:'resolved',n:1}]);
     pass('migration 18 resolves duplicate legacy issues instead of failing upgrade');
   }finally{await upgradeDb.close();}
+
+  const v26UpgradeDb=new PGlite();
+  try{
+    for(const migration of migrations.filter(name=>Number(name.split('_')[0])<=25))await v26UpgradeDb.exec(await readFile(path.join(root,'db/migrations',migration),'utf8'));
+    const vq=async(sql,params=[])=>(await v26UpgradeDb.query(sql,params)).rows;
+    const vone=async(sql,params=[])=>(await vq(sql,params))[0];
+    const upgradeUser=await vone(`insert into mc.users(display_name) values('V26 owner') returning id`);
+    const upgradeBusiness=await vone(`insert into mc.businesses(name) values('V26 business') returning id`);
+    await vq(`insert into mc.memberships(business_id,user_id,role) values($1,$2,'owner')`,[upgradeBusiness.id,upgradeUser.id]);
+    await vq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[upgradeUser.id,upgradeBusiness.id]);
+    const upgradeStore=await vone(`insert into mc.stores(business_id,external_account_id,name,status) values($1,'v26-store','V26 store','active') returning id`,[upgradeBusiness.id]);
+    const catalog=await vone(`insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness) values($1,$2,'wb_api','catalog','v26-catalog','complete') returning id`,[upgradeBusiness.id,upgradeStore.id]);
+    const selectedProduct=await vone(`insert into mc.products(business_id,store_id,wb_article,seller_article) values($1,$2,260001,'V26') returning id`,[upgradeBusiness.id,upgradeStore.id]);
+    await vone(`select mc.confirm_product_selection($1,$2,$3::uuid[]) as id`,[upgradeStore.id,catalog.id,[selectedProduct.id]]);
+    const document=await vone(`insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness) values($1,$2,'wb_api','weekly_realization','v26-report','complete') returning id`,[upgradeBusiness.id,upgradeStore.id]);
+    const report=await vone(`insert into mc.reports(business_id,store_id,external_report_id,period_start,period_end) values($1,$2,'v26-report','2026-09-07','2026-09-13') returning id`,[upgradeBusiness.id,upgradeStore.id]);
+    const reportVersion=await vone(`insert into mc.report_versions(business_id,store_id,report_id,document_id,version_no,checksum,parser_version) values($1,$2,$3,$4,1,'v26-version','wb-finance-v7') returning id`,[upgradeBusiness.id,upgradeStore.id,report.id,document.id]);
+    await vq(`update mc.report_versions set status='validated' where id=$1`,[reportVersion.id]);
+    await vq(`update mc.report_versions set status='accepted',accepted_at=now() where id=$1`,[reportVersion.id]);
+    await vq(`update mc.reports set current_version_id=$1 where id=$2`,[reportVersion.id,report.id]);
+    const before=await vone(`insert into mc.calculation_invalidations(business_id,store_id,requested_by,reason) values($1,$2,$3,'before_v26')
+      on conflict(store_id) do update set requested_by=excluded.requested_by,reason=excluded.reason,generation_token=gen_random_uuid() returning generation_token`,[upgradeBusiness.id,upgradeStore.id,upgradeUser.id]);
+    await vq(`select set_config('app.user_id','',false),set_config('app.business_id','',false)`);
+    await v26UpgradeDb.exec(await readFile(path.join(root,'db/migrations/026_rebill_reconciliation_method.sql'),'utf8'));
+    await vq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[upgradeUser.id,upgradeBusiness.id]);
+    const after=await vone(`select reason,generation_token from mc.calculation_invalidations where store_id=$1`,[upgradeStore.id]);
+    assert.equal(after.reason,'rebill_reconciliation_method_v8');
+    assert.notEqual(after.generation_token,before.generation_token);
+    assert.equal((await vone(`select class from mc.financial_categories where code='rebill_logistic_compensation'`)).class,'expense');
+    assert.deepEqual(await vq(`select relname,relforcerowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace
+      where n.nspname='mc' and relname in('stores','memberships','product_selections','reports') order by relname`),[
+      {relname:'memberships',relforcerowsecurity:true},{relname:'product_selections',relforcerowsecurity:true},
+      {relname:'reports',relforcerowsecurity:true},{relname:'stores',relforcerowsecurity:true}
+    ]);
+    pass('migration 26 upgrades populated v25 state, refreshes invalidation and restores FORCE RLS');
+  }finally{await v26UpgradeDb.close();}
 
   const operationalUpgradeDb=new PGlite();
   try{

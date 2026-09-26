@@ -5,7 +5,6 @@ const RESULT_CATEGORIES = new Set([
   'revenue', 'revenue_return', 'acquiring', 'logistics',
   'storage', 'acceptance', 'penalty', 'deduction', 'commission_adjustment',
   'other_adjustment', 'promotion', 'pickup_reward', 'wb_reward_without_vat', 'wb_reward_vat',
-  'rebill_logistic_compensation'
 ]);
 const NON_RESULT_CATEGORIES = new Set(['payout','commission']);
 const VERIFIED_WB_COMPONENTS = new Map([
@@ -76,7 +75,7 @@ export function isVerifiedWbResultComponent({ categoryCode, sourceField, operati
   const value=String(rawValue??'').trim().replace(',', '.');
   if(!/^-?\d+(?:\.\d+)?$/.test(value)||!/[1-9]/.test(value))return false;
   if(sourceField==='ppvzReward'&&categoryCode==='pickup_reward')return true;
-  if(sourceField==='rebillLogisticCost'&&categoryCode==='rebill_logistic_compensation')return true;
+  if(sourceField==='rebillLogisticCost'&&categoryCode==='rebill_logistic_compensation')return false;
   if((sourceField==='vw'&&categoryCode==='wb_reward_without_vat')||(sourceField==='vwNds'&&categoryCode==='wb_reward_vat')){
     const document=String(docTypeName??'').trim();
     const name=String(sellerOperName??'').trim();
@@ -462,6 +461,10 @@ export function calculateFinancialResult({
     if (component?.state === 'withdrawn' || !sourceInPeriod(component, range)) continue;
     const componentId = uniqueSource(seenSources, component?.id, 'financial_component');
     validateScopeStructure(component);
+    if(component?.categoryCode==='rebill_logistic_compensation'){
+      if(component?.scopeCode!=='reconciliation')reasons.add('operation_unclassified');
+      continue;
+    }
     if (component?.productId && !selected.has(String(component.productId))) continue;
     if (component?.scopeCode === 'reconciliation') continue;
     if (NON_RESULT_CATEGORIES.has(component?.categoryCode)) continue;
