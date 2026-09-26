@@ -39,6 +39,18 @@
     trigger.addEventListener('click',()=>{const open=popover.hidden;all('[data-range-popover]').forEach(item=>item.hidden=true);popover.hidden=!open;trigger.setAttribute('aria-expanded',String(open));if(open){updateRangeCopy();renderRangeCalendar();const focusDate=draftStart&&draftStart.getUTCFullYear()===view.getUTCFullYear()&&draftStart.getUTCMonth()===view.getUTCMonth()?rangeIso(draftStart):null;(focusDate?$(`[data-range-day="${focusDate}"]`,daysRoot):$('[data-range-day]:not([disabled])',daysRoot))?.focus()}});
     document.addEventListener('click',event=>{if(!popover.hidden&&!event.composedPath().includes(picker))closeRangePicker(false)});picker.addEventListener('keydown',event=>{if(event.key==='Escape'&&!popover.hidden)closeRangePicker(true)});if(initialStart&&initialEnd){saveOverviewPeriod(storeId,initialStart,initialEnd);decorateOverviewLinks(storeId)}updateRangeCopy();
   });
+  const financialCalculation=$('[data-financial-calculating]'),financialPollKey=`mc-financial-poll:${location.pathname}${location.search}`,financialPollStorage={get(){try{return sessionStorage.getItem(financialPollKey)}catch{return null}},set(value){try{sessionStorage.setItem(financialPollKey,value)}catch{}},remove(){try{sessionStorage.removeItem(financialPollKey)}catch{}}};
+  if(financialCalculation){
+    $('[data-financial-refresh-now]',financialCalculation)?.addEventListener('click',()=>location.reload());
+    if(financialCalculation.dataset.financialRefresh!=='false'){
+      const storedStarted=Number(financialPollStorage.get()),started=Number.isFinite(storedStarted)&&storedStarted>0?storedStarted:Date.now(),deadline=started+120000;
+      financialPollStorage.set(String(started));
+      let financialRefreshTimer=null;
+      const scheduleFinancialRefresh=()=>{clearTimeout(financialRefreshTimer);if(Date.now()>=deadline){$('[data-financial-poll-note]',financialCalculation).hidden=false;return}if(document.hidden)return;financialRefreshTimer=setTimeout(()=>{financialRefreshTimer=null;if(!document.hidden&&Date.now()<deadline)location.reload();else scheduleFinancialRefresh()},4000)};
+      document.addEventListener('visibilitychange',scheduleFinancialRefresh);
+      scheduleFinancialRefresh();
+    }
+  }else financialPollStorage.remove();
   all('[data-period]').forEach(button=>button.addEventListener('click',()=>{all('[data-period]').forEach(b=>b.classList.toggle('selected',b===button));$('[data-calendar="mobile-profit"]').click()}));
   $('[data-info]')?.addEventListener('click',()=>{$('.comparison-info').hidden=!$('.comparison-info').hidden});
   $('[data-info]')?.addEventListener('mouseenter',()=>{$('.comparison-info').hidden=false});

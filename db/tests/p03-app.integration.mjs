@@ -435,6 +435,37 @@ test('P0.3 persists exact weekly results, links return cost fail-closed and isol
   assert.equal(linkCount,1);
   const secondRun=await runFinancialCalculation(isolated.user,isolated.store);
   assert.equal(secondRun.changed,false);
+  const targetA=await runFinancialCalculation(isolated.user,isolated.store,{targetPeriod:{periodStart:'2026-08-04',periodEnd:'2026-08-10'}});
+  assert.equal(targetA.changed,true);
+  const publishedTargetA=await getPublishedFinancialPeriod(isolated.user,isolated.store,'2026-08-04','2026-08-10');
+  assert.equal(publishedTargetA.method_version,'financial-result-v10');
+  assert.deepEqual([publishedTargetA.period_start,publishedTargetA.period_end],['2026-08-04','2026-08-10']);
+  assert.ok(publishedTargetA.period_result_id);
+  assert.ok(publishedTargetA.lines.every(line=>line.accounting_date>='2026-08-04'&&line.accounting_date<='2026-08-10'));
+  const targetB=await runFinancialCalculation(isolated.user,isolated.store,{targetPeriod:{periodStart:'2026-08-05',periodEnd:'2026-08-11'}});
+  assert.equal(targetB.changed,true);
+  const cachedTargetA=await getPublishedFinancialPeriod(isolated.user,isolated.store,'2026-08-04','2026-08-10');
+  assert.equal(cachedTargetA.publication_id,publishedTargetA.publication_id);
+  const simpleTarget=await runFinancialCalculation(isolated.user,isolated.store,{targetPeriod:{periodStart:'2026-08-10',periodEnd:'2026-08-11'}});
+  assert.equal(simpleTarget.changed,true);
+  const publishedSimple=await getPublishedFinancialPeriod(isolated.user,isolated.store,'2026-08-10','2026-08-11');
+  assert.equal(publishedSimple.quality,'complete');
+  assert.deepEqual(publishedSimple.missing_reasons,[]);
+  assert.deepEqual(publishedSimple.totals,{
+    selectedProductsResultBeforeTax:'60.0000',storeLevelResultBeforeTax:'0.0000',availableResultBeforeTax:'60.0000',
+    estimatedUsnTax:'6.0000',availableResultAfterTax:'54.0000',netProfit:null
+  });
+  assert.deepEqual(publishedSimple.cross_border_buyout,{present:true,reportCount:1});
+  assert.equal((await getPublishedFinancialPeriod(isolated.user,isolated.store,'2026-08-04','2026-08-10')).publication_id,publishedTargetA.publication_id);
+  await isolatedContext(client=>client.query(`insert into mc.calculation_invalidations(business_id,store_id,requested_by,reason)
+    values($1,$2,$3,'target_cache_test') on conflict(store_id) do update set requested_by=excluded.requested_by,reason=excluded.reason,generation_token=gen_random_uuid(),invalidated_at=clock_timestamp()`,[isolated.business,isolated.store,isolated.user]));
+  const invalidatedTargetA=await getPublishedFinancialPeriod(isolated.user,isolated.store,'2026-08-04','2026-08-10');
+  assert.equal(invalidatedTargetA.quality,'unavailable');
+  await isolatedContext(client=>client.query(`delete from mc.calculation_invalidations where store_id=$1`,[isolated.store]));
+  const restoredWeekly=await runFinancialCalculation(isolated.user,isolated.store);
+  assert.equal(restoredWeekly.changed,true);
+  const staleTargetA=await getPublishedFinancialPeriod(isolated.user,isolated.store,'2026-08-04','2026-08-10');
+  assert.equal(staleTargetA.quality,'unavailable');
   const reference=await getFinancialSellerOffsetReference(isolated.user,isolated.store,'9001');
   assert.equal(reference.total,null);
   assert.equal(reference.lines.find(line=>line.code==='wb_reward_without_vat').candidateAmount,'10');

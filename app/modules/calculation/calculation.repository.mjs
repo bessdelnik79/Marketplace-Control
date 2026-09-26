@@ -214,7 +214,7 @@ export async function getCurrentFinancialResult(userId,storeId){
          from mc.result_lines where run_id=$1
         order by accounting_date,result_scope,product_id nulls last,variant_id nulls last,category_code,id`,[publication.run_id]
     )).rows;
-    if(['financial-result-v4','financial-result-v5','financial-result-v6','financial-result-v7','financial-result-v8','financial-result-v9'].includes(publication.method_version)){
+    if(['financial-result-v4','financial-result-v5','financial-result-v6','financial-result-v7','financial-result-v8','financial-result-v9','financial-result-v10'].includes(publication.method_version)){
       const computations=(await client.query(`select id,product_id,taxable_base::text,tax_amount::text from mc.tax_computations where run_id=$1 order by product_id`,[publication.run_id])).rows;
       const taxTotals=(await client.query(`select coalesce(sum(taxable_base),0)::text as taxable_base,coalesce(sum(tax_amount),0)::text as tax_amount from mc.tax_computations where run_id=$1`,[publication.run_id])).rows[0];
       const segments=(await client.query(`select s.tax_computation_id,c.product_id,s.tax_setting_version_id,s.segment_start::text,s.segment_end::text,s.taxable_base::text,s.rate_fraction::text
@@ -267,6 +267,40 @@ async function getCurrentPublicationContext(client,businessId,storeId){
   return{...publication,scope:{type:'selected_products',productIds}};
 }
 
+async function getHistoricalPublishedPeriod(client,businessId,storeId,periodStart,periodEnd){
+  const invalidation=(await client.query(
+    `select 1 from mc.calculation_invalidations where business_id=$1 and store_id=$2`,[businessId,storeId]
+  )).rows[0];
+  if(invalidation)return null;
+  const candidates=(await client.query(
+    `with ordinary_baseline as (
+       select max(p.created_at) as created_at
+         from mc.publications p join mc.calculation_runs r on r.id=p.run_id
+         join mc.method_versions m on m.id=r.method_version_id
+        where p.business_id=$1 and p.store_id=$2 and m.implementation_version<>'financial-result-v10'
+     )
+     select p.id as publication_id,p.created_at as published_at,r.id as run_id,r.request_id,
+            m.code as method_code,m.implementation_version as method_version,b.timezone
+       from mc.publications p join mc.calculation_runs r on r.id=p.run_id
+       join mc.method_versions m on m.id=r.method_version_id join mc.businesses b on b.id=p.business_id
+       cross join ordinary_baseline baseline
+      where p.business_id=$1 and p.store_id=$2 and p.is_current=false
+        and p.created_at>=coalesce(baseline.created_at,'-infinity'::timestamptz)
+        and exists(select 1 from mc.financial_period_results f where f.run_id=r.id and f.period_start>=$3 and f.period_end<=$4)
+      order by p.created_at desc limit 12`,[businessId,storeId,periodStart,periodEnd]
+  )).rows;
+  for(const publication of candidates){
+    const period=await getPeriodEnvelope(client,publication.run_id,periodStart,periodEnd);
+    if(period?.period_result_id||period?.quality!=='unavailable'){
+      const productIds=(await client.query(
+        `select product_id from mc.calculation_request_products where request_id=$1 order by product_id`,[publication.request_id]
+      )).rows.map(row=>row.product_id);
+      return{publication:{...publication,scope:{type:'selected_products',productIds}},period};
+    }
+  }
+  return null;
+}
+
 function periodKey(periodStart,periodEnd){
   return `${periodStart}:${periodEnd}`;
 }
@@ -291,6 +325,76 @@ export function selectFullyNormalizedReportPeriods(reports){
       ||left.period_end.localeCompare(right.period_end)
       ||String(left.report_id).localeCompare(String(right.report_id))
       ||String(left.report_version_id).localeCompare(String(right.report_version_id)));
+}
+
+export function reportPeriodsCoverRange(reports,periodStart,periodEnd){
+  shiftCalendarDate(periodStart,0);
+  shiftCalendarDate(periodEnd,0);
+  if(periodEnd<periodStart)return false;
+  const periods=[...new Map(reports.map(row=>[
+    periodKey(String(row.period_start),String(row.period_end)),
+    {start:String(row.period_start),end:String(row.period_end)}
+  ])).values()]
+    .filter(period=>period.end>=periodStart&&period.start<=periodEnd)
+    .sort((left,right)=>left.start.localeCompare(right.start)||left.end.localeCompare(right.end));
+  let expected=periodStart;
+  for(const period of periods){
+    if(period.start>expected)return false;
+    if(period.end>=expected)expected=shiftCalendarDate(period.end,1);
+    if(expected>periodEnd)return true;
+  }
+  return false;
+}
+
+function normalizeTargetPeriod(targetPeriod){
+  if(!targetPeriod)return null;
+  const periodStart=String(targetPeriod.periodStart??targetPeriod.start??'');
+  const periodEnd=String(targetPeriod.periodEnd??targetPeriod.end??'');
+  shiftCalendarDate(periodStart,0);
+  shiftCalendarDate(periodEnd,0);
+  if(periodEnd<periodStart||shiftCalendarDate(periodStart,365)<periodEnd)throw new Error('calculation_invalid_period');
+  return{periodStart,periodEnd};
+}
+
+async function loadCalculationReportCandidates(client,businessId,storeId){
+  return (await client.query(
+    `select r.id as report_id,rv.id as report_version_id,r.period_start::text,r.period_end::text,rn.id as normalization_id
+       from mc.reports r join mc.report_versions rv on rv.id=r.current_version_id
+       join mc.source_documents d on d.id=rv.document_id and d.origin='wb_api'
+       left join lateral (
+         select n.id from mc.report_normalizations n join mc.method_versions m on m.id=n.method_version_id
+          where n.report_version_id=rv.id and n.status='succeeded' and m.implementation_version=any($3::text[])
+          order by array_position($3::text[],m.implementation_version),m.version_no desc limit 1
+       ) rn on true
+      where r.business_id=$1 and r.store_id=$2 and rv.status='accepted'
+      order by r.period_start,r.external_report_id`,[businessId,storeId,[financialParserVersion]]
+  )).rows;
+}
+
+export async function getFinancialPeriodRecoveryState(userId,storeId,periodStart,periodEnd){
+  const target=normalizeTargetPeriod({periodStart,periodEnd});
+  return withOwnedBusinessContext(userId,async(client,businessId)=>{
+    const store=(await client.query(`select id from mc.stores where business_id=$1 and id=$2 and status='active'`,[businessId,storeId])).rows[0];
+    if(!store)return{status:'uncovered',reason:'calculation_store_unavailable'};
+    const selection=(await client.query(`select id from mc.product_selections where business_id=$1 and store_id=$2 and status='confirmed'`,[businessId,storeId])).rows[0];
+    if(!selection)return{status:'uncovered',reason:'calculation_selection_missing'};
+    const latest=(await client.query(
+      `select q.status,q.period_start::text,q.period_end::text,q.last_error_code,m.implementation_version
+         from mc.calculation_requests q join mc.method_versions m on m.id=q.method_version_id
+        where q.business_id=$1 and q.store_id=$2 and q.is_latest`,[businessId,storeId]
+    )).rows[0];
+    if(latest?.implementation_version==='financial-result-v10'
+      &&latest.period_start===target.periodStart&&latest.period_end===target.periodEnd){
+      if(latest.status==='pending')return{status:'queued'};
+      if(latest.status==='running')return{status:'running'};
+      if(latest.status==='failed')return{status:'failed',reason:latest.last_error_code??'calculation_failed'};
+    }
+    if(latest&&['pending','running'].includes(latest.status))return{status:'busy'};
+    const reports=selectFullyNormalizedReportPeriods(await loadCalculationReportCandidates(client,businessId,storeId));
+    return reportPeriodsCoverRange(reports,target.periodStart,target.periodEnd)
+      ?{status:'ready'}
+      :{status:'uncovered',reason:'calculation_period_coverage_incomplete'};
+  });
 }
 
 export async function loadPublishedPeriodEnvelopes(client,runId,periodStart,periodEnd){
@@ -331,7 +435,7 @@ export async function loadPublishedPeriodEnvelopes(client,runId,periodStart,peri
            from mc.calculation_inputs i join mc.report_versions rv on rv.id=i.report_version_id and rv.status='accepted'
            join mc.reports rep on rep.id=rv.report_id
            join lateral (select raw_data from mc.financial_report_summary_versions candidate where candidate.report_version_id=rv.id order by candidate.created_at desc,candidate.id desc limit 1) summary on true
-          where i.run_id=$1 and rep.period_start=f.period_start and rep.period_end=f.period_end
+           where i.run_id=$1 and rep.period_start<=f.period_end and rep.period_end>=f.period_start
             and summary.raw_data->>'reportType'='2' and nullif(btrim(summary.raw_data->>'country'),'') is not null
             and lower(btrim(summary.raw_data->>'country')) not in ('россия','российская федерация','russia','russian federation','ru')
        ) foreign_buyout on true
@@ -368,16 +472,20 @@ async function getPeriodEnvelope(client,runId,periodStart,periodEnd){
 
 export async function getPublishedFinancialPeriod(userId,storeId,periodStart,periodEnd){
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
-    const publication=await getCurrentPublicationContext(client,businessId,storeId);
+    let publication=await getCurrentPublicationContext(client,businessId,storeId);
     if(!publication)return null;
-    const period=await getPeriodEnvelope(client,publication.run_id,periodStart,periodEnd);
+    let period=await getPeriodEnvelope(client,publication.run_id,periodStart,periodEnd);
+    if(period?.quality==='unavailable'&&!period.period_result_id){
+      const historical=await getHistoricalPublishedPeriod(client,businessId,storeId,periodStart,periodEnd);
+      if(historical){publication=historical.publication;period=historical.period;}
+    }
     return period?{...publication,...period}:null;
   });
 }
 
 export async function getPublishedFinancialPeriodPair(userId,storeId,{periodStart=null,periodEnd=null,previousPeriodStart=null,previousPeriodEnd=null}={}){
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
-    const publication=await getCurrentPublicationContext(client,businessId,storeId);
+    let publication=await getCurrentPublicationContext(client,businessId,storeId);
     if(!publication)return null;
     if(!periodStart||!periodEnd){
       const latest=(await client.query(
@@ -389,36 +497,35 @@ export async function getPublishedFinancialPeriodPair(userId,storeId,{periodStar
       previousPeriodStart=shiftCalendarDate(periodStart,-7);
       previousPeriodEnd=shiftCalendarDate(periodEnd,-7);
     }
-    const current=await getPeriodEnvelope(client,publication.run_id,periodStart,periodEnd);
+    let current=await getPeriodEnvelope(client,publication.run_id,periodStart,periodEnd);
+    if(current?.quality==='unavailable'&&!current.period_result_id){
+      const historical=await getHistoricalPublishedPeriod(client,businessId,storeId,periodStart,periodEnd);
+      if(historical){publication=historical.publication;current=historical.period;}
+    }
     const previous=current?.quality!=='unavailable'&&previousPeriodStart&&previousPeriodEnd
       ?await getPeriodEnvelope(client,publication.run_id,previousPeriodStart,previousPeriodEnd):null;
     return{...publication,current,previous};
   });
 }
 
-export async function prepareFinancialCalculation(userId,storeId){
+export async function prepareFinancialCalculation(userId,storeId,{targetPeriod=null}={}){
+  const target=normalizeTargetPeriod(targetPeriod);
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
     const store=(await client.query(`select id from mc.stores where business_id=$1 and id=$2 and status='active' for update`,[businessId,storeId])).rows[0];
     if(!store)throw new Error('calculation_store_unavailable');
     const selection=(await client.query(`select id from mc.product_selections where business_id=$1 and store_id=$2 and status='confirmed'`,[businessId,storeId])).rows[0];
     if(!selection)throw new Error('calculation_selection_missing');
     const products=(await client.query(`select product_id from mc.product_selection_items where selection_id=$1 order by product_id`,[selection.id])).rows.map(row=>row.product_id);
-    const reportCandidates=(await client.query(
-      `select r.id as report_id,rv.id as report_version_id,r.period_start::text,r.period_end::text,rn.id as normalization_id
-         from mc.reports r join mc.report_versions rv on rv.id=r.current_version_id
-         join mc.source_documents d on d.id=rv.document_id and d.origin='wb_api'
-         left join lateral (
-           select n.id from mc.report_normalizations n join mc.method_versions m on m.id=n.method_version_id
-            where n.report_version_id=rv.id and n.status='succeeded' and m.implementation_version=any($3::text[])
-            order by array_position($3::text[],m.implementation_version),m.version_no desc limit 1
-         ) rn on true
-        where r.business_id=$1 and r.store_id=$2 and rv.status='accepted'
-        order by r.period_start,r.external_report_id`,[businessId,storeId,[financialParserVersion]]
-    )).rows;
-    const reports=selectFullyNormalizedReportPeriods(reportCandidates);
+    const reportCandidates=await loadCalculationReportCandidates(client,businessId,storeId);
+    let reports=selectFullyNormalizedReportPeriods(reportCandidates);
     if(!reports.length)throw new Error('calculation_financial_inputs_missing');
+    if(target){
+      if(!reportPeriodsCoverRange(reports,target.periodStart,target.periodEnd))throw new Error('calculation_period_coverage_incomplete');
+      reports=reports.filter(row=>row.period_start<=target.periodEnd);
+    }
     const normalized=reports;
-    const periodStart=reports[0].period_start,periodEnd=reports.reduce((value,row)=>row.period_end>value?row.period_end:value,reports[0].period_end);
+    const periodStart=target?.periodStart??reports[0].period_start;
+    const periodEnd=target?.periodEnd??reports.reduce((value,row)=>row.period_end>value?row.period_end:value,reports[0].period_end);
     const costs=(await client.query(
       `select v.id from mc.variant_costs c join mc.cost_versions v on v.id=c.current_version_id
         where c.business_id=$1 and c.store_id=$2 and c.product_id=any($3::uuid[]) and c.effective_from<=$4 order by v.id`,[businessId,storeId,products,periodEnd]
@@ -432,7 +539,8 @@ export async function prepareFinancialCalculation(userId,storeId){
       `select v.id from mc.tax_settings s join mc.tax_setting_versions v on v.id=s.current_version_id
         where s.business_id=$1 and s.effective_from<=$2 order by s.effective_from,v.id`,[businessId,periodEnd]
     )).rows.map(row=>row.id);
-    const method=(await client.query(`select id,implementation_version from mc.method_versions where code='financial_result' and version_no=9`)).rows[0];
+    const methodVersion=target?10:9;
+    const method=(await client.query(`select id,implementation_version from mc.method_versions where code='financial_result' and version_no=$1`,[methodVersion])).rows[0];
     if(!method)throw new Error('calculation_method_missing');
     const operationLinks=await createConfirmedReturnLinks(client,businessId,storeId,normalized.map(row=>row.normalization_id),method.id);
     const fingerprint=createInputFingerprint({resultMethodVersion:`${method.id}:${method.implementation_version}`,selectedProductIds:products,reportVersionIds:reports.map(row=>row.report_version_id),reportNormalizationIds:normalized.map(row=>row.normalization_id),costVersionIds:costs,operationLinkIds:operationLinks,expenseVersionIds:expenses,taxSettingVersionIds:taxes,periodStart,periodEnd});
@@ -457,7 +565,9 @@ export async function prepareFinancialCalculation(userId,storeId){
 
 async function executeFinancialCalculation(userId,requestId){
   const outcome=await withOwnedBusinessContext(userId,async(client,businessId)=>{
-    const request=(await client.query(`select q.*,q.period_start::text as period_start,q.period_end::text as period_end from mc.calculation_requests q where business_id=$1 and id=$2 and is_latest for update`,[businessId,requestId])).rows[0];
+    const request=(await client.query(`select q.*,q.period_start::text as period_start,q.period_end::text as period_end,m.implementation_version
+      from mc.calculation_requests q join mc.method_versions m on m.id=q.method_version_id
+      where q.business_id=$1 and q.id=$2 and q.is_latest for update of q`,[businessId,requestId])).rows[0];
     if(!request)throw new Error('calculation_request_stale');
     if(request.status==='published')return{requestId,changed:false};
     const attemptNo=(await client.query(`select coalesce(max(attempt_no),0)+1 as n from mc.calculation_runs where request_id=$1`,[requestId])).rows[0].n;
@@ -519,12 +629,15 @@ async function executeFinancialCalculation(userId,requestId){
          left join mc.report_normalizations n on n.report_version_id=rv.id and n.id=any($2::uuid[])
         where rv.id=any($1::uuid[]) order by r.period_start,r.period_end,rv.id`,[reportVersionIds,normalizationIds]
     )).rows;
-    const periods=[...new Map(reportPeriods.map(row=>[`${row.period_start}/${row.period_end}`,{periodStart:row.period_start,periodEnd:row.period_end,rows:[]}])).values()];
-    for(const row of reportPeriods)periods.find(period=>period.periodStart===row.period_start&&period.periodEnd===row.period_end).rows.push(row);
+    const periods=request.implementation_version==='financial-result-v10'
+      ?[{periodStart:request.period_start,periodEnd:request.period_end,rows:reportPeriods}]
+      :[...new Map(reportPeriods.map(row=>[`${row.period_start}/${row.period_end}`,{periodStart:row.period_start,periodEnd:row.period_end,rows:[]}])).values()];
+    if(request.implementation_version!=='financial-result-v10')for(const row of reportPeriods)periods.find(period=>period.periodStart===row.period_start&&period.periodEnd===row.period_end).rows.push(row);
     const periodResults=[];
     for(const period of periods){
       const periodNormalizationIds=period.rows.map(row=>row.normalization_id).filter(Boolean);
-      const reportCoverageComplete=periodNormalizationIds.length===period.rows.length;
+      const reportCoverageComplete=periodNormalizationIds.length===period.rows.length
+        &&(request.implementation_version!=='financial-result-v10'||reportPeriodsCoverRange(period.rows,period.periodStart,period.periodEnd));
       const retailComponents=components.filter(row=>row.sourceField==='retailAmount');
       const retailOperationIds=new Set(retailComponents.map(row=>String(row.operationVersionId)));
       const missingRetailOperations=operations.filter(row=>!retailOperationIds.has(String(row.id))).map(row=>({id:`missing-retail:${row.id}`,productId:row.productId,accountingDate:row.accountingDate,retailAmount:null,docTypeName:row.docTypeName,sellerOperName:row.sellerOperName,state:row.state}));
@@ -580,8 +693,8 @@ async function executeFinancialCalculation(userId,requestId){
   return outcome;
 }
 
-export async function runFinancialCalculation(userId,storeId){
-  const request=await prepareFinancialCalculation(userId,storeId);
+export async function runFinancialCalculation(userId,storeId,{targetPeriod=null}={}){
+  const request=await prepareFinancialCalculation(userId,storeId,{targetPeriod});
   try{return await executeFinancialCalculation(userId,request.id);}catch(error){
     await withOwnedBusinessContext(userId,async(client,businessId)=>client.query(
       `update mc.calculation_requests set status='failed',last_error_code=$3,updated_at=now() where business_id=$1 and id=$2 and is_latest`,[businessId,request.id,String(error?.message??'calculation_failed').slice(0,100)]

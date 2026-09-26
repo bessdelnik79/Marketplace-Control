@@ -1,6 +1,6 @@
 import http from 'node:http';import{readFile}from'node:fs/promises';import path from'node:path';
 import{createSessionToken,createVerificationCode,hashPassword,hashToken,normalizeEmail,requiresEmailVerification,validatePasswordChange,validateRegistration,verifyPassword}from'./modules/auth/auth.mjs';
-import{addProductsToSelection,confirmProductSelection,consumeChallenge,consumeOauthState,createPendingStore,deleteSession,findOrCreateYandexUser,findPasswordUser,findSession,getBillingSummary,getCatalogState,getCostState,getExpenseState,getFinancialBankReconciliationState,getFinancialCalculationState,getFinancialSyncState,getCurrentFinancialResult,getOperationalSyncState,getPasswordCredential,getTaxState,importExpenses,importVariantCosts,listFinancialCalculationInvalidations,listOperationalSyncCandidates,listStores,markVerified,migrate,pool,registerUser,replacePassword,saveChallenge,saveExpense,saveOauthState,saveSession,saveTaxSetting,saveWbConnection,takeLimit,updateProfile,voidExpense,voidTaxSetting}from'./db.mjs';
+import{addProductsToSelection,confirmProductSelection,consumeChallenge,consumeOauthState,createPendingStore,deleteSession,findOrCreateYandexUser,findPasswordUser,findSession,getBillingSummary,getCatalogState,getCostState,getExpenseState,getFinancialBankReconciliationState,getFinancialCalculationState,getFinancialPeriodRecoveryState,getFinancialSyncState,getCurrentFinancialResult,getOperationalSyncState,getPasswordCredential,getTaxState,importExpenses,importVariantCosts,listFinancialCalculationInvalidations,listOperationalSyncCandidates,listStores,markVerified,migrate,pool,registerUser,replacePassword,saveChallenge,saveExpense,saveOauthState,saveSession,saveTaxSetting,saveWbConnection,takeLimit,updateProfile,voidExpense,voidTaxSetting}from'./db.mjs';
 import{sendVerificationCode}from'./infrastructure/email/email.mjs';import{authPage,verifyPage}from'./frontend/auth-pages.mjs';
 import { costPage, expensesPage, overviewPage, passwordPage, productsPage, settingsPage, taxesPage, tariffPage, placeholderPage, storeOnboardingPage, uiRoutes } from './frontend/pages.mjs';
 import { encryptSecret } from './infrastructure/security/secrets.mjs';import { verifyWbToken } from './modules/stores/wb.mjs';
@@ -15,7 +15,7 @@ import { createTaxesRoutes } from './modules/taxes/taxes.routes.mjs';
 import { getOverviewState } from './modules/overview/overview.service.mjs';
 import { createOverviewRoutes } from './modules/overview/overview.routes.mjs';
 const port=Number(process.env.PORT??3000),days=30,dummyHash=await hashPassword('dummy-password-for-equal-work');
-const scheduleFinancialCalculationWithRefresh=(userId,storeId)=>scheduleFinancialCalculation(userId,storeId,{onInputsMissing:()=>scheduleFinancialSync(userId,storeId,{force:true})});
+const scheduleFinancialCalculationWithRefresh=(userId,storeId,options={})=>scheduleFinancialCalculation(userId,storeId,{...options,onInputsMissing:()=>scheduleFinancialSync(userId,storeId,{force:true})});
 const yandexEnabled=Boolean(process.env.YANDEX_CLIENT_ID&&process.env.YANDEX_CLIENT_SECRET&&process.env.PUBLIC_BASE_URL);
 function cookies(r){return Object.fromEntries(String(r.headers.cookie??'').split(';').map(x=>x.trim().split('=')).filter(([k])=>k));}
 function send(r,s,b,h={}){r.writeHead(s,{'content-type':'text/html; charset=utf-8',...h});r.end(b);}function redirect(r,l,c){r.writeHead(303,{location:l,...(c?{'set-cookie':c}:{})});r.end();}
@@ -54,7 +54,8 @@ async function sendTaxes(res,status,current,stores,options={}){return send(res,s
 const handleCosts = createCostsRoutes({ listStores, getCostState, importVariantCosts, costPage, send, sendBuffer, redirect, sameOrigin, takeLimit, multipart, scheduleFinancialCalculation: scheduleFinancialCalculationWithRefresh });
 const handleExpenses = createExpensesRoutes({ listStores, getExpenseState, send, sendBuffer, redirect, sendExpenses, sameOrigin, takeLimit, form, saveExpense, scheduleFinancialCalculation: scheduleFinancialCalculationWithRefresh, voidExpense, multipart, importExpenses });
 const handleTaxes = createTaxesRoutes({ listStores, send, redirect, sendTaxes, sameOrigin, takeLimit, form, saveTaxSetting, scheduleFinancialCalculation: scheduleFinancialCalculationWithRefresh, voidTaxSetting });
-const handleOverview = createOverviewRoutes({ listStores, getOverviewState, overviewPage, send, redirect, scheduleOperationalSync });
+const handleOverview = createOverviewRoutes({ listStores, getOverviewState, overviewPage, send, redirect, scheduleOperationalSync,
+  getFinancialPeriodRecoveryState,scheduleFinancialCalculation:scheduleFinancialCalculationWithRefresh });
 const server=http.createServer(async(req,res)=>{try{const url=new URL(req.url,`http://${req.headers.host??'localhost'}`);
  if(req.method==='GET'&&url.pathname==='/health')return send(res,200,'ok',{'content-type':'text/plain'});
  if(req.method==='GET'&&['/styles.css','/favicon.svg','/ui.css','/ui.js','/brand.png','/products.png','/interface.ttf'].includes(url.pathname)){const f=path.join(path.resolve('app/frontend/public'),url.pathname.slice(1));const types={'.css':'text/css','.svg':'image/svg+xml','.js':'text/javascript','.png':'image/png','.ttf':'font/ttf'};res.writeHead(200,{'content-type':types[path.extname(f)],'x-content-type-options':'nosniff'});return res.end(await readFile(f));}

@@ -55,6 +55,60 @@ test('overview passes an exact arbitrary period to the service and page', async 
   assert.equal(state.response.body.options.selectedPeriodEnd, '2026-09-25');
 });
 
+test('overview starts one background calculation for a covered unpublished period',async()=>{
+  const calls=[];
+  const state=setup({
+    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'unavailable',missingReasons:['report_coverage_incomplete']}}),
+    getFinancialPeriodRecoveryState:async(...args)=>{calls.push(['recovery',...args]);return{status:'ready'};},
+    scheduleFinancialCalculation:(...args)=>calls.push(['calculation',...args])
+  });
+  await state.run('/overview?storeId=store-1&periodStart=2026-09-10&periodEnd=2026-09-19');
+  assert.deepEqual(calls,[
+    ['recovery','user-1','store-1','2026-09-10','2026-09-19'],
+    ['calculation','user-1','store-1',{targetPeriod:{periodStart:'2026-09-10',periodEnd:'2026-09-19'}}]
+  ]);
+  assert.equal(state.response.body.state.financial.status,'calculating');
+  assert.equal(state.response.body.state.financial.calculationStage,'queued');
+  assert.equal(state.response.body.state.financial.refresh,true);
+});
+
+test('overview polls an existing target calculation without scheduling a duplicate',async()=>{
+  let scheduled=false;
+  const state=setup({
+    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'unavailable',missingReasons:['published_period_missing']}}),
+    getFinancialPeriodRecoveryState:async()=>({status:'running'}),
+    scheduleFinancialCalculation:()=>{scheduled=true;}
+  });
+  await state.run('/overview?periodStart=2026-09-10&periodEnd=2026-09-19');
+  assert.equal(scheduled,false);
+  assert.equal(state.response.body.state.financial.status,'calculating');
+  assert.equal(state.response.body.state.financial.calculationStage,'running');
+});
+
+test('failed target calculation stops automatic retries and only retries after an explicit action',async()=>{
+  const scheduled=[];
+  const state=setup({
+    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'unavailable',missingReasons:['report_coverage_incomplete']}}),
+    getFinancialPeriodRecoveryState:async()=>({status:'failed',reason:'calculation_failed'}),
+    scheduleFinancialCalculation:(...args)=>scheduled.push(args)
+  });
+  await state.run('/overview?periodStart=2026-09-10&periodEnd=2026-09-19');
+  assert.equal(state.response.body.state.financial.status,'failed');
+  assert.deepEqual(scheduled,[]);
+  await state.run('/overview?periodStart=2026-09-10&periodEnd=2026-09-19&retryCalculation=1');
+  assert.equal(state.response.body.state.financial.status,'calculating');
+  assert.equal(scheduled.length,1);
+});
+
+test('overview replaces a generic missing-publication reason with the actual source coverage gap',async()=>{
+  const state=setup({
+    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'unavailable',missingReasons:['published_period_missing']}}),
+    getFinancialPeriodRecoveryState:async()=>({status:'uncovered',reason:'calculation_period_coverage_incomplete'})
+  });
+  await state.run('/overview?periodStart=2026-09-10&periodEnd=2026-09-19');
+  assert.deepEqual(state.response.body.state.financial.missingReasons,['calculation_period_coverage_incomplete']);
+});
+
 test('overview asks the service for the latest published week when none is selected', async () => {
   const state = setup();
   await state.run('/');

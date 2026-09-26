@@ -132,7 +132,8 @@ export async function getFinancialOverview(userId, storeId, selectedDate, select
       reportCount: pair.current.cross_border_buyout?.reportCount === null ? null : Number(pair.current.cross_border_buyout?.reportCount ?? 0)
     },
     requestedPeriod: overview.period,
-    coveredPeriod: pair.current.covered_period ?? null
+    coveredPeriod: pair.current.covered_period ?? null,
+    publishedExact:Boolean(pair.current.period_result_id)
   };
 }
 

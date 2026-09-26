@@ -35,6 +35,8 @@ export function createOverviewRoutes({
   send,
   redirect,
   scheduleOperationalSync,
+  getFinancialPeriodRecoveryState = async () => ({ status: 'uncovered' }),
+  scheduleFinancialCalculation = () => false,
 }) {
   return async function handleOverview(req, res, url, current) {
     if (req.method !== 'GET' || !['/', '/overview'].includes(url.pathname)) return false;
@@ -83,6 +85,18 @@ export function createOverviewRoutes({
     if (!state) {
       send(res, 404, 'Магазин не найден.');
       return true;
+    }
+    const missingPublishedPeriod=period&&state.financial?.status==='unavailable'&&state.financial.publishedExact!==true
+      &&(state.financial.missingReasons??[]).some(reason=>['published_period_missing','published_financial_result_missing','report_coverage_incomplete'].includes(reason));
+    if(missingPublishedPeriod){
+      const recovery=await getFinancialPeriodRecoveryState(current.user_id,store.id,period.start,period.end);
+      const retryFailed=recovery.status==='failed'&&url.searchParams.get('retryCalculation')==='1';
+      if(recovery.status==='ready'||retryFailed)scheduleFinancialCalculation(current.user_id,store.id,{targetPeriod:{periodStart:period.start,periodEnd:period.end}});
+      if(['ready','queued','running','busy'].includes(recovery.status)||retryFailed)state.financial={
+        ...state.financial,status:'calculating',calculationStage:recovery.status==='running'?'running':'queued',refresh:true
+      };
+      else if(recovery.status==='failed')state.financial={...state.financial,status:'failed',calculationFailure:recovery.reason};
+      else if(recovery.status==='uncovered')state.financial={...state.financial,missingReasons:[recovery.reason??'calculation_period_coverage_incomplete']};
     }
     send(res, 200, overviewPage(current, stores, state, pageOptions));
     return true;

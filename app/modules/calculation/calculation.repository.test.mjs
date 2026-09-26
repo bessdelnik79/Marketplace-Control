@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { aggregatePublishedPeriodEnvelopes,compatibleFinancialParserVersions,loadPublishedPeriodEnvelopes,selectFullyNormalizedReportPeriods } from './calculation.repository.mjs';
+import { aggregatePublishedPeriodEnvelopes,compatibleFinancialParserVersions,loadPublishedPeriodEnvelopes,reportPeriodsCoverRange,selectFullyNormalizedReportPeriods } from './calculation.repository.mjs';
 import { buildFinancialPeriodOverview } from '../overview/financial-overview.mjs';
 
 function envelope(start,end,{quality='complete',missingReasons=[],amount='10.0000',freshness=`${end}T10:00:00Z`,crossBorder=0}={}){
@@ -44,6 +44,16 @@ test('orders fully normalized periods and their reports deterministically',()=>{
     {report_id:'report-a',report_version_id:'version-a',period_start:'2026-09-08',period_end:'2026-09-14',normalization_id:'normalization-a'}
   ];
   assert.deepEqual(selectFullyNormalizedReportPeriods(reports),[reports[2],reports[0],reports[1]]);
+});
+
+test('recognizes an arbitrary target range covered across adjacent report periods',()=>{
+  const reports=[
+    {period_start:'2026-09-07',period_end:'2026-09-13'},
+    {period_start:'2026-09-14',period_end:'2026-09-20'}
+  ];
+  assert.equal(reportPeriodsCoverRange(reports,'2026-09-10','2026-09-19'),true);
+  assert.equal(reportPeriodsCoverRange(reports,'2026-09-06','2026-09-19'),false);
+  assert.equal(reportPeriodsCoverRange([reports[1]],'2026-09-10','2026-09-19'),false);
 });
 
 test('aggregates a fully covered arbitrary range using exact scale-4 persisted totals',()=>{
