@@ -1,0 +1,65 @@
+{
+  "timezone": "Europe/Moscow",
+  "credentialYear": {
+    "eventLocal": "2026-09-28T00:00:00+03:00",
+    "lookbackDate": "2025-09-28",
+    "lastClosedSunday": "2026-09-27",
+    "firstWeek": { "start": "2025-09-22", "end": "2025-09-28" },
+    "lastWeek": { "start": "2026-09-21", "end": "2026-09-27" },
+    "weekCount": 53
+  },
+  "weeklySchedule": [
+    {
+      "nowLocal": "2026-09-27T23:59:59+03:00",
+      "dueWeek": null
+    },
+    {
+      "nowLocal": "2026-09-28T00:00:00+03:00",
+      "dueWeek": { "start": "2026-09-21", "end": "2026-09-27" }
+    },
+    {
+      "nowLocal": "2026-10-05T00:05:00+03:00",
+      "dueWeek": { "start": "2026-09-28", "end": "2026-10-04" },
+      "reason": "restart_catch_up"
+    }
+  ],
+  "coverage": [
+    {
+      "case": "empty_detail_before_inventory_confirmation",
+      "httpStatus": 204,
+      "coverageState": "pending",
+      "retryable": true
+    },
+    {
+      "case": "all_inventory_reports_accepted",
+      "coverageState": "complete",
+      "retryable": false
+    },
+    {
+      "case": "one_inventory_report_failed_normalization",
+      "coverageState": "partial",
+      "retryable": true
+    }
+  ],
+  "events": [
+    {
+      "type": "report_accepted",
+      "sourcePeriod": { "start": "2026-09-21", "end": "2026-09-27" },
+      "affectedPeriod": { "start": "2026-09-21", "end": "2026-09-27" },
+      "allowsWbApi": false
+    },
+    {
+      "type": "cost_changed",
+      "effectiveFrom": "2026-09-10",
+      "nextVersionFrom": "2026-09-20",
+      "affectedPeriod": { "start": "2026-09-10", "end": "2026-09-19" },
+      "allowsWbApi": false
+    },
+    {
+      "type": "tax_changed",
+      "effectiveFrom": "2026-09-01",
+      "affectedStores": "all_active_business_stores",
+      "allowsWbApi": false
+    }
+  ]
+}

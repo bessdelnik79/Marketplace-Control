@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,32);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,33);
   pass('password identity and expiring session are stored by migration 2');
   const financialMethod=await one("select implementation_version from mc.method_versions where code='wb_finance_import' and version_no=1");
   assert.equal(financialMethod.implementation_version,'wb-finance-v1');
@@ -478,9 +478,96 @@ try {
   await rejects('insert into mc.billing_payment_events(business_id,provider,external_event_id,event_type,safe_payload) values($1,$2,$3,$4,$5)',[b.id,'test','event-1','payment',{}],/unique constraint/,'duplicate provider event rejected');
   const job = await insert('jobs',{...base,job_type:'sync',deduplication_key:'sync-1'});
   await rejects('insert into mc.jobs(business_id,store_id,job_type,deduplication_key) values($1,$2,$3,$4)',[b.id,store.id,'sync','sync-1'],/unique constraint/,'active background job deduplicated');
-  await q("update mc.jobs set status='succeeded' where id=$1",[job.id]);
+  await q("update mc.jobs set status='succeeded',outcome='completed',finished_at=clock_timestamp() where id=$1",[job.id]);
   await insert('jobs',{...base,job_type:'sync',deduplication_key:'sync-1'});
   pass('completed job does not block next scheduled sync');
+
+  const queueColumns=(await q("select column_name from information_schema.columns where table_schema='mc' and table_name='jobs' order by column_name")).map(row=>row.column_name);
+  assert.ok(queueColumns.includes('available_at')&&!queueColumns.includes('scheduled_at'));
+  for(const column of ['priority','lease_token','heartbeat_at','updated_at','finished_at','last_error_code','outcome']) assert.ok(queueColumns.includes(column));
+  pass('durable queue migration installs the version 33 lifecycle columns');
+
+  const queueOutsider=await insert('users',{display_name:'Queue outsider'});
+  await context(b.id,queueOutsider.id);
+  await rejects("select * from mc.enqueue_job($1,$2,$3,'{}'::jsonb,clock_timestamp(),0,5)",[store.id,'financial_recalculation','calc:outsider'],/owned business context/,'enqueue requires current business membership');
+  await context(b.id,user.id);
+  const queued=await one("select * from mc.enqueue_job($1,$2,$3,$4::jsonb,clock_timestamp(),$5,$6)",[store.id,'financial_recalculation','calc:week:1',JSON.stringify({period:'2026-W36'}),10,2]);
+  const duplicateQueued=await one("select * from mc.enqueue_job($1,$2,$3,$4::jsonb,clock_timestamp(),$5,$6)",[store.id,'financial_recalculation','calc:week:1',JSON.stringify({period:'changed'}),50,9]);
+  assert.equal(duplicateQueued.id,queued.id);
+  assert.deepEqual(duplicateQueued.payload,{period:'2026-W36'});
+  await one("select * from mc.enqueue_job($1,$2,$3,$4::jsonb,clock_timestamp(),$5,$6)",[store.id,'report_sync','sync:week:1','{}',100,3]);
+  await one("select * from mc.enqueue_job($1,$2,$3,$4::jsonb,clock_timestamp(),$5,$6)",[store.id,'financial_recalculation','calc:week:2','{}',20,3]);
+  await rejects("select * from mc.enqueue_job($1,$2,$3,$4::jsonb)",[store.id,'x'.repeat(101),'too-long-type','{}'],/required/,'enqueue rejects oversized job types');
+  const claimed=await q("select * from mc.claim_jobs($1,$2::text[],$3,$4)",['worker-a',['financial_recalculation'],60,2]);
+  assert.deepEqual(claimed.map(row=>row.deduplication_key),['calc:week:2','calc:week:1']);
+  assert.ok(claimed.every(row=>row.status==='running'&&row.attempt_count===1&&row.lease_token));
+  assert.equal((await one("select count(*)::int as n from mc.jobs where deduplication_key='sync:week:1' and status='pending'")).n,1);
+  pass('claim filters job types and orders ready jobs by priority');
+
+  await rejects("select * from mc.heartbeat_job($1,$2,$3,$4)",[claimed[0].id,claimed[1].lease_token,'worker-a',60],/not owned/,'heartbeat rejects a foreign lease token');
+  const heartbeat=await one("select * from mc.heartbeat_job($1,$2,$3,$4)",[claimed[0].id,claimed[0].lease_token,'worker-a',120]);
+  assert.ok(new Date(heartbeat.lease_until)>new Date(claimed[0].lease_until));
+  const completed=await one("select * from mc.complete_job($1,$2,$3,$4)",[claimed[0].id,claimed[0].lease_token,'worker-a','superseded']);
+  assert.equal(completed.status,'succeeded');
+  assert.equal(completed.outcome,'superseded');
+  assert.equal(completed.lease_token,null);
+  pass('heartbeat and completion require the current lease token');
+
+  await rejects("select * from mc.fail_job($1,$2,$3,$4,$5,$6)",[claimed[1].id,claimed[1].lease_token,'worker-a','unsafe error',true,60],/invalid/,'failure rejects unsafe error codes');
+  const retried=await one("select * from mc.fail_job($1,$2,$3,$4,$5,$6)",[claimed[1].id,claimed[1].lease_token,'worker-a','temporary',true,60]);
+  assert.equal(retried.status,'pending');
+  assert.equal(retried.last_error_code,'temporary');
+  assert.equal(retried.finished_at,null);
+  await q("update mc.jobs set available_at=clock_timestamp()-interval '1 second' where id=$1",[retried.id]);
+  await q("update mc.job_dispatch set available_at=clock_timestamp()-interval '1 second' where job_id=$1",[retried.id]);
+  const retryClaim=await one("select * from mc.claim_jobs($1,$2::text[],$3,$4)",['worker-b',['financial_recalculation'],60,1]);
+  assert.equal(retryClaim.id,retried.id);
+  assert.equal(retryClaim.attempt_count,2);
+  const terminal=await one("select * from mc.fail_job($1,$2,$3,$4,$5,$6)",[retryClaim.id,retryClaim.lease_token,'worker-b','still_failing',true,60]);
+  assert.equal(terminal.status,'failed');
+  assert.ok(terminal.finished_at);
+  pass('failure retries with backoff and becomes terminal at max attempts');
+
+  const queueAuditActions=(await q("select action from mc.audit_events where entity_type='jobs' and entity_id in ($1,$2) order by created_at,id",[claimed[0].id,claimed[1].id])).map(row=>row.action);
+  for(const action of ['job_enqueued','job_claimed','job_succeeded','job_retry_scheduled','job_failed']) assert.ok(queueAuditActions.includes(action),action);
+  assert.equal(queueAuditActions.filter(action=>action==='job_enqueued').length,2);
+  pass('queue lifecycle writes only bounded audit metadata');
+
+  const recoverable=await one("select * from mc.enqueue_job($1,$2,$3,'{}'::jsonb,clock_timestamp(),0,2)",[store.id,'lease_test','lease:recover']);
+  const firstLease=await one("select * from mc.claim_jobs($1,$2::text[],60,1)",['worker-old',['lease_test']]);
+  await q("update mc.jobs set lease_until=clock_timestamp()-interval '1 second' where id=$1",[recoverable.id]);
+  await q("update mc.job_dispatch set lease_until=clock_timestamp()-interval '1 second' where job_id=$1",[recoverable.id]);
+  const recovered=await one("select * from mc.claim_jobs($1,$2::text[],60,1)",['worker-new',['lease_test']]);
+  assert.equal(recovered.id,firstLease.id);
+  assert.notEqual(recovered.lease_token,firstLease.lease_token);
+  assert.equal(recovered.attempt_count,2);
+  await q("update mc.jobs set lease_until=clock_timestamp()-interval '1 second' where id=$1",[recovered.id]);
+  await q("update mc.job_dispatch set lease_until=clock_timestamp()-interval '1 second' where job_id=$1",[recovered.id]);
+  assert.equal((await q("select * from mc.claim_jobs($1,$2::text[],60,1)",['worker-third',['lease_test']])).length,0);
+  const exhausted=await one('select status,last_error_code,finished_at from mc.jobs where id=$1',[recovered.id]);
+  assert.equal(exhausted.status,'failed');
+  assert.equal(exhausted.last_error_code,'max_attempts_exhausted');
+  assert.ok(exhausted.finished_at);
+  pass('expired leases recover once and exhausted leases become terminal failures');
+
+  const exhaustedBatch=[];
+  for(const suffix of ['a','b']) await one("select * from mc.enqueue_job($1,$2,$3,'{}'::jsonb,clock_timestamp(),0,1)",[store.id,'lease_batch',`lease:batch:${suffix}`]);
+  const runningBatch=await q("select * from mc.claim_jobs($1,$2::text[],60,2)",['batch-workers',['lease_batch']]);
+  for(const running of runningBatch){
+    await q("update mc.jobs set lease_until=clock_timestamp()-interval '1 second' where id=$1",[running.id]);
+    await q("update mc.job_dispatch set lease_until=clock_timestamp()-interval '1 second' where job_id=$1",[running.id]);
+    exhaustedBatch.push(running.id);
+  }
+  await q("select * from mc.claim_jobs($1,$2::text[],60,1)",['batch-cleaner',['lease_batch']]);
+  assert.equal((await one("select count(*)::int n from mc.jobs where id=any($1::uuid[]) and status='failed'",[exhaustedBatch])).n,1);
+  assert.equal((await one("select count(*)::int n from mc.job_dispatch where job_id=any($1::uuid[])",[exhaustedBatch])).n,1);
+  pass('claim bounds expired exhausted cleanup by the requested limit');
+
+  const publicQueuePrivileges=await q("select p.oid::regprocedure::text as signature,has_function_privilege('public',p.oid,'execute') as executable from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='mc' and p.proname in ('enqueue_job','claim_jobs','heartbeat_job','complete_job','fail_job') order by signature");
+  assert.equal(publicQueuePrivileges.length,5);
+  assert.ok(publicQueuePrivileges.every(row=>row.executable===false));
+  assert.equal((await one("select has_table_privilege('public','mc.job_dispatch','select') as allowed")).allowed,false);
+  pass('durable queue functions are not executable by public');
 
   // Deliberately use a non-owner role: superusers bypass row-level security.
   await db.exec('create role mc_test_reader; grant usage on schema mc to mc_test_reader; grant select on all tables in schema mc to mc_test_reader; grant execute on function mc.context_business_id(),mc.context_user_id() to mc_test_reader; set role mc_test_reader;');
@@ -798,6 +885,43 @@ try {
     assert.equal((await oone(`select count(*)::int as n from mc.sync_streams where store_id=$1 and source_type='operational_sales_funnel'`,[upgradeStore.id])).n,1);
     pass('migration 20 backfills an existing connected WB store without tenant context leakage');
   }finally{await operationalUpgradeDb.close();}
+
+  const queueUpgradeDb=new PGlite();
+  try{
+    for(const migration of migrations.filter(name=>Number(name.split('_')[0])<=32))await queueUpgradeDb.exec(await readFile(path.join(root,'db/migrations',migration),'utf8'));
+    const jq=async(sql,params=[])=>(await queueUpgradeDb.query(sql,params)).rows;
+    const jone=async(sql,params=[])=>(await jq(sql,params))[0];
+    const queueUser=await jone(`insert into mc.users(display_name) values('Queue upgrade owner') returning id`);
+    const queueBusiness=await jone(`insert into mc.businesses(name) values('Queue upgrade business') returning id`);
+    await jq(`insert into mc.memberships(business_id,user_id) values($1,$2)`,[queueBusiness.id,queueUser.id]);
+    await jq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[queueUser.id,queueBusiness.id]);
+    const queueStore=await jone(`insert into mc.stores(business_id,external_account_id,name,status) values($1,'queue-upgrade','Queue upgrade','active') returning id`,[queueBusiness.id]);
+    for(const status of ['queued','cancelled','running','succeeded','failed']) {
+      await jq(`insert into mc.jobs(business_id,store_id,job_type,deduplication_key,status,worker_id,lease_until,last_error)
+        values($1,$2,'legacy',$3,$4,$5,$6,$7)`,[
+        queueBusiness.id,queueStore.id,`legacy:${status}`,status,
+        status==='running'?'old-worker':null,status==='running'?new Date(Date.now()+60000):null,
+        status==='failed'?'legacy failure':null
+      ]);
+    }
+    await queueUpgradeDb.exec(await readFile(path.join(root,'db/migrations/033_financial_event_queue.sql'),'utf8'));
+    const upgraded=await jq(`select deduplication_key,status,worker_id,lease_until,finished_at,last_error_code,outcome
+      from mc.jobs order by deduplication_key`);
+    const byKey=Object.fromEntries(upgraded.map(row=>[row.deduplication_key,row]));
+    assert.equal(byKey['legacy:queued'].status,'pending');
+    assert.equal(byKey['legacy:running'].status,'pending');
+    assert.equal(byKey['legacy:running'].worker_id,null);
+    assert.equal(byKey['legacy:running'].lease_until,null);
+    assert.equal(byKey['legacy:cancelled'].status,'failed');
+    assert.equal(byKey['legacy:cancelled'].last_error_code,'legacy_cancelled');
+    assert.ok(byKey['legacy:cancelled'].finished_at);
+    assert.equal(byKey['legacy:succeeded'].outcome,'completed');
+    assert.ok(byKey['legacy:succeeded'].finished_at);
+    assert.equal(byKey['legacy:failed'].status,'failed');
+    assert.equal(byKey['legacy:failed'].last_error_code,'legacy_failed');
+    assert.equal((await jone(`select max(version)::int as version from mc.schema_migrations`)).version,33);
+    pass('migration 33 safely maps legacy queue states and releases legacy running leases');
+  }finally{await queueUpgradeDb.close();}
 
   // Produce a machine-derived field/constraint inventory for review.
   const cols = await q("select table_name,column_name,data_type,udt_name,is_nullable,column_default,numeric_precision,numeric_scale from information_schema.columns where table_schema='mc' order by table_name,ordinal_position");

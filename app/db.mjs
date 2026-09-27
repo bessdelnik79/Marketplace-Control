@@ -1,5 +1,6 @@
 import { createCostsRepository } from './modules/costs/costs.repository.mjs';
-import { withOwnedBusinessContext } from './infrastructure/database/client.mjs';
+import { createJobsRepository } from './infrastructure/jobs/jobs.repository.mjs';
+import { pool, withOwnedBusinessContext } from './infrastructure/database/client.mjs';
 
 export { pool, migrate } from './infrastructure/database/client.mjs';
 export * from './modules/auth/auth.repository.mjs';
@@ -12,3 +13,4 @@ export * from './modules/calculation/calculation.repository.mjs';
 export * from './modules/operational/operational.repository.mjs';
 
 export const { getCostState, importVariantCosts } = createCostsRepository({ withOwnedBusinessContext });
+export const { enqueueJob, claimJobs, heartbeatJob, completeJob, failJob } = createJobsRepository({ pool, withOwnedBusinessContext });

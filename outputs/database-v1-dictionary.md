@@ -749,6 +749,31 @@
 - `CHECK ((row_number > 0))`
 - `CHECK ((status = ANY (ARRAY['valid'::text, 'invalid'::text, 'duplicate'::text, 'applied'::text, 'skipped'::text])))`
 
+## job_dispatch
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| job_id | uuid | нет | — |
+| business_id | uuid | нет | — |
+| job_type | text | нет | — |
+| priority | integer | нет | — |
+| available_at | timestamp with time zone | нет | — |
+| status | text | нет | — |
+| attempt_count | integer | нет | — |
+| max_attempts | integer | нет | — |
+| lease_until | timestamp with time zone | да | — |
+| created_at | timestamp with time zone | нет | — |
+
+Ограничения и связи:
+
+- `CHECK ((attempt_count >= 0))`
+- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id)`
+- `CHECK ((((status = 'pending'::text) AND (lease_until IS NULL)) OR ((status = 'running'::text) AND (lease_until IS NOT NULL))))`
+- `FOREIGN KEY (job_id) REFERENCES mc.jobs(id) ON DELETE CASCADE`
+- `CHECK ((max_attempts > 0))`
+- `PRIMARY KEY (job_id)`
+- `CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text])))`
+
 ## jobs
 
 | Поле | Тип | NULL | По умолчанию |
@@ -759,23 +784,33 @@
 | job_type | text | нет | — |
 | deduplication_key | text | нет | — |
 | payload | jsonb | нет | '{}'::jsonb |
-| status | text | нет | 'queued'::text |
-| scheduled_at | timestamp with time zone | нет | now() |
+| status | text | нет | 'pending'::text |
+| available_at | timestamp with time zone | нет | now() |
 | attempt_count | integer | нет | 0 |
 | max_attempts | integer | нет | 5 |
 | lease_until | timestamp with time zone | да | — |
 | worker_id | text | да | — |
 | last_error | text | да | — |
 | created_at | timestamp with time zone | нет | now() |
+| priority | integer | нет | 0 |
+| lease_token | uuid | да | — |
+| heartbeat_at | timestamp with time zone | да | — |
+| updated_at | timestamp with time zone | нет | now() |
+| finished_at | timestamp with time zone | да | — |
+| last_error_code | text | да | — |
+| outcome | text | да | — |
 
 Ограничения и связи:
 
 - `CHECK ((attempt_count >= 0))`
 - `FOREIGN KEY (business_id) REFERENCES mc.businesses(id)`
 - `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `CHECK ((((status = 'pending'::text) AND (worker_id IS NULL) AND (lease_token IS NULL) AND (lease_until IS NULL) AND (heartbeat_at IS NULL) AND (finished_at IS NULL)) OR ((status = 'running'::text) AND (worker_id IS NOT NULL) AND (lease_token IS NOT NULL) AND (lease_until IS NOT NULL) AND (heartbeat_at IS NOT NULL) AND (finished_at IS NULL)) OR ((status = ANY (ARRAY['succeeded'::text, 'failed'::text])) AND (worker_id IS NULL) AND (lease_token IS NULL) AND (lease_until IS NULL) AND (heartbeat_at IS NULL) AND (finished_at IS NOT NULL))))`
 - `CHECK ((max_attempts > 0))`
+- `CHECK ((((status = 'succeeded'::text) AND (outcome = ANY (ARRAY['completed'::text, 'superseded'::text]))) OR ((status <> 'succeeded'::text) AND (outcome IS NULL))))`
 - `PRIMARY KEY (id)`
-- `CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'succeeded'::text, 'failed'::text, 'cancelled'::text])))`
+- `CHECK (((priority >= '-1000'::integer) AND (priority <= 1000)))`
+- `CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'succeeded'::text, 'failed'::text])))`
 
 ## memberships
 
