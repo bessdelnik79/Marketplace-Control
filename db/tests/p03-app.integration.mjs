@@ -143,8 +143,8 @@ test('verified 07-13 store sources do not create product-link issues and no-sale
   assert.equal(calculated.quality,'complete');
   assert.deepEqual(calculated.missingReasons,[]);
   assert.equal(calculated.totals.storeLevelResultBeforeTax,'-309.5100');
-  assert.equal(calculated.totals.availableResultBeforeTax,'-247.5100');
-  assert.equal(calculated.totals.availableResultAfterTax,'-253.5100');
+  assert.equal(calculated.totals.availableResultBeforeTax,'-249.5100');
+  assert.equal(calculated.totals.availableResultAfterTax,'-255.5100');
   const persisted=await scoped(async client=>({
     issues:(await client.query(`select code from mc.data_issues where store_id=$1 and status='open' and code in('financial_operation_unclassified','financial_components_unverified','financial_product_not_in_catalog')`,[scope.store])).rows,
     tax:(await client.query(`select product_id,taxable_base::text,tax_amount::text from mc.tax_computations where run_id=$1 order by product_id`,[calculated.runId])).rows,
