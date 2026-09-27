@@ -65,7 +65,7 @@ P04_INTEGRATION_DATABASE_URL=postgresql:///marketplace_control_p04_test node db/
 JOBS_INTEGRATION_DATABASE_URL=postgresql:///marketplace_control_jobs_test node db/tests/jobs.integration.mjs
 ```
 
-Сценарий проверяет двух одновременных claimant, активную дедупликацию, heartbeat, retry/backoff, новый lease token после восстановления, terminal failure после исчерпания попыток, tenant isolation и отсутствие `PUBLIC EXECUTE` у внутренних функций.
+Сценарий проверяет двух одновременных claimant, активную дедупликацию, heartbeat, retry/backoff, новый lease token после восстановления, terminal failure после исчерпания попыток, tenant isolation и отсутствие `PUBLIC EXECUTE` у внутренних функций. URL должен вести в пустую одноразовую БД с отдельным сегментом `test` в имени под superuser-ролью изолированного тестового кластера. Bootstrap создаёт fixture до появления tenant-контекста, но миграции и все проверяемые прикладные запросы выполняются через уникальную `NOLOGIN`-роль без `SUPERUSER` и `BYPASSRLS`; после теста созданные объекты, memberships и роли удаляются, включая обработанные ошибки setup.
 
 В среде без npm можно указать путь к установленному модулю PGlite через переменную `PGLITE_MODULE`. В текущей сессии использовался скачанный в `work/` пакет версии 0.3.14, проверенный по SHA-512 из реестра. Каталог `work/` исключён из Git.
 
