@@ -6,7 +6,7 @@ const scale = 1000000000000n;
 const numeric20x4Limit = 10000000000000000000000000000n;
 const checkedFields = ['forPay', 'deliveryService', 'paidStorage', 'paidAcceptance', 'deduction', 'penalty', 'additionalPayment'];
 const expenseFields = checkedFields.slice(1);
-const unsupportedCashbackFields = ['cashbackAmount', 'cashbackDiscount', 'cashbackCommissionChange'];
+const unsupportedCashbackFields = ['cashbackAmount', 'cashbackCommissionChange'];
 
 function units(value, missingZero = false) {
   if (value === null || value === undefined || value === '') return missingZero ? 0n : null;
@@ -34,8 +34,10 @@ function notCheckable(reason) {
   return { status: 'not_checkable', expectedAmount: null, actualAmount: null, reason };
 }
 
-// This is deliberately narrower than a general payout formula. Cashback and
-// reversed service amounts have not been verified against a printed report.
+// This is deliberately narrower than a general payout formula. Cashback point
+// movements and reversed service amounts have not been verified against a
+// printed report. cashbackDiscount is informational and already included in
+// the report revenue, so it neither changes nor blocks this control.
 export function reconcileBankPayment(report, summary) {
   if (!summary) return notCheckable('summary_missing');
   if (String(summary.reportType) !== '1' || summary.currency !== 'RUB' || String(summary.reportId) !== report.externalReportId ||

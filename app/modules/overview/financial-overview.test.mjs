@@ -130,7 +130,7 @@ test('v8 overview includes confirmed store expenses once in the 07-13 September 
 });
 
 test('current and compatible overviews include result-affecting rows without a product',()=>{
-  for(const methodVersion of ['financial-result-v9','financial-result-v11','financial-result-v12']){
+  for(const methodVersion of ['financial-result-v9','financial-result-v11','financial-result-v12','financial-result-v13','financial-result-v14']){
     const overview=buildFinancialPeriodOverview(envelope({
       methodVersion,periodStart:'2026-08-24',periodEnd:'2026-08-30',
       revenue:'3835.0000',expenseLine:'-1221.0000',selectedBeforeTax:'2614.0000',storeBeforeTax:'-4953.6200',
@@ -143,7 +143,7 @@ test('current and compatible overviews include result-affecting rows without a p
   }
 });
 
-test('loyalty compensation reduces WB expenses without changing revenue',()=>{
+test('legacy v12 publication remains reproducible with loyalty compensation in its persisted result',()=>{
   const raw=envelope({methodVersion:'financial-result-v12',revenue:'100.0000',expenseLine:'-10.0000',selectedBeforeTax:'92.0000',storeBeforeTax:'-0.5000',beforeTax:'91.5000',tax:null,afterTax:null});
   raw.lines=raw.lines.filter(line=>line.category_code!=='store_expenses');
   raw.lines.push(

@@ -21,10 +21,17 @@ test('bank control checks covered sale-minus-return and expense rows exactly', (
   assert.equal(reconcileBankPayment(report, { ...summary, forPaySum: '81' }).reason, 'summary_detail_mismatch');
 });
 
+test('informational cashback discount does not block the bank control', () => {
+  const withReference = {
+    ...report,
+    rows: [...report.rows, { rawData: { docTypeName: 'Продажа', sellerOperName: 'Компенсация скидки по программе лояльности', cashbackDiscount: '1' } }]
+  };
+  assert.equal(reconcileBankPayment(withReference, { ...summary, cashbackDiscountSum: '1' }).status, 'passed');
+});
+
 test('unsupported cashback, reverse signs and non-sale payout rows cannot pass', () => {
   assert.equal(reconcileBankPayment(report, { ...summary, cashbackAmountSum: '1' }).reason, 'cashback_unverified');
   assert.equal(reconcileBankPayment(report, { ...summary, cashbackCommissionChangeSum: '1' }).reason, 'cashback_unverified');
-  assert.equal(reconcileBankPayment(report, { ...summary, cashbackDiscountSum: '1' }).reason, 'cashback_unverified');
   assert.equal(reconcileBankPayment(report, { ...summary, additionalPaymentSum: '-5' }).reason, 'summary_amount_unverified');
   assert.equal(reconcileBankPayment(report, { ...summary, bankPaymentSum: '10000000000000000' }).reason, 'summary_amount_unverified');
   assert.equal(reconcileBankPayment(report, { ...summary, bankPaymentSum: '9999999999999999.9999' }).reason, 'payment_amount_unverified');

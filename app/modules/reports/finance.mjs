@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export const financialReportsEndpoint = 'https://finance-api.wildberries.ru/api/finance/v1/sales-reports/detailed';
-export const financialParserVersion = 'wb-finance-v10';
+export const financialParserVersion = 'wb-finance-v11';
 const unverifiedMoneyFields = [
   'sellerPromo','installmentCoFinancingAmount','cashbackAmount',
   'cashbackCommissionChange','sellerPromoDiscount','loyaltyDiscount','agencyVat'
@@ -45,8 +45,7 @@ const resultComponentFields = new Map([
   ['additionalPayment', new Set(['commission_adjustment'])],
   ['vw', new Set(['wb_reward_without_vat'])],
   ['vwNds', new Set(['wb_reward_vat'])],
-  ['ppvzReward', new Set(['pickup_reward'])],
-  ['cashbackDiscount', new Set(['loyalty_compensation'])]
+  ['ppvzReward', new Set(['pickup_reward'])]
 ]);
 
 function isResultComponent(component) {
@@ -217,7 +216,7 @@ export function normalizeFinancialOperation(row) {
   add('deduction', isVerifiedPromotionRow(row) ? 'promotion' : 'deduction', 'expense');
   add('additionalPayment', 'commission_adjustment', 'expense');
   add('forPay', 'payout', 'settlement');
-  add('cashbackDiscount', isVerifiedLoyaltyCompensationRow(row) ? 'loyalty_compensation' : 'unclassified_financial_field', 'source');
+  add('cashbackDiscount', 'loyalty_discount_reference', 'source');
   if(isVerifiedLoyaltyCompensationRow(row)&&hasMoney(row,['retailAmount']))add('retailAmount','unclassified_financial_field','source');
   for(const field of unverifiedMoneyFields)add(field,'unclassified_financial_field','source');
 
@@ -339,6 +338,7 @@ export function financialDateRange(now = new Date(), days = 91) {
 }
 
 export function financialComponentScope(row, operation, component, productMatched = false) {
+  if (component.sourceField === 'cashbackDiscount' && component.categoryCode === 'loyalty_discount_reference') return 'reconciliation';
   if (component.sourceField === 'rebillLogisticCost' && component.categoryCode === 'rebill_logistic_compensation') return 'reconciliation';
   if (component.sourceField === 'forPay' && component.categoryCode === 'payout') return 'reconciliation';
   if (component.sourceField === 'ppvzSalesCommission' && component.categoryCode === 'commission') return 'reconciliation';
@@ -372,7 +372,7 @@ export function unverifiedFinancialComponents(row,operation,productMatched=false
     if(component.sourceField==='forPay'&&component.categoryCode==='payout')return false;
     if(component.sourceField==='ppvzSalesCommission'&&component.categoryCode==='commission')return false;
     if(!productMatched&&!hasRealItemIdentifier(row)&&isResultComponent(component))return false;
-    if(component.sourceField==='cashbackDiscount'&&component.categoryCode==='loyalty_compensation')return !productMatched&&hasRealItemIdentifier(row);
+    if(component.sourceField==='cashbackDiscount'&&component.categoryCode==='loyalty_discount_reference')return false;
     if(verifiedResultExpenseCategories.has(component.categoryCode)){
       if(productMatched)return false;
       return !(operation.operationType==='other'&&isVerifiedPvzComponent(row,component));
@@ -385,8 +385,10 @@ export function unverifiedFinancialComponents(row,operation,productMatched=false
 }
 
 export function isResolvedNonProductOperation(row,operation,productMatched=false){
-  if(productMatched||!operation?.components?.length)return false;
+  if(!operation?.components?.length)return false;
   if(unverifiedFinancialComponents(row,operation,false).length)return false;
+  if(operation.components.every(component=>financialComponentScope(row,operation,component,productMatched)==='reconciliation'))return true;
+  if(productMatched)return false;
   return operation.components.every(component=>['store','reconciliation'].includes(financialComponentScope(row,operation,component,false)));
 }
 
