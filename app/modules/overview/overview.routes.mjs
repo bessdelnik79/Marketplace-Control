@@ -1,5 +1,7 @@
 import { calendarWeekForDate, validateCalendarPeriod } from './financial-overview.mjs';
 
+const CURRENT_FINANCIAL_METHODS = new Set(['financial-result-v15', 'financial-result-v16']);
+
 function requestedWeek(url) {
   const value = url.searchParams.get('week');
   if (value === null || value === '') return null;
@@ -89,7 +91,9 @@ export function createOverviewRoutes({
     }
     const missingPublishedPeriod=period&&state.financial?.status==='unavailable'&&state.financial.publishedExact!==true
       &&(state.financial.missingReasons??[]).some(reason=>['published_period_missing','published_financial_result_missing','report_coverage_incomplete'].includes(reason));
-    if(missingPublishedPeriod){
+    const stalePublishedPeriod=period&&Boolean(state.financial?.methodVersion)
+      &&!CURRENT_FINANCIAL_METHODS.has(state.financial.methodVersion);
+    if(missingPublishedPeriod||stalePublishedPeriod){
       const recovery=await getFinancialPeriodRecoveryState(current.user_id,store.id,period.start,period.end);
       const retryRequested=url.searchParams.get('retryCalculation')==='1';
       const retryFailed=recovery.status==='failed'&&retryRequested;

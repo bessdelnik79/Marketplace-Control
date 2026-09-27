@@ -72,6 +72,49 @@ test('overview starts one background calculation for a covered unpublished perio
   assert.equal(state.response.body.state.financial.refresh,true);
 });
 
+test('overview replaces a stale partial publication with a current background calculation',async()=>{
+  const calls=[];
+  const state=setup({
+    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'partial',methodVersion:'financial-result-v14',publishedExact:true,missingReasons:['operation_unclassified']}}),
+    getFinancialPeriodRecoveryState:async(...args)=>{calls.push(['recovery',...args]);return{status:'ready'};},
+    scheduleFinancialCalculation:(...args)=>calls.push(['calculation',...args])
+  });
+  await state.run('/overview?storeId=store-1&periodStart=2026-08-17&periodEnd=2026-08-23');
+  assert.deepEqual(calls,[
+    ['recovery','user-1','store-1','2026-08-17','2026-08-23'],
+    ['calculation','user-1','store-1',{targetPeriod:{periodStart:'2026-08-17',periodEnd:'2026-08-23'}}]
+  ]);
+  assert.equal(state.response.body.state.financial.status,'calculating');
+  assert.equal(state.response.body.state.financial.calculationStage,'queued');
+  assert.equal(state.response.body.state.financial.refresh,true);
+});
+
+test('overview keeps a current published period without scheduling another calculation',async()=>{
+  let recovered=false;
+  let scheduled=false;
+  const state=setup({
+    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'complete',methodVersion:'financial-result-v16',publishedExact:true,missingReasons:[]}}),
+    getFinancialPeriodRecoveryState:async()=>{recovered=true;return{status:'ready'};},
+    scheduleFinancialCalculation:()=>{scheduled=true;}
+  });
+  await state.run('/overview?storeId=store-1&periodStart=2026-08-17&periodEnd=2026-08-23');
+  assert.equal(recovered,false);
+  assert.equal(scheduled,false);
+  assert.equal(state.response.body.state.financial.status,'complete');
+});
+
+test('overview refreshes a stale exact publication even when its result is unavailable',async()=>{
+  let scheduled=false;
+  const state=setup({
+    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'unavailable',methodVersion:'financial-result-v14',publishedExact:true,missingReasons:['cost_missing']}}),
+    getFinancialPeriodRecoveryState:async()=>({status:'ready'}),
+    scheduleFinancialCalculation:()=>{scheduled=true;}
+  });
+  await state.run('/overview?storeId=store-1&periodStart=2026-08-17&periodEnd=2026-08-23');
+  assert.equal(scheduled,true);
+  assert.equal(state.response.body.state.financial.status,'calculating');
+});
+
 test('overview automatically updates legacy report normalizations before calculating',async()=>{
   const calls=[];
   const ranges=[{periodStart:'2026-08-10',periodEnd:'2026-08-16'}];
