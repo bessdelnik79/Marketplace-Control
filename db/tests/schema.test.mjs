@@ -35,7 +35,16 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,36);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,37);
+  for (const signature of [
+    'mc.get_financial_inventory_context(uuid,bigint,uuid,text)',
+    'mc.apply_financial_inventory(uuid,bigint,uuid,text,jsonb)',
+    'mc.apply_financial_period_fallback(uuid,bigint,uuid,text)'
+  ]) {
+    const definition=(await one('select pg_get_functiondef($1::regprocedure) as definition',[signature])).definition;
+    assert.ok(definition.indexOf("set_config('app.business_id'") < definition.indexOf('FROM mc.jobs j WHERE j.id=p_job_id'));
+  }
+  pass('financial inventory functions establish tenant context before reading FORCE-RLS jobs');
   pass('password identity and expiring session are stored by migration 2');
   const financialMethod=await one("select implementation_version from mc.method_versions where code='wb_finance_import' and version_no=1");
   assert.equal(financialMethod.implementation_version,'wb-finance-v1');
@@ -1000,12 +1009,14 @@ try {
     const legacyConnection=await cone(`insert into mc.connections(business_id,store_id,secret_ref,scopes,status) values($1,$2,'database:legacy','["finance"]','active') returning id`,[legacyBusiness.id,legacyStore.id]);
     await cq(`insert into mc.connection_secrets(business_id,connection_id,ciphertext,nonce,auth_tag) values($1,$2,$3,$4,$5)`,[legacyBusiness.id,legacyConnection.id,Buffer.from('encrypted'),Buffer.alloc(12),Buffer.alloc(16)]);
     await credentialUpgradeDb.exec(await readFile(path.join(root,'db/migrations/036_financial_coverage_scheduler.sql'),'utf8'));
+    await credentialUpgradeDb.exec(await readFile(path.join(root,'db/migrations/037_financial_inventory_rls_lease.sql'),'utf8'));
     const backfill=await cq(`select connection_id,user_id,store_id,seller_id,scopes from mc.list_financial_credential_backfill(10)`);
     assert.deepEqual(backfill,[{connection_id:legacyConnection.id,user_id:legacyUser.id,store_id:legacyStore.id,seller_id:'legacy-cabinet',scopes:['finance']}]);
     assert.equal(await cone(`select mc.defer_financial_credential_backfill($1,60) as deferred`,[legacyConnection.id]).then(row=>row.deferred),true);
     assert.equal((await cq(`select * from mc.list_financial_credential_backfill(10)`)).length,0);
     assert.equal((await cone(`select count(*)::int as n from mc.financial_schedule_targets`)).n,0);
-    pass('migration 36 exposes each existing active finance credential for one safe startup backfill');
+    assert.equal((await cone(`select max(version)::int as version from mc.schema_migrations`)).version,37);
+    pass('migrations 36-37 expose legacy credentials and repair tenant-safe inventory leases');
   }finally{await credentialUpgradeDb.close();}
 
   // Produce a machine-derived field/constraint inventory for review.

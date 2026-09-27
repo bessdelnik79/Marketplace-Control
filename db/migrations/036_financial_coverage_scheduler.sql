@@ -289,12 +289,14 @@ LANGUAGE plpgsql SECURITY DEFINER SET search_path=pg_catalog,mc AS $$
 #variable_conflict use_column
 DECLARE target mc.job_dispatch;
 BEGIN
-  SELECT d.* INTO target FROM mc.job_dispatch d JOIN mc.jobs j ON j.id=d.job_id
-   WHERE d.job_id=p_job_id AND d.job_type='financial_inventory_refresh' AND d.status='running' AND d.lease_until>clock_timestamp()
-     AND j.status='running' AND j.lease_token=p_lease_token AND j.worker_id=p_worker_id AND j.lease_until>clock_timestamp();
+  SELECT d.* INTO target FROM mc.job_dispatch d
+   WHERE d.job_id=p_job_id AND d.job_type='financial_inventory_refresh' AND d.status='running' AND d.lease_until>clock_timestamp();
   IF NOT FOUND THEN RAISE EXCEPTION 'running financial inventory job is required'; END IF;
   PERFORM set_config('app.business_id',target.business_id::text,true);
   PERFORM set_config('app.user_id','',true);
+  PERFORM 1 FROM mc.jobs j WHERE j.id=p_job_id AND j.status='running' AND j.lease_token=p_lease_token
+    AND j.worker_id=p_worker_id AND j.lease_until>clock_timestamp();
+  IF NOT FOUND THEN RAISE EXCEPTION 'running financial inventory job is required'; END IF;
   RETURN QUERY
   SELECT c.business_id,c.store_id,s.external_account_id,c.credential_generation,cs.ciphertext,cs.nonce,cs.auth_tag,
          coalesce(cap.list_api,'unknown'),cap.fallback_mode
@@ -322,12 +324,15 @@ BEGIN
   IF p_rows IS NULL OR jsonb_typeof(p_rows)<>'array' OR jsonb_array_length(p_rows)>10000 THEN
     RAISE EXCEPTION 'financial inventory rows must be a bounded array';
   END IF;
-  SELECT d.* INTO target FROM mc.job_dispatch d JOIN mc.jobs j ON j.id=d.job_id
+  SELECT d.* INTO target FROM mc.job_dispatch d
    WHERE d.job_id=p_job_id AND d.job_type='financial_inventory_refresh' AND d.status='running' AND d.lease_until>clock_timestamp()
-     AND j.status='running' AND j.lease_token=p_lease_token AND j.worker_id=p_worker_id AND j.lease_until>clock_timestamp() FOR UPDATE OF d;
+   FOR UPDATE OF d;
   IF NOT FOUND THEN RAISE EXCEPTION 'running financial inventory job is required'; END IF;
   PERFORM set_config('app.business_id',target.business_id::text,true);
   PERFORM set_config('app.user_id','',true);
+  PERFORM 1 FROM mc.jobs j WHERE j.id=p_job_id AND j.status='running' AND j.lease_token=p_lease_token
+    AND j.worker_id=p_worker_id AND j.lease_until>clock_timestamp();
+  IF NOT FOUND THEN RAISE EXCEPTION 'running financial inventory job is required'; END IF;
   SELECT m.user_id INTO actor FROM mc.memberships m WHERE m.business_id=target.business_id AND m.role IN ('owner','editor')
     ORDER BY CASE m.role WHEN 'owner' THEN 0 ELSE 1 END,m.created_at,m.user_id LIMIT 1;
   IF actor IS NULL THEN RETURN QUERY SELECT 0,0,0,true; RETURN; END IF;
@@ -402,12 +407,15 @@ DECLARE
   date_from date;
   date_to date;
 BEGIN
-  SELECT d.* INTO target FROM mc.job_dispatch d JOIN mc.jobs j ON j.id=d.job_id
+  SELECT d.* INTO target FROM mc.job_dispatch d
    WHERE d.job_id=p_job_id AND d.job_type='financial_inventory_refresh' AND d.status='running' AND d.lease_until>clock_timestamp()
-     AND j.status='running' AND j.lease_token=p_lease_token AND j.worker_id=p_worker_id AND j.lease_until>clock_timestamp() FOR UPDATE OF d;
+   FOR UPDATE OF d;
   IF NOT FOUND THEN RAISE EXCEPTION 'running financial inventory job is required'; END IF;
   PERFORM set_config('app.business_id',target.business_id::text,true);
   PERFORM set_config('app.user_id','',true);
+  PERFORM 1 FROM mc.jobs j WHERE j.id=p_job_id AND j.status='running' AND j.lease_token=p_lease_token
+    AND j.worker_id=p_worker_id AND j.lease_until>clock_timestamp();
+  IF NOT FOUND THEN RAISE EXCEPTION 'running financial inventory job is required'; END IF;
   SELECT * INTO target_job FROM mc.jobs j WHERE j.id=p_job_id;
   SELECT m.user_id INTO actor FROM mc.memberships m WHERE m.business_id=target.business_id AND m.role IN ('owner','editor')
     ORDER BY CASE m.role WHEN 'owner' THEN 0 ELSE 1 END,m.created_at,m.user_id LIMIT 1;
