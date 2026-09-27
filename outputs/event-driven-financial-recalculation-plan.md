@@ -202,7 +202,7 @@ UI показывает прежние суммы, их фактическую �
 ### Этап 1. Контракты и очередь
 
 - Зафиксировать календарные, coverage и event fixtures.
-- Миграцией `033` привести `mc.jobs` к durable-контракту и добавить функции enqueue/claim/heartbeat/complete/fail.
+- Миграцией `034` привести `mc.jobs` к durable-контракту и добавить функции enqueue/claim/heartbeat/complete/fail. Номер сдвинут после появления финансовой миграции `033` в `main`.
 - Добавить repository worker и тесты lease, двух конкурирующих claimant, retry и restart recovery.
 - Сохранить текущие wrapper-функции до полного переключения.
 
@@ -263,7 +263,7 @@ UI показывает прежние суммы, их фактическую �
 
 Первый implementation slice — только durable queue foundation:
 
-1. `db/migrations/033_financial_event_queue.sql`;
+1. `db/migrations/034_financial_event_queue.sql`;
 2. schema/integration-тесты статусов, deduplication, claim, lease, heartbeat, retry и восстановления;
 3. минимальный `app/infrastructure/jobs/` repository;
 4. совместимый фасад в `app/db.mjs` без переключения текущих financial routes и workers.

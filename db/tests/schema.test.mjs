@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,33);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,34);
   pass('password identity and expiring session are stored by migration 2');
   const financialMethod=await one("select implementation_version from mc.method_versions where code='wb_finance_import' and version_no=1");
   assert.equal(financialMethod.implementation_version,'wb-finance-v1');
@@ -526,7 +526,7 @@ try {
   const queueColumns=(await q("select column_name from information_schema.columns where table_schema='mc' and table_name='jobs' order by column_name")).map(row=>row.column_name);
   assert.ok(queueColumns.includes('available_at')&&!queueColumns.includes('scheduled_at'));
   for(const column of ['priority','lease_token','heartbeat_at','updated_at','finished_at','last_error_code','outcome']) assert.ok(queueColumns.includes(column));
-  pass('durable queue migration installs the version 33 lifecycle columns');
+  pass('durable queue migration installs the version 34 lifecycle columns');
 
   const queueOutsider=await insert('users',{display_name:'Queue outsider'});
   await context(b.id,queueOutsider.id);
@@ -929,7 +929,7 @@ try {
 
   const queueUpgradeDb=new PGlite();
   try{
-    for(const migration of migrations.filter(name=>Number(name.split('_')[0])<=32))await queueUpgradeDb.exec(await readFile(path.join(root,'db/migrations',migration),'utf8'));
+    for(const migration of migrations.filter(name=>Number(name.split('_')[0])<=33))await queueUpgradeDb.exec(await readFile(path.join(root,'db/migrations',migration),'utf8'));
     const jq=async(sql,params=[])=>(await queueUpgradeDb.query(sql,params)).rows;
     const jone=async(sql,params=[])=>(await jq(sql,params))[0];
     const queueUser=await jone(`insert into mc.users(display_name) values('Queue upgrade owner') returning id`);
@@ -945,7 +945,7 @@ try {
         status==='failed'?'legacy failure':null
       ]);
     }
-    await queueUpgradeDb.exec(await readFile(path.join(root,'db/migrations/033_financial_event_queue.sql'),'utf8'));
+    await queueUpgradeDb.exec(await readFile(path.join(root,'db/migrations/034_financial_event_queue.sql'),'utf8'));
     const upgraded=await jq(`select deduplication_key,status,worker_id,lease_until,finished_at,last_error_code,outcome
       from mc.jobs order by deduplication_key`);
     const byKey=Object.fromEntries(upgraded.map(row=>[row.deduplication_key,row]));
@@ -960,8 +960,8 @@ try {
     assert.ok(byKey['legacy:succeeded'].finished_at);
     assert.equal(byKey['legacy:failed'].status,'failed');
     assert.equal(byKey['legacy:failed'].last_error_code,'legacy_failed');
-    assert.equal((await jone(`select max(version)::int as version from mc.schema_migrations`)).version,33);
-    pass('migration 33 safely maps legacy queue states and releases legacy running leases');
+    assert.equal((await jone(`select max(version)::int as version from mc.schema_migrations`)).version,34);
+    pass('migration 34 safely maps legacy queue states and releases legacy running leases');
   }finally{await queueUpgradeDb.close();}
 
   // Produce a machine-derived field/constraint inventory for review.

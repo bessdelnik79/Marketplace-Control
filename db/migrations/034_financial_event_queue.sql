@@ -343,6 +343,6 @@ END $$;
 
 REVOKE ALL ON FUNCTION mc.fail_job(uuid,uuid,text,text,boolean,integer) FROM PUBLIC;
 
-INSERT INTO mc.schema_migrations(version) VALUES(33);
+INSERT INTO mc.schema_migrations(version) VALUES(34);
 
 COMMIT;
