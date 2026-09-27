@@ -1611,7 +1611,6 @@
 - `CHECK (isfinite(period_end))`
 - `CHECK (isfinite(period_start))`
 - `PRIMARY KEY (id)`
-- `CHECK ((tax_amount >= (0)::numeric))`
 
 ## tax_setting_versions
 

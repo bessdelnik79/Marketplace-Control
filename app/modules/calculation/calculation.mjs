@@ -301,7 +301,6 @@ export function calculateStoreTaxReference({ periodStart, periodEnd, selectedPro
   const productTotals = [...products.values()].sort((a, b) => a.productId.localeCompare(b.productId)).map(product => {
     const amount = product.numerator >= 0n ? (product.numerator + 50000000n) / 100000000n : -((-product.numerator + 50000000n) / 100000000n);
     tax += amount;
-    if (product.base < 0n || amount < 0n) reasons.add('tax_base_negative_unverified');
     return { productId: product.productId, taxableBase: formatDecimal(product.base), estimatedTax: formatDecimal(amount) };
   });
   if (base < 0n || tax < 0n) reasons.add('tax_base_negative_unverified');
