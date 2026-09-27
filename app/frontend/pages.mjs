@@ -67,7 +67,15 @@ const overviewReasonLabels={
 };
 const overviewDate=value=>{const match=String(value??'').match(/^(\d{4})-(\d{2})-(\d{2})$/);return match?`${match[3]}.${match[2]}.${match[1]}`:'';};
 const overviewPeriod=period=>period?.start&&period?.end?`${overviewDate(period.start)} — ${overviewDate(period.end)}`:'период не определён';
-const overviewMoney=value=>{if(value===null||value===undefined)return'—';const text=String(value),negative=text.startsWith('-'),absolute=negative?text.slice(1):text;return`${negative?'−':''}${money(absolute)} ₽`;};
+const roundedMoney=value=>{
+  const match=String(value??'').trim().replace(',','.').match(/^(\d+)(?:\.(\d+))?$/);if(!match)return String(value??'');
+  const fraction=(match[2]??'').padEnd(3,'0'),scale=100n;
+  let kopecks=BigInt(match[1])*scale+BigInt(fraction.slice(0,2)||'0');
+  if(Number(fraction[2])>=5)kopecks+=1n;
+  const whole=(kopecks/scale).toString().replace(/\B(?=(\d{3})+(?!\d))/g,'\u00a0'),cents=(kopecks%scale).toString().padStart(2,'0');
+  return`${whole},${cents}`;
+};
+const overviewMoney=value=>{if(value===null||value===undefined)return'—';const text=String(value),negative=text.startsWith('-'),absolute=negative?text.slice(1):text,rounded=roundedMoney(absolute);return`${negative&&rounded!=='0,00'?'−':''}${rounded} ₽`;};
 const overviewDecimal=value=>{const text=String(value??''),negative=text.startsWith('-'),absolute=negative?text.slice(1):text;return`${negative?'−':''}${exactDecimal(absolute,{maximumFractionDigits:4})}`;};
 const overviewCount=value=>value===null||value===undefined?'—':`${exactDecimal(value,{maximumFractionDigits:4})} шт.`;
 const overviewFreshness=value=>{const date=new Date(value);return value&&!Number.isNaN(date.getTime())?date.toLocaleString('ru-RU',{timeZone:'Europe/Moscow',day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}):'ещё не обновлялось';};
