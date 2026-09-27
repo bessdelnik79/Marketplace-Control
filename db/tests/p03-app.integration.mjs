@@ -417,7 +417,7 @@ test('P0.3 persists exact weekly results, links return cost fail-closed and isol
   assert.equal(pair.current.period_result_id,second.period_result_id);
   assert.equal(pair.previous.period_result_id,first.period_result_id);
   assert.equal(pair.publication_id,second.publication_id);
-  assert.equal(pair.method_version,'financial-result-v17');
+  assert.equal(pair.method_version,'financial-result-v19');
   assert.equal(pair.timezone,'Europe/Moscow');
   assert.deepEqual(pair.scope,{type:'selected_products',productIds:[fixture.productId]});
   assert.ok(pair.current.source_freshness);
@@ -447,7 +447,7 @@ test('P0.3 persists exact weekly results, links return cost fail-closed and isol
   const targetA=await runFinancialCalculation(isolated.user,isolated.store,{targetPeriod:{periodStart:'2026-08-04',periodEnd:'2026-08-10'}});
   assert.equal(targetA.changed,true);
   const publishedTargetA=await getPublishedFinancialPeriod(isolated.user,isolated.store,'2026-08-04','2026-08-10');
-  assert.equal(publishedTargetA.method_version,'financial-result-v18');
+  assert.equal(publishedTargetA.method_version,'financial-result-v20');
   assert.deepEqual([publishedTargetA.period_start,publishedTargetA.period_end],['2026-08-04','2026-08-10']);
   assert.ok(publishedTargetA.period_result_id);
   assert.ok(publishedTargetA.lines.every(line=>line.accounting_date>='2026-08-04'&&line.accounting_date<='2026-08-10'));

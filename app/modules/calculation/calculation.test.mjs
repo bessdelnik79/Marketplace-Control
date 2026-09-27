@@ -551,6 +551,42 @@ test('complete report proves zero tax while a voided effective boundary never fa
   assert.ok(voided.missingReasons.includes('tax_setting_missing'));
 });
 
+test('negative SKU tax offsets positive SKU tax while the aggregate period base stays non-negative',()=>{
+  const result=calculateStoreTaxReference({periodStart:'2026-07-06',periodEnd:'2026-07-12',selectedProductIds:['positive','returned'],sourceRows:[
+    {id:'sale',productId:'positive',accountingDate:'2026-07-06',docTypeName:'Продажа',sellerOperName:'Продажа',retailAmount:'100'},
+    {id:'return',productId:'returned',accountingDate:'2026-07-07',docTypeName:'Возврат',sellerOperName:'Возврат',retailAmount:'20'}
+  ],taxSettings:[{id:'rate',effectiveFrom:'2026-01-01',regimeCode:'usn_income',usnRateFraction:'0.06'}]});
+  assert.equal(result.usable,true);
+  assert.equal(result.taxableBase,'80.0000');
+  assert.equal(result.estimatedTax,'4.8000');
+  assert.deepEqual(result.missingReasons,[]);
+  assert.deepEqual(result.products,[
+    {productId:'positive',taxableBase:'100.0000',estimatedTax:'6.0000'},
+    {productId:'returned',taxableBase:'-20.0000',estimatedTax:'-1.2000'}
+  ]);
+  const financial=calculateFinancialResult({periodStart:'2026-07-06',periodEnd:'2026-07-12',selectedProductIds:['positive','returned'],
+    financialComponents:[
+      {id:'sale',classificationStatus:'confirmed',scopeCode:'selected_product',productId:'positive',accountingDate:'2026-07-06',categoryCode:'revenue',amountSigned:'100'},
+      {id:'return',classificationStatus:'confirmed',scopeCode:'selected_product',productId:'returned',accountingDate:'2026-07-07',categoryCode:'revenue_return',amountSigned:'-20'}
+    ],taxSetting:{regimeCode:'usn_income',usnRateFraction:'0.06',vatMode:'exempt'},taxReference:result});
+  assert.deepEqual(financial.lines.filter(row=>row.categoryCode==='estimated_usn_tax').map(row=>[row.productId,row.amountSigned]),[
+    ['positive','-6.0000'],['returned','1.2000']
+  ]);
+  assert.equal(financial.totals.estimatedUsnTax,'4.8000');
+  assert.equal(financial.totals.availableResultAfterTax,'75.2000');
+});
+
+test('negative aggregate period tax remains fail-closed',()=>{
+  const result=calculateStoreTaxReference({periodStart:'2026-07-06',periodEnd:'2026-07-12',selectedProductIds:['positive','returned'],sourceRows:[
+    {id:'sale',productId:'positive',accountingDate:'2026-07-06',docTypeName:'Продажа',sellerOperName:'Продажа',retailAmount:'20'},
+    {id:'return',productId:'returned',accountingDate:'2026-07-07',docTypeName:'Возврат',sellerOperName:'Возврат',retailAmount:'100'}
+  ],taxSettings:[{id:'rate',effectiveFrom:'2026-01-01',regimeCode:'usn_income',usnRateFraction:'0.06'}]});
+  assert.equal(result.usable,false);
+  assert.equal(result.taxableBase,null);
+  assert.equal(result.estimatedTax,null);
+  assert.deepEqual(result.missingReasons,['tax_base_negative_unverified']);
+});
+
 test('full report coverage makes a selected SKU without sales an explicit zero tax computation',()=>{
   const result=calculateStoreTaxReference({periodStart:'2026-07-13',periodEnd:'2026-07-19',selectedProductIds:['product-1'],sourceRows:[],
     taxSettings:[{id:'active',effectiveFrom:'2026-01-01',regimeCode:'usn_income',usnRateFraction:'0.06'}]});
