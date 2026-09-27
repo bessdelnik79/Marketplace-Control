@@ -4,6 +4,11 @@ const QUALITY_VALUES = new Set(['complete', 'partial', 'unavailable']);
 const QUALITY_RANK = new Map([['complete', 0], ['partial', 1], ['unavailable', 2]]);
 const REVENUE_CATEGORIES = new Set(['revenue', 'revenue_return']);
 const COST_OF_GOODS_CATEGORY = 'cost_of_goods';
+const WB_TRANSFER_CATEGORIES = new Set([
+  'acquiring', 'logistics', 'storage', 'acceptance', 'penalty', 'deduction',
+  'commission_adjustment', 'other_adjustment', 'promotion', 'pickup_reward',
+  'wb_reward_without_vat', 'wb_reward_vat'
+]);
 const STORE_RESULT_METHODS = new Set(['financial-result-v7', 'financial-result-v8', 'financial-result-v9', 'financial-result-v10', 'financial-result-v11', 'financial-result-v12', 'financial-result-v13', 'financial-result-v14']);
 const MISSING_REASON_ORDER = [
   'cost_missing',
@@ -251,7 +256,7 @@ export function buildFinancialPeriodOverview(envelope, { timezone = 'Europe/Mosc
     if (envelope.lines?.length || envelope.totals !== null && envelope.totals !== undefined) invalid('overview_unavailable_has_values');
     return {
       publicationId, methodVersion, scope, period, quality, missingReasons, coverage,
-      totals: { revenue: null, wbExpenses: null, costOfGoods: null, tax: null, availableResultBeforeTax: null, availableResultAfterTax: null },
+      totals: { revenue: null, wbExpenses: null, toTransfer: null, costOfGoods: null, tax: null, availableResultBeforeTax: null, availableResultAfterTax: null },
       displayResult: { amount: null, basis: 'unavailable' },
       situationEvidence:null
     };
@@ -268,6 +273,8 @@ export function buildFinancialPeriodOverview(envelope, { timezone = 'Europe/Mosc
   const revenue = resultLines.filter(line => REVENUE_CATEGORIES.has(line.category)).reduce((sum, line) => sum + line.amount, 0n);
   const costOfGoods = -resultLines.filter(line => line.category === COST_OF_GOODS_CATEGORY).reduce((sum, line) => sum + line.amount, 0n);
   const wbExpenses = -resultLines.filter(line => !REVENUE_CATEGORIES.has(line.category) && line.category !== COST_OF_GOODS_CATEGORY).reduce((sum, line) => sum + line.amount, 0n);
+  const wbTransferAdjustments = resultLines.filter(line => WB_TRANSFER_CATEGORIES.has(line.category)).reduce((sum, line) => sum + line.amount, 0n);
+  const toTransfer = revenue + wbTransferAdjustments;
   const storeTotal=lines.filter(line=>line.scope==='store'&&line.category!=='estimated_usn_tax').reduce((sum,line)=>sum+line.amount,0n);
   const persisted = normalizeTotals(envelope.totals,methodVersion);
   const calculatedTotal=includesStoreResult?selectedTotal+storeTotal:selectedTotal;
@@ -286,6 +293,7 @@ export function buildFinancialPeriodOverview(envelope, { timezone = 'Europe/Mosc
     totals: {
       revenue: formatScale4Money(revenue),
       wbExpenses: formatScale4Money(wbExpenses),
+      toTransfer: formatScale4Money(toTransfer),
       costOfGoods: formatScale4Money(costOfGoods),
       tax: tax.tax === null ? null : formatScale4Money(tax.tax),
       availableResultBeforeTax: formatScale4Money(persisted.beforeTax),

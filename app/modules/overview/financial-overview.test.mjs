@@ -32,7 +32,7 @@ function envelope({
 } = {}) {
   const lines = [
     { result_scope: 'selected_product', accounting_date: periodStart, category_code: 'revenue', amount_signed: revenue, quality },
-    { result_scope: 'selected_product', accounting_date: periodStart, category_code: 'commission', amount_signed: expenseLine, quality },
+    { result_scope: 'selected_product', accounting_date: periodStart, category_code: 'logistics', amount_signed: expenseLine, quality },
     ...(storeBeforeTax === '0.0000' ? [] : [{ result_scope: 'store', accounting_date: periodStart, category_code: 'store_expenses', amount_signed: storeBeforeTax, quality }]),
     ...(tax === null ? [] : [{ result_scope: 'selected_product', accounting_date: periodEnd, category_code: 'estimated_usn_tax', amount_signed: `-${tax}`, quality }])
   ];
@@ -108,12 +108,22 @@ test('period overview separates WB expenses and cost of goods from persisted evi
   assert.deepEqual(overview.totals, {
     revenue: '130.0000',
     wbExpenses: '30.0000',
+    toTransfer: '100.0000',
     costOfGoods: '0.0000',
     tax: '6.0000',
     availableResultBeforeTax: '100.0000',
     availableResultAfterTax: '94.0000'
   });
   assert.deepEqual(overview.displayResult, { amount: '94.0000', basis: 'after_tax' });
+});
+
+test('unavailable period exposes no calculated transfer amount', () => {
+  const overview = buildFinancialPeriodOverview({
+    publication_id: 'publication-1', method_version: 'financial-result-v14',
+    period_start: '2026-09-14', period_end: '2026-09-20', quality: 'unavailable',
+    missing_reasons: ['published_period_missing'], lines: [], totals: null
+  });
+  assert.equal(overview.totals.toTransfer, null);
 });
 
 test('v8 overview includes confirmed store expenses once in the 07-13 September result',()=>{
@@ -123,7 +133,7 @@ test('v8 overview includes confirmed store expenses once in the 07-13 September 
     beforeTax:'924.1800',tax:'506.5674',afterTax:'417.6126'
   }));
   assert.deepEqual(overview.totals,{
-    revenue:'8442.7900',wbExpenses:'7518.6100',costOfGoods:'0.0000',tax:'506.5674',
+    revenue:'8442.7900',wbExpenses:'7518.6100',toTransfer:'5593.7900',costOfGoods:'0.0000',tax:'506.5674',
     availableResultBeforeTax:'924.1800',availableResultAfterTax:'417.6126'
   });
   assert.deepEqual(overview.displayResult,{amount:'417.6126',basis:'after_tax'});
@@ -137,7 +147,7 @@ test('current and compatible overviews include result-affecting rows without a p
       beforeTax:'-2339.6200',tax:'306.8000',afterTax:'-2646.4200'
     }));
     assert.deepEqual(overview.totals,{
-      revenue:'3835.0000',wbExpenses:'6174.6200',costOfGoods:'0.0000',tax:'306.8000',
+      revenue:'3835.0000',wbExpenses:'6174.6200',toTransfer:'2614.0000',costOfGoods:'0.0000',tax:'306.8000',
       availableResultBeforeTax:'-2339.6200',availableResultAfterTax:'-2646.4200'
     });
   }
@@ -153,6 +163,7 @@ test('legacy v12 publication remains reproducible with loyalty compensation in i
   const overview=buildFinancialPeriodOverview(raw);
   assert.equal(overview.totals.revenue,'100.0000');
   assert.equal(overview.totals.wbExpenses,'8.5000');
+  assert.equal(overview.totals.toTransfer,'90.0000');
   assert.equal(overview.totals.costOfGoods,'0.0000');
   assert.equal(overview.totals.availableResultBeforeTax,'91.5000');
 });
@@ -169,6 +180,7 @@ test('v9 overview reports store-scoped revenue and returns as revenue instead of
   const overview=buildFinancialPeriodOverview(raw);
   assert.equal(overview.totals.revenue,'80.0000');
   assert.equal(overview.totals.wbExpenses,'0.0000');
+  assert.equal(overview.totals.toTransfer,'80.0000');
   assert.equal(overview.totals.costOfGoods,'0.0000');
 });
 
@@ -181,7 +193,21 @@ test('revenue includes revenue_return and ignores store-scope lines in selected 
   const overview = buildFinancialPeriodOverview(raw);
   assert.equal(overview.totals.revenue, '130.0000');
   assert.equal(overview.totals.wbExpenses, '30.0000');
+  assert.equal(overview.totals.toTransfer, '100.0000');
   assert.equal(overview.totals.costOfGoods, '0.0000');
+});
+
+test('manual product and store expenses do not reduce the calculated transfer amount',()=>{
+  const raw=envelope({
+    methodVersion:'financial-result-v14',revenue:'100.0000',expenseLine:'-10.0000',
+    selectedBeforeTax:'85.0000',storeBeforeTax:'-3.0000',beforeTax:'82.0000',tax:null,afterTax:null
+  });
+  raw.lines.splice(2,0,
+    {result_scope:'selected_product',accounting_date:'2026-09-15',category_code:'packaging',amount_signed:'-5.0000',quality:'complete'}
+  );
+  const overview=buildFinancialPeriodOverview(raw);
+  assert.equal(overview.totals.wbExpenses,'18.0000');
+  assert.equal(overview.totals.toTransfer,'90.0000');
 });
 
 test('dashboard breakdown preserves the 17-23 August result while moving loyalty compensation out of revenue',()=>{
@@ -197,10 +223,29 @@ test('dashboard breakdown preserves the 17-23 August result while moving loyalty
   raw.totals.storeLevelResultBeforeTax='-48.4300';
   const overview=buildFinancialPeriodOverview(raw);
   assert.deepEqual(overview.totals,{
-    revenue:'11069.3200',wbExpenses:'5852.6900',costOfGoods:'3256.0000',tax:'885.5456',
+    revenue:'11069.3200',wbExpenses:'5852.6900',toTransfer:'5265.0600',costOfGoods:'3256.0000',tax:'885.5456',
     availableResultBeforeTax:'1960.6300',availableResultAfterTax:'1075.0844'
   });
   assert.deepEqual(overview.displayResult,{amount:'1075.0844',basis:'after_tax'});
+});
+
+test('v14 overview keeps loyalty reference out of the 17-23 August transfer amount',()=>{
+  const raw=envelope({
+    methodVersion:'financial-result-v14',periodStart:'2026-08-17',periodEnd:'2026-08-23',
+    revenue:'11069.3200',expenseLine:'-5804.2600',selectedBeforeTax:'2009.0600',storeBeforeTax:'-50.4300',
+    beforeTax:'1958.6300',tax:'885.5456',afterTax:'1073.0844'
+  });
+  raw.lines.splice(2,0,
+    {result_scope:'selected_product',accounting_date:'2026-08-19',category_code:'cost_of_goods',amount_signed:'-3256.0000',quality:'complete'},
+    {result_scope:'reconciliation',accounting_date:'2026-08-19',category_code:'loyalty_discount_reference',amount_signed:'2.0000',quality:'complete'}
+  );
+  raw.lines.find(line=>line.category_code==='store_expenses').category_code='deduction';
+  const overview=buildFinancialPeriodOverview(raw);
+  assert.deepEqual(overview.totals,{
+    revenue:'11069.3200',wbExpenses:'5854.6900',toTransfer:'5214.6300',costOfGoods:'3256.0000',tax:'885.5456',
+    availableResultBeforeTax:'1958.6300',availableResultAfterTax:'1073.0844'
+  });
+  assert.deepEqual(overview.displayResult,{amount:'1073.0844',basis:'after_tax'});
 });
 
 test('unusable tax is not silently treated as zero and result explicitly stays before tax', () => {
