@@ -103,11 +103,12 @@ test('scale-4 money stays exact beyond Number safe precision', () => {
   assert.throws(() => parseScale4Money('1.00001'), { message: 'overview_invalid_money' });
 });
 
-test('period overview derives revenue, expenses and after-tax display result from persisted evidence', () => {
+test('period overview separates WB expenses and cost of goods from persisted evidence', () => {
   const overview = buildFinancialPeriodOverview(envelope());
   assert.deepEqual(overview.totals, {
     revenue: '130.0000',
-    expenses: '30.0000',
+    wbExpenses: '30.0000',
+    costOfGoods: '0.0000',
     tax: '6.0000',
     availableResultBeforeTax: '100.0000',
     availableResultAfterTax: '94.0000'
@@ -122,7 +123,7 @@ test('v8 overview includes confirmed store expenses once in the 07-13 September 
     beforeTax:'924.1800',tax:'506.5674',afterTax:'417.6126'
   }));
   assert.deepEqual(overview.totals,{
-    revenue:'8442.7900',expenses:'7518.6100',tax:'506.5674',
+    revenue:'8442.7900',wbExpenses:'7518.6100',costOfGoods:'0.0000',tax:'506.5674',
     availableResultBeforeTax:'924.1800',availableResultAfterTax:'417.6126'
   });
   assert.deepEqual(overview.displayResult,{amount:'417.6126',basis:'after_tax'});
@@ -136,13 +137,13 @@ test('current and compatible overviews include result-affecting rows without a p
       beforeTax:'-2339.6200',tax:'306.8000',afterTax:'-2646.4200'
     }));
     assert.deepEqual(overview.totals,{
-      revenue:'3835.0000',expenses:'6174.6200',tax:'306.8000',
+      revenue:'3835.0000',wbExpenses:'6174.6200',costOfGoods:'0.0000',tax:'306.8000',
       availableResultBeforeTax:'-2339.6200',availableResultAfterTax:'-2646.4200'
     });
   }
 });
 
-test('loyalty compensation changes revenue without distorting expenses',()=>{
+test('loyalty compensation reduces WB expenses without changing revenue',()=>{
   const raw=envelope({methodVersion:'financial-result-v12',revenue:'100.0000',expenseLine:'-10.0000',selectedBeforeTax:'92.0000',storeBeforeTax:'-0.5000',beforeTax:'91.5000',tax:null,afterTax:null});
   raw.lines=raw.lines.filter(line=>line.category_code!=='store_expenses');
   raw.lines.push(
@@ -150,8 +151,9 @@ test('loyalty compensation changes revenue without distorting expenses',()=>{
     {result_scope:'store',accounting_date:'2026-09-15',category_code:'loyalty_compensation',amount_signed:'-0.5000',quality:'complete'}
   );
   const overview=buildFinancialPeriodOverview(raw);
-  assert.equal(overview.totals.revenue,'101.5000');
-  assert.equal(overview.totals.expenses,'10.0000');
+  assert.equal(overview.totals.revenue,'100.0000');
+  assert.equal(overview.totals.wbExpenses,'8.5000');
+  assert.equal(overview.totals.costOfGoods,'0.0000');
   assert.equal(overview.totals.availableResultBeforeTax,'91.5000');
 });
 
@@ -166,7 +168,8 @@ test('v9 overview reports store-scoped revenue and returns as revenue instead of
   raw.totals.availableResultAfterTax='80.0000';
   const overview=buildFinancialPeriodOverview(raw);
   assert.equal(overview.totals.revenue,'80.0000');
-  assert.equal(overview.totals.expenses,'0.0000');
+  assert.equal(overview.totals.wbExpenses,'0.0000');
+  assert.equal(overview.totals.costOfGoods,'0.0000');
 });
 
 test('revenue includes revenue_return and ignores store-scope lines in selected product result', () => {
@@ -177,7 +180,27 @@ test('revenue includes revenue_return and ignores store-scope lines in selected 
   );
   const overview = buildFinancialPeriodOverview(raw);
   assert.equal(overview.totals.revenue, '130.0000');
-  assert.equal(overview.totals.expenses, '30.0000');
+  assert.equal(overview.totals.wbExpenses, '30.0000');
+  assert.equal(overview.totals.costOfGoods, '0.0000');
+});
+
+test('dashboard breakdown preserves the 17-23 August result while moving loyalty compensation out of revenue',()=>{
+  const raw=envelope({
+    methodVersion:'financial-result-v12',periodStart:'2026-08-17',periodEnd:'2026-08-23',
+    revenue:'11069.3200',expenseLine:'-5804.2600',selectedBeforeTax:'2009.0600',storeBeforeTax:'-50.4300',
+    beforeTax:'1960.6300',tax:'885.5456',afterTax:'1075.0844'
+  });
+  raw.lines.splice(2,0,
+    {result_scope:'selected_product',accounting_date:'2026-08-19',category_code:'cost_of_goods',amount_signed:'-3256.0000',quality:'complete'},
+    {result_scope:'store',accounting_date:'2026-08-19',category_code:'loyalty_compensation',amount_signed:'2.0000',quality:'complete'}
+  );
+  raw.totals.storeLevelResultBeforeTax='-48.4300';
+  const overview=buildFinancialPeriodOverview(raw);
+  assert.deepEqual(overview.totals,{
+    revenue:'11069.3200',wbExpenses:'5852.6900',costOfGoods:'3256.0000',tax:'885.5456',
+    availableResultBeforeTax:'1960.6300',availableResultAfterTax:'1075.0844'
+  });
+  assert.deepEqual(overview.displayResult,{amount:'1075.0844',basis:'after_tax'});
 });
 
 test('unusable tax is not silently treated as zero and result explicitly stays before tax', () => {

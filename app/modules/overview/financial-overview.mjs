@@ -2,7 +2,9 @@ const MONEY_SCALE = 4;
 const DAY_MS = 86400000;
 const QUALITY_VALUES = new Set(['complete', 'partial', 'unavailable']);
 const QUALITY_RANK = new Map([['complete', 0], ['partial', 1], ['unavailable', 2]]);
-const REVENUE_CATEGORIES = new Set(['revenue', 'revenue_return', 'loyalty_compensation']);
+const REVENUE_CATEGORIES = new Set(['revenue', 'revenue_return']);
+const COST_OF_GOODS_CATEGORY = 'cost_of_goods';
+const STORE_RESULT_METHODS = new Set(['financial-result-v7', 'financial-result-v8', 'financial-result-v9', 'financial-result-v10', 'financial-result-v11', 'financial-result-v12']);
 const MISSING_REASON_ORDER = [
   'cost_missing',
   'return_original_sale_unmatched',
@@ -249,7 +251,7 @@ export function buildFinancialPeriodOverview(envelope, { timezone = 'Europe/Mosc
     if (envelope.lines?.length || envelope.totals !== null && envelope.totals !== undefined) invalid('overview_unavailable_has_values');
     return {
       publicationId, methodVersion, scope, period, quality, missingReasons, coverage,
-      totals: { revenue: null, expenses: null, tax: null, availableResultBeforeTax: null, availableResultAfterTax: null },
+      totals: { revenue: null, wbExpenses: null, costOfGoods: null, tax: null, availableResultBeforeTax: null, availableResultAfterTax: null },
       displayResult: { amount: null, basis: 'unavailable' },
       situationEvidence:null
     };
@@ -261,12 +263,15 @@ export function buildFinancialPeriodOverview(envelope, { timezone = 'Europe/Mosc
   const beforeTaxLines = selected.filter(line => line.category !== 'estimated_usn_tax');
   const taxLines = selected.filter(line => line.category === 'estimated_usn_tax');
   const selectedTotal = beforeTaxLines.reduce((sum, line) => sum + line.amount, 0n);
-  const revenue = lines.filter(line => (line.scope==='selected_product'||line.scope==='store')&&REVENUE_CATEGORIES.has(line.category)).reduce((sum, line) => sum + line.amount, 0n);
+  const includesStoreResult = STORE_RESULT_METHODS.has(methodVersion);
+  const resultLines = lines.filter(line => (line.scope === 'selected_product' || (includesStoreResult && line.scope === 'store')) && line.category !== 'estimated_usn_tax');
+  const revenue = resultLines.filter(line => REVENUE_CATEGORIES.has(line.category)).reduce((sum, line) => sum + line.amount, 0n);
+  const costOfGoods = -resultLines.filter(line => line.category === COST_OF_GOODS_CATEGORY).reduce((sum, line) => sum + line.amount, 0n);
+  const wbExpenses = -resultLines.filter(line => !REVENUE_CATEGORIES.has(line.category) && line.category !== COST_OF_GOODS_CATEGORY).reduce((sum, line) => sum + line.amount, 0n);
   const storeTotal=lines.filter(line=>line.scope==='store'&&line.category!=='estimated_usn_tax').reduce((sum,line)=>sum+line.amount,0n);
   const persisted = normalizeTotals(envelope.totals,methodVersion);
-  const calculatedTotal=['financial-result-v7','financial-result-v8','financial-result-v9','financial-result-v10','financial-result-v11','financial-result-v12'].includes(methodVersion)?selectedTotal+storeTotal:selectedTotal;
+  const calculatedTotal=includesStoreResult?selectedTotal+storeTotal:selectedTotal;
   if(calculatedTotal!==persisted.beforeTax)invalid('overview_total_mismatch');
-  const expenses = revenue - persisted.beforeTax;
   const tax = normalizeTax(envelope.taxReference, persisted, taxLines.reduce((sum, line) => sum + line.amount, 0n), taxLines.length > 0);
   const displayAmount = tax.basis === 'after_tax' ? tax.afterTax : persisted.beforeTax;
 
@@ -280,7 +285,8 @@ export function buildFinancialPeriodOverview(envelope, { timezone = 'Europe/Mosc
     coverage,
     totals: {
       revenue: formatScale4Money(revenue),
-      expenses: formatScale4Money(expenses),
+      wbExpenses: formatScale4Money(wbExpenses),
+      costOfGoods: formatScale4Money(costOfGoods),
       tax: tax.tax === null ? null : formatScale4Money(tax.tax),
       availableResultBeforeTax: formatScale4Money(persisted.beforeTax),
       availableResultAfterTax: tax.afterTax === null ? null : formatScale4Money(tax.afterTax)
