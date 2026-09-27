@@ -61,14 +61,55 @@ test('loyalty compensation is ignored even for legacy product or store classific
   const result=calculateFinancialResult({periodStart:'2026-08-17',periodEnd:'2026-08-23',selectedProductIds:['product-1'],reportCoverageComplete:true,
     financialComponents:[
       {id:'revenue',classificationStatus:'confirmed',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-08-18',categoryCode:'revenue',amountSigned:'100'},
-      {id:'linked',classificationStatus:'confirmed',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-08-19',categoryCode:'loyalty_compensation',amountSigned:'2'},
-      {id:'store-reversal',classificationStatus:'confirmed',scopeCode:'store',accountingDate:'2026-08-20',categoryCode:'loyalty_compensation',amountSigned:'-0.5'}
+      {id:'linked',classificationStatus:'confirmed',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-08-19',categoryCode:'loyalty_compensation',sourceField:'cashbackDiscount',amountSigned:'2'},
+      {id:'store-reversal',classificationStatus:'confirmed',scopeCode:'store',accountingDate:'2026-08-20',categoryCode:'loyalty_compensation',sourceField:'cashbackDiscount',amountSigned:'-0.5'}
     ]});
   assert.equal(result.totals.selectedProductsResultBeforeTax,'100.0000');
   assert.equal(result.totals.storeLevelResultBeforeTax,'0.0000');
   assert.equal(result.totals.availableResultBeforeTax,'100.0000');
   assert.deepEqual(result.lines.map(line=>line.categoryCode),['revenue']);
   assert.equal(result.missingReasons.includes('operation_unclassified'),false);
+});
+
+test('an unclassified operation with only resolved non-result fields does not degrade result quality',()=>{
+  const taxReference=calculateStoreTaxReference({
+    periodStart:'2026-08-17',periodEnd:'2026-08-23',selectedProductIds:['product-1'],
+    sourceRows:[{id:'sale-source',productId:'product-1',accountingDate:'2026-08-18',docTypeName:'Продажа',sellerOperName:'Продажа',retailAmount:'100'}],
+    taxSettings:[{id:'tax',effectiveFrom:'2026-01-01',regimeCode:'usn_income',usnRateFraction:'0.08'}]
+  });
+  const result=calculateFinancialResult({
+    periodStart:'2026-08-17',periodEnd:'2026-08-23',selectedProductIds:['product-1'],
+    operations:[{id:'settlement-only',operationType:'unclassified',accountingDate:'2026-08-19'}],
+    financialComponents:[
+      {id:'revenue',classificationStatus:'confirmed',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-08-18',categoryCode:'revenue',amountSigned:'100'},
+      {id:'commission-reference',operationVersionId:'settlement-only',classificationStatus:'unclassified',scopeCode:'reconciliation',accountingDate:'2026-08-19',categoryCode:'commission',sourceField:'ppvzSalesCommission',amountSigned:'-2119.6100'}
+    ],
+    taxSetting:{regimeCode:'usn_income',usnRateFraction:'0.08',vatMode:'exempt'},
+    taxReference
+  });
+  assert.equal(result.quality,'complete');
+  assert.deepEqual(result.missingReasons,[]);
+  assert.equal(result.totals.availableResultBeforeTax,'100.0000');
+  assert.equal(result.totals.availableResultAfterTax,'92.0000');
+});
+
+test('an unclassified operation still fails closed for unknown reconciliation fields and invalid non-result scopes',()=>{
+  const base={
+    periodStart:'2026-08-17',periodEnd:'2026-08-23',selectedProductIds:['product-1'],
+    operations:[{id:'unknown',operationType:'unclassified',accountingDate:'2026-08-19'}],
+    financialComponents:[{id:'revenue',classificationStatus:'confirmed',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-08-18',categoryCode:'revenue',amountSigned:'100'}]
+  };
+  for(const component of [
+    {id:'unknown-reference',classificationStatus:'unclassified',scopeCode:'reconciliation',accountingDate:'2026-08-19',categoryCode:'unclassified_financial_field',sourceField:'agencyVat',amountSigned:'10'},
+    {id:'mis-scoped-payout',classificationStatus:'unclassified',scopeCode:'store',accountingDate:'2026-08-19',categoryCode:'payout',sourceField:'forPay',amountSigned:'10'},
+    {id:'rebill-wrong-field',classificationStatus:'unclassified',scopeCode:'reconciliation',accountingDate:'2026-08-19',categoryCode:'rebill_logistic_compensation',sourceField:'agencyVat',amountSigned:'10'},
+    {id:'loyalty-wrong-field',classificationStatus:'unclassified',scopeCode:'store',accountingDate:'2026-08-19',categoryCode:'loyalty_compensation',sourceField:'agencyVat',amountSigned:'10'}
+  ]){
+    const result=calculateFinancialResult({...base,financialComponents:[...base.financialComponents,component]});
+    assert.equal(result.quality,'partial');
+    assert.ok(result.missingReasons.includes('operation_unclassified'));
+    assert.equal(result.totals.availableResultBeforeTax,'100.0000');
+  }
 });
 
 test('money normalization preserves four decimal places without Number precision loss', () => {
@@ -132,10 +173,10 @@ test('calculation combines confirmed store charges with selected SKU result and 
     selectedProductIds: ['product-1'],
     financialComponents: [
       { id: 'fc-1', classificationStatus: 'confirmed', scopeCode: 'selected_product', productId: 'product-1', variantId: 'variant-1', accountingDate: '2026-07-13', categoryCode: 'revenue', amountSigned: '100.0000' },
-      { id: 'fc-2', classificationStatus: 'confirmed', scopeCode: 'selected_product', productId: 'product-1', variantId: 'variant-1', accountingDate: '2026-07-13', categoryCode: 'commission', amountSigned: '-12.5000' },
+      { id: 'fc-2', classificationStatus: 'confirmed', scopeCode: 'reconciliation', productId: null, accountingDate: '2026-07-13', categoryCode: 'commission', sourceField: 'ppvzSalesCommission', amountSigned: '-12.5000' },
       { id: 'fc-3', classificationStatus: 'confirmed', scopeCode: 'store', productId: null, accountingDate: '2026-07-14', categoryCode: 'storage', amountSigned: '-5.1250' },
       { id: 'fc-4', classificationStatus: 'confirmed', scopeCode: 'selected_product', productId: 'not-selected', accountingDate: '2026-07-13', categoryCode: 'revenue', amountSigned: '999.0000' },
-      { id: 'fc-5', classificationStatus: 'unclassified', scopeCode: 'reconciliation', accountingDate: '2026-07-13', categoryCode: 'payout', amountSigned: '82.3750' }
+      { id: 'fc-5', classificationStatus: 'unclassified', scopeCode: 'reconciliation', accountingDate: '2026-07-13', categoryCode: 'payout', sourceField: 'forPay', amountSigned: '82.3750' }
     ]
   });
   assert.equal(result.quality, 'partial');

@@ -6,7 +6,13 @@ const RESULT_CATEGORIES = new Set([
   'storage', 'acceptance', 'penalty', 'deduction', 'commission_adjustment',
   'other_adjustment', 'promotion', 'pickup_reward', 'wb_reward_without_vat', 'wb_reward_vat',
 ]);
-const NON_RESULT_CATEGORIES = new Set(['payout','commission','loyalty_compensation','loyalty_discount_reference']);
+const NON_RESULT_CATEGORIES = new Set(['payout','commission','loyalty_compensation','loyalty_discount_reference','rebill_logistic_compensation']);
+const VERIFIED_RECONCILIATION_COMPONENTS = new Map([
+  ['payout','forPay'],
+  ['commission','ppvzSalesCommission'],
+  ['loyalty_discount_reference','cashbackDiscount'],
+  ['rebill_logistic_compensation','rebillLogisticCost']
+]);
 const VERIFIED_WB_COMPONENTS = new Map([
   ['acquiringFee', { category: 'acquiring', operation: 'sale', document: 'продажа', names: new Set(['продажа']) }],
   ['deliveryService', { category: 'logistics', operation: 'service_charge', document: '', names: new Set(['логистика', 'доставка', 'коррекция стоимости доставки']) }],
@@ -435,6 +441,15 @@ function orderedReasons(reasons) {
   );
 }
 
+function isVerifiedNonResultComponent(component){
+  if(component?.categoryCode==='loyalty_compensation'){
+    return component?.sourceField==='cashbackDiscount'
+      &&['selected_product','store'].includes(component?.scopeCode);
+  }
+  return component?.scopeCode==='reconciliation'
+    &&VERIFIED_RECONCILIATION_COMPONENTS.get(component?.categoryCode)===component?.sourceField;
+}
+
 function totalsFor(lines,taxUsable=false) {
   let selected = 0n, store = 0n, tax=0n;
   for (const line of lines) {
@@ -476,13 +491,15 @@ export function calculateFinancialResult({
     if (component?.state === 'withdrawn' || !sourceInPeriod(component, range)) continue;
     const componentId = uniqueSource(seenSources, component?.id, 'financial_component');
     validateScopeStructure(component);
-    if(component?.categoryCode==='rebill_logistic_compensation'){
-      if(component?.scopeCode!=='reconciliation')reasons.add('operation_unclassified');
+    if (component?.productId && !selected.has(String(component.productId))) continue;
+    if (NON_RESULT_CATEGORIES.has(component?.categoryCode)) {
+      if(!isVerifiedNonResultComponent(component))reasons.add('operation_unclassified');
       continue;
     }
-    if (component?.productId && !selected.has(String(component.productId))) continue;
-    if (component?.scopeCode === 'reconciliation') continue;
-    if (NON_RESULT_CATEGORIES.has(component?.categoryCode)) continue;
+    if (component?.scopeCode === 'reconciliation') {
+      reasons.add('operation_unclassified');
+      continue;
+    }
     if (component?.classificationStatus !== 'confirmed') {
       reasons.add('operation_unclassified');
       continue;
@@ -521,10 +538,6 @@ export function calculateFinancialResult({
   for (const operation of operations) {
     if (operation?.state === 'withdrawn' || !sourceInPeriod(operation, range)) continue;
     const operationId = uniqueSource(seenSources, operation?.id, 'operation');
-    if (operation?.operationType === 'unclassified') {
-      reasons.add('operation_unclassified');
-      continue;
-    }
     if (!['sale', 'return'].includes(operation?.operationType)) continue;
     const scope = resolveScope({ ...operation, scopeCode: operation.scopeCode ?? 'selected_product' }, selected, reasons);
     if (!scope) continue;

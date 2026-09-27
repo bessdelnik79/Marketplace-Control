@@ -9,7 +9,7 @@ const WB_TRANSFER_CATEGORIES = new Set([
   'commission_adjustment', 'other_adjustment', 'promotion', 'pickup_reward',
   'wb_reward_without_vat', 'wb_reward_vat'
 ]);
-const STORE_RESULT_METHODS = new Set(['financial-result-v7', 'financial-result-v8', 'financial-result-v9', 'financial-result-v10', 'financial-result-v11', 'financial-result-v12', 'financial-result-v13', 'financial-result-v14']);
+const STORE_RESULT_METHODS = new Set(['financial-result-v7', 'financial-result-v8', 'financial-result-v9', 'financial-result-v10', 'financial-result-v11', 'financial-result-v12', 'financial-result-v13', 'financial-result-v14', 'financial-result-v15', 'financial-result-v16']);
 const MISSING_REASON_ORDER = [
   'cost_missing',
   'return_original_sale_unmatched',
@@ -210,7 +210,7 @@ function normalizeTotals(value,methodVersion) {
   if(value.selectedProductsResultBeforeTax!==undefined){
     const selected=parseScale4Money(value.selectedProductsResultBeforeTax);
     const store=value.storeLevelResultBeforeTax===undefined?0n:parseScale4Money(value.storeLevelResultBeforeTax);
-    const expected=['financial-result-v7','financial-result-v8','financial-result-v9','financial-result-v10','financial-result-v11','financial-result-v12','financial-result-v13','financial-result-v14'].includes(methodVersion)?selected+store:selected;
+    const expected=['financial-result-v7','financial-result-v8','financial-result-v9','financial-result-v10','financial-result-v11','financial-result-v12','financial-result-v13','financial-result-v14','financial-result-v15','financial-result-v16'].includes(methodVersion)?selected+store:selected;
     if(expected!==beforeTax)invalid('overview_total_mismatch');
   }
   return {
