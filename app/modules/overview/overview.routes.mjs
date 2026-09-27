@@ -1,6 +1,6 @@
 import { calendarWeekForDate, validateCalendarPeriod } from './financial-overview.mjs';
 
-const CURRENT_FINANCIAL_METHODS = new Set(['financial-result-v15', 'financial-result-v16']);
+const CURRENT_FINANCIAL_METHODS = new Set(['financial-result-v17', 'financial-result-v18']);
 
 function requestedWeek(url) {
   const value = url.searchParams.get('week');

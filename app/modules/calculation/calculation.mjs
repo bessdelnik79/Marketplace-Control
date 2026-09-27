@@ -450,6 +450,42 @@ function isVerifiedNonResultComponent(component){
     &&VERIFIED_RECONCILIATION_COMPONENTS.get(component?.categoryCode)===component?.sourceField;
 }
 
+function isTransportReimbursementComponent(component){
+  const fieldMatches=(component?.sourceField==='vw'&&component?.categoryCode==='wb_reward_without_vat')
+    ||(component?.sourceField==='vwNds'&&component?.categoryCode==='wb_reward_vat')
+    ||(component?.sourceField==='rebillLogisticCost'&&component?.categoryCode==='rebill_logistic_compensation');
+  const rawValue=String(component?.rawValue??'').trim().replace(',', '.');
+  return fieldMatches
+    &&component?.operationType==='service_charge'
+    &&String(component?.docTypeName??'').trim()===''
+    &&String(component?.sellerOperName??'').trim()==='Возмещение издержек по перевозке/по складским операциям с товаром'
+    &&/^-?\d+(?:\.\d+)?$/.test(rawValue)
+    &&/[1-9]/.test(rawValue);
+}
+
+function verifiedTransportReimbursementReferenceIds(components){
+  const groups=new Map();
+  for(const component of components){
+    if(!isTransportReimbursementComponent(component))continue;
+    const operationId=String(component?.operationVersionId??'').trim();
+    if(!operationId)continue;
+    const group=groups.get(operationId)??[];
+    group.push(component);
+    groups.set(operationId,group);
+  }
+  const verified=new Set();
+  for(const group of groups.values()){
+    const fields=new Set(group.map(component=>component.sourceField));
+    if(!fields.has('rebillLogisticCost')||(!fields.has('vw')&&!fields.has('vwNds')))continue;
+    const net=group.reduce((sum,component)=>sum+money(component.amountSigned),0n);
+    if(net!==0n)continue;
+    for(const component of group){
+      if(component.sourceField==='vw'||component.sourceField==='vwNds')verified.add(String(component.id));
+    }
+  }
+  return verified;
+}
+
 function totalsFor(lines,taxUsable=false) {
   let selected = 0n, store = 0n, tax=0n;
   for (const line of lines) {
@@ -486,6 +522,7 @@ export function calculateFinancialResult({
   const reasons = new Set();
   const lines = new Map();
   const seenSources = new Set();
+  const transportReimbursementReferences=verifiedTransportReimbursementReferenceIds(financialComponents);
 
   for (const component of financialComponents) {
     if (component?.state === 'withdrawn' || !sourceInPeriod(component, range)) continue;
@@ -496,6 +533,7 @@ export function calculateFinancialResult({
       if(!isVerifiedNonResultComponent(component))reasons.add('operation_unclassified');
       continue;
     }
+    if(transportReimbursementReferences.has(String(componentId)))continue;
     if (component?.scopeCode === 'reconciliation') {
       reasons.add('operation_unclassified');
       continue;

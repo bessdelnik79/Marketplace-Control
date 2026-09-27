@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,31);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,32);
   pass('password identity and expiring session are stored by migration 2');
   const financialMethod=await one("select implementation_version from mc.method_versions where code='wb_finance_import' and version_no=1");
   assert.equal(financialMethod.implementation_version,'wb-finance-v1');
@@ -93,12 +93,18 @@ try {
   const financeMethodV11=await one("select implementation_version,parameters from mc.method_versions where code='wb_finance_import' and version_no=11");
   const resultMethodV13=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=13");
   const resultMethodV14=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=14");
+  const resultMethodV17=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=17");
+  const resultMethodV18=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=18");
   assert.equal(resultMethodV11.implementation_version,'financial-result-v11');
   assert.equal(resultMethodV12.implementation_version,'financial-result-v12');
   assert.equal(financeMethodV11.implementation_version,'wb-finance-v11');
   assert.equal(financeMethodV11.parameters.loyaltyCompensation,'reference-only-v1');
   assert.equal(resultMethodV13.implementation_version,'financial-result-v13');
   assert.equal(resultMethodV14.implementation_version,'financial-result-v14');
+  assert.equal(resultMethodV17.implementation_version,'financial-result-v17');
+  assert.equal(resultMethodV17.parameters.transportReimbursement,'reference-only-v1');
+  assert.equal(resultMethodV18.implementation_version,'financial-result-v18');
+  assert.equal(resultMethodV18.parameters.targetPeriod,true);
   assert.equal(resultMethodV14.parameters.targetPeriod,true);
   assert.equal(resultMethodV12.parameters.targetPeriod,true);
   assert.equal(resultMethodV10.parameters.targetPeriod,true);
@@ -116,6 +122,7 @@ try {
   assert.match(targetGuard,/financial-result-v12/);
   assert.match(targetGuard,/wb-finance-v10/);
   assert.match(targetGuard,/financial-result-v14/);
+  assert.match(targetGuard,/financial-result-v18/);
   assert.match(targetGuard,/wb-finance-v11/);
   const taxComputationColumns=(await q("select column_name from information_schema.columns where table_schema='mc' and table_name='tax_computations' order by column_name")).map(row=>row.column_name);
   assert.ok(taxComputationColumns.includes('product_id'));

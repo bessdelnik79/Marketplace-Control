@@ -93,7 +93,7 @@ test('overview keeps a current published period without scheduling another calcu
   let recovered=false;
   let scheduled=false;
   const state=setup({
-    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'complete',methodVersion:'financial-result-v16',publishedExact:true,missingReasons:[]}}),
+    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'complete',methodVersion:'financial-result-v18',publishedExact:true,missingReasons:[]}}),
     getFinancialPeriodRecoveryState:async()=>{recovered=true;return{status:'ready'};},
     scheduleFinancialCalculation:()=>{scheduled=true;}
   });

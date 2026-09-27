@@ -93,6 +93,32 @@ test('an unclassified operation with only resolved non-result fields does not de
   assert.equal(result.totals.availableResultAfterTax,'92.0000');
 });
 
+test('transport reimbursement vw and VAT references do not affect result or quality',()=>{
+  const result=calculateFinancialResult({
+    periodStart:'2026-08-17',periodEnd:'2026-08-23',selectedProductIds:['product-1'],
+    financialComponents:[
+      {id:'revenue',classificationStatus:'confirmed',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-08-18',categoryCode:'revenue',sourceField:'retailAmount',rawValue:'100',operationType:'sale',docTypeName:'Продажа',sellerOperName:'Продажа',amountSigned:'100'},
+      {id:'rebill',operationVersionId:'transport-row',classificationStatus:'confirmed',scopeCode:'reconciliation',productId:'product-1',accountingDate:'2026-08-19',categoryCode:'rebill_logistic_compensation',sourceField:'rebillLogisticCost',rawValue:'18.97501',operationType:'service_charge',docTypeName:'',sellerOperName:'Возмещение издержек по перевозке/по складским операциям с товаром',amountSigned:'-18.9800'},
+      {id:'vw',operationVersionId:'transport-row',classificationStatus:'unclassified',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-08-19',categoryCode:'wb_reward_without_vat',sourceField:'vw',rawValue:'-15.547',operationType:'service_charge',docTypeName:'',sellerOperName:'Возмещение издержек по перевозке/по складским операциям с товаром',amountSigned:'15.5500'},
+      {id:'vat',operationVersionId:'transport-row',classificationStatus:'unclassified',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-08-19',categoryCode:'wb_reward_vat',sourceField:'vwNds',rawValue:'-3.42801',operationType:'service_charge',docTypeName:'',sellerOperName:'Возмещение издержек по перевозке/по складским операциям с товаром',amountSigned:'3.4300'}
+    ]
+  });
+  assert.equal(result.missingReasons.includes('operation_unclassified'),false);
+  assert.equal(result.totals.availableResultBeforeTax,'100.0000');
+  assert.deepEqual(result.lines.map(line=>line.categoryCode),['revenue']);
+});
+
+test('transport reimbursement references remain fail-closed without an exact zero companion set',()=>{
+  const base={periodStart:'2026-08-17',periodEnd:'2026-08-23',selectedProductIds:['product-1']};
+  for(const financialComponents of [
+    [{id:'vw-only',operationVersionId:'row-1',classificationStatus:'unclassified',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-08-19',categoryCode:'wb_reward_without_vat',sourceField:'vw',rawValue:'15',operationType:'service_charge',docTypeName:'',sellerOperName:'Возмещение издержек по перевозке/по складским операциям с товаром',amountSigned:'15'}],
+    [
+      {id:'rebill',operationVersionId:'row-2',classificationStatus:'confirmed',scopeCode:'reconciliation',productId:'product-1',accountingDate:'2026-08-19',categoryCode:'rebill_logistic_compensation',sourceField:'rebillLogisticCost',rawValue:'10',operationType:'service_charge',docTypeName:'',sellerOperName:'Возмещение издержек по перевозке/по складским операциям с товаром',amountSigned:'-10'},
+      {id:'vw',operationVersionId:'row-2',classificationStatus:'unclassified',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-08-19',categoryCode:'wb_reward_without_vat',sourceField:'vw',rawValue:'-9',operationType:'service_charge',docTypeName:'',sellerOperName:'Возмещение издержек по перевозке/по складским операциям с товаром',amountSigned:'9'}
+    ]
+  ])assert.ok(calculateFinancialResult({...base,financialComponents}).missingReasons.includes('operation_unclassified'));
+});
+
 test('an unclassified operation still fails closed for unknown reconciliation fields and invalid non-result scopes',()=>{
   const base={
     periodStart:'2026-08-17',periodEnd:'2026-08-23',selectedProductIds:['product-1'],
