@@ -44,8 +44,7 @@ export async function beginFinancialSync(userId,storeId,{force=false,historical=
     const targeted=Boolean(requestedRange||targetPeriod);
     if(targeted&&(!requestedFrom||!requestedTo||!targetFrom||!targetTo||requestedFrom>requestedTo||targetFrom>targetTo))throw new Error('financial_invalid_request');
     const row=(await client.query(
-      `select ss.id as stream_id,ss.next_run_at,ss.last_success_at,ss.cursor,cs.ciphertext,cs.nonce,cs.auth_tag,s.external_account_id as seller_id,
-              exists(select 1 from mc.product_selections ps where ps.business_id=s.business_id and ps.store_id=s.id and ps.status='confirmed') as selected
+      `select ss.id as stream_id,ss.next_run_at,ss.last_success_at,ss.cursor,cs.ciphertext,cs.nonce,cs.auth_tag,s.external_account_id as seller_id
          from mc.stores s
          join mc.connections c on c.business_id=s.business_id and c.store_id=s.id and c.status='active'
          join mc.connection_secrets cs on cs.business_id=c.business_id and cs.connection_id=c.id
@@ -54,7 +53,6 @@ export async function beginFinancialSync(userId,storeId,{force=false,historical=
         for update of ss`,[businessId,storeId]
     )).rows[0];
     if(!row)throw new Error('financial_connection_unavailable');
-    if(!row.selected)return {started:false,reason:'selection_required'};
     if(!force&&row.next_run_at&&new Date(row.next_run_at)>new Date())return {started:false,reason:'not_due'};
     const running=(await client.query(`select id,started_at from mc.sync_runs where stream_id=$1 and status='running'`,[row.stream_id])).rows[0];
     if(running&&new Date(running.started_at)>new Date(Date.now()-3*60*60*1000))return {started:false,reason:'running'};

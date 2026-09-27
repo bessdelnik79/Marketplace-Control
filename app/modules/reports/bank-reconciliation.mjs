@@ -113,7 +113,15 @@ export async function loadWbFinancialSummaries(token, { dateFrom, dateTo, fetchI
       });
     } catch { throw new Error('financial_summary_unavailable'); }
     if (response.status === 204) return normalizeFinancialSummaries(rows);
-    if (response.status === 401 || response.status === 403) throw new Error('financial_summary_unauthorized');
+    if (response.status === 400 || response.status === 403) {
+      const body = await response.text().catch(() => '');
+      if (/unavailable for (?:your|the) registration country|недоступ\w* для (?:вашей )?стран\w* регистрации/i.test(body)) {
+        throw new Error('financial_summary_unsupported_country');
+      }
+      if(response.status === 403)throw new Error('financial_summary_unauthorized');
+      throw new Error('financial_summary_unavailable');
+    }
+    if (response.status === 401) throw new Error('financial_summary_unauthorized');
     if (response.status === 429) throw new Error('financial_summary_rate_limited');
     if (!response.ok) throw new Error('financial_summary_unavailable');
     const batch = parseFinancialJson(await response.text());

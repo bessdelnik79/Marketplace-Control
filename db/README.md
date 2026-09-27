@@ -2,7 +2,7 @@
 
 Готовые транзакционные миграции PostgreSQL и проверки модели. На VM работает подключение WB с зашифрованным хранением токена, загрузка каталога и детализации финансовых отчётов; обработчик платежей ещё не реализован.
 
-- [Исходная миграция](migrations/001_initial.sql), [регистрация с паролем](migrations/002_password_auth.sql), [зашифрованные секреты WB](migrations/006_wb_connection_secrets.sql), [изображения каталога](migrations/007_product_images.sql), [расширение выбора товаров](migrations/008_extend_product_selection.sql), [финансовая синхронизация](migrations/009_financial_report_sync.sql), [общий лимитер запросов WB](migrations/010_wb_api_request_slots.sql), [пользовательские финансовые входы](migrations/011_user_financial_inputs.sql), [воспроизводимый расчёт P0.3](migrations/012_financial_calculation.sql), [сводки отчётов](migrations/013_financial_report_summaries.sql), [подтверждённые компоненты](migrations/014_financial_result_verified_components.sql), [store scope](migrations/015_wb_finance_store_scope.sql), [налоговую базу продавца](migrations/016_seller_defined_usn_reference.sql), [сохранённый налог выбранных SKU](migrations/017_selected_sku_tax_results.sql), [жизненный цикл проблем данных](migrations/018_data_issue_lifecycle.sql), [недельные результаты P0.3](migrations/019_p03_period_return_results.sql), [оперативные версии Sales Funnel](migrations/020_operational_sales_funnel.sql), [первый список due-потоков](migrations/021_operational_sync_scheduler.sql), [внутреннюю RLS-safe очередь целей](migrations/022_operational_sync_targets.sql), [проверенные магазинные правила WB](migrations/023_financial_verified_store_rules.sql), [исключение служебных идентификаторов WB](migrations/024_financial_transaction_identifiers.sql), [методику расходов WB v7](migrations/025_financial_expense_method.sql), [reconciliation-методику v8](migrations/026_rebill_reconciliation_method.sql), [store-level строки без товара v9](migrations/027_store_rows_without_product_method.sql), [exact-range расчёт v10](migrations/028_target_period_calculation.sql), последующие версии финансовой методики `029–033` и [durable-очередь заданий](migrations/034_financial_event_queue.sql).
+- [Исходная миграция](migrations/001_initial.sql), [регистрация с паролем](migrations/002_password_auth.sql), [зашифрованные секреты WB](migrations/006_wb_connection_secrets.sql), [изображения каталога](migrations/007_product_images.sql), [расширение выбора товаров](migrations/008_extend_product_selection.sql), [финансовая синхронизация](migrations/009_financial_report_sync.sql), [общий лимитер запросов WB](migrations/010_wb_api_request_slots.sql), [пользовательские финансовые входы](migrations/011_user_financial_inputs.sql), [воспроизводимый расчёт P0.3](migrations/012_financial_calculation.sql), последующие финансовые и оперативные контракты `013–033`, [durable-очередь заданий](migrations/034_financial_event_queue.sql), [версия WB-ключа](migrations/035_wb_credential_generation.sql) и [недельный ledger с глобальным расписанием](migrations/036_financial_coverage_scheduler.sql).
 - [Схема и принятые решения](../outputs/database-v1.md).
 - [Все поля, типы, значения и ограничения](../outputs/database-v1-dictionary.md).
 - [Проверки](tests/schema.test.mjs).
@@ -66,6 +66,14 @@ JOBS_INTEGRATION_DATABASE_URL=postgresql:///marketplace_control_jobs_test node d
 ```
 
 Сценарий проверяет двух одновременных claimant, активную дедупликацию, heartbeat, retry/backoff, новый lease token после восстановления, terminal failure после исчерпания попыток, tenant isolation и отсутствие `PUBLIC EXECUTE` у внутренних функций. URL должен вести в пустую одноразовую БД с отдельным сегментом `test` в имени под superuser-ролью изолированного тестового кластера. Bootstrap создаёт fixture до появления tenant-контекста, но миграции и все проверяемые прикладные запросы выполняются через уникальную `NOLOGIN`-роль без `SUPERUSER` и `BYPASSRLS`; после теста созданные объекты, memberships и роли удаляются, включая обработанные ошибки setup.
+
+Версия WB-ключа и атомарный годовой план проверяются отдельно:
+
+```sh
+CREDENTIALS_INTEGRATION_DATABASE_URL=postgresql:///marketplace_control_credentials_test node db/tests/credentials.integration.mjs
+```
+
+Сценарий проверяет первый, повторный и изменённый ключ, 52/53 недельные записи, один job на generation, rollback и отсутствие секрета/fingerprint в payload и аудите.
 
 В среде без npm можно указать путь к установленному модулю PGlite через переменную `PGLITE_MODULE`. В текущей сессии использовался скачанный в `work/` пакет версии 0.3.14, проверенный по SHA-512 из реестра. Каталог `work/` исключён из Git.
 

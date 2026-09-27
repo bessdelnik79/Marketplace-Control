@@ -434,12 +434,14 @@
 | key_version | text | нет | 'v1'::text |
 | created_at | timestamp with time zone | нет | now() |
 | updated_at | timestamp with time zone | нет | now() |
+| credential_fingerprint | text | да | — |
 
 Ограничения и связи:
 
 - `CHECK ((octet_length(auth_tag) = 16))`
 - `FOREIGN KEY (business_id, connection_id) REFERENCES mc.connections(business_id, id) ON DELETE CASCADE`
 - `UNIQUE (connection_id)`
+- `CHECK (((credential_fingerprint IS NULL) OR (credential_fingerprint ~ '^[0-9a-f]{64}$'::text)))`
 - `CHECK ((octet_length(nonce) = 12))`
 - `PRIMARY KEY (id)`
 
@@ -455,11 +457,13 @@
 | status | text | нет | 'pending'::text |
 | last_checked_at | timestamp with time zone | да | — |
 | created_at | timestamp with time zone | нет | now() |
+| credential_generation | bigint | нет | 0 |
 
 Ограничения и связи:
 
 - `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
 - `UNIQUE (business_id, store_id, id)`
+- `CHECK ((credential_generation >= 0))`
 - `PRIMARY KEY (id)`
 - `CHECK ((status = ANY (ARRAY['pending'::text, 'active'::text, 'invalid'::text, 'revoked'::text])))`
 
@@ -653,6 +657,23 @@
 - `PRIMARY KEY (id)`
 - `CHECK ((result_scope_classification = ANY (ARRAY['selected_product'::text, 'store'::text, 'product_expected'::text, 'unclassified'::text, 'reconciliation'::text])))`
 
+## financial_credential_backfill_targets
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| connection_id | uuid | нет | — |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| requested_by | uuid | нет | — |
+| attempt_count | integer | нет | 0 |
+| next_attempt_at | timestamp with time zone | нет | now() |
+| created_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `CHECK ((attempt_count >= 0))`
+- `PRIMARY KEY (connection_id)`
+
 ## financial_period_results
 
 | Поле | Тип | NULL | По умолчанию |
@@ -681,6 +702,29 @@
 - `UNIQUE (run_id, period_start, period_end)`
 - `CHECK (((totals IS NULL) OR (jsonb_typeof(totals) = 'object'::text)))`
 
+## financial_report_capabilities
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| business_id | uuid | нет | — |
+| connection_id | uuid | нет | — |
+| credential_generation | bigint | нет | — |
+| list_api | text | нет | 'unknown'::text |
+| detail_by_id_api | text | нет | 'unknown'::text |
+| fallback_mode | text | да | — |
+| reason_code | text | да | — |
+| observed_at | timestamp with time zone | да | — |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, connection_id) REFERENCES mc.connections(business_id, id) ON DELETE CASCADE`
+- `CHECK ((credential_generation > 0))`
+- `CHECK ((detail_by_id_api = ANY (ARRAY['unknown'::text, 'supported'::text, 'unsupported_country'::text])))`
+- `CHECK (((fallback_mode IS NULL) OR (fallback_mode = 'period'::text)))`
+- `CHECK ((list_api = ANY (ARRAY['unknown'::text, 'supported'::text, 'unsupported_country'::text])))`
+- `PRIMARY KEY (business_id, connection_id, credential_generation)`
+- `CHECK (((reason_code IS NULL) OR (reason_code ~ '^[a-z0-9][a-z0-9_.:-]{0,99}$'::text)))`
+
 ## financial_report_summary_versions
 
 | Поле | Тип | NULL | По умолчанию |
@@ -699,6 +743,89 @@
 - `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, sync_run_id) REFERENCES mc.sync_runs(business_id, store_id, id)`
 - `UNIQUE (report_version_id, checksum)`
+- `PRIMARY KEY (id)`
+
+## financial_schedule_targets
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| store_id | uuid | нет | — |
+| business_id | uuid | нет | — |
+| requested_by | uuid | нет | — |
+| credential_generation | bigint | нет | — |
+| store_status | text | нет | — |
+| connection_status | text | нет | — |
+| finance_enabled | boolean | нет | — |
+| last_schedule_boundary | date | нет | — |
+| updated_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `CHECK ((connection_status = ANY (ARRAY['pending'::text, 'active'::text, 'invalid'::text, 'revoked'::text])))`
+- `CHECK ((credential_generation > 0))`
+- `PRIMARY KEY (store_id)`
+- `CHECK ((store_status = ANY (ARRAY['active'::text, 'paused'::text, 'archived'::text])))`
+
+## financial_week_coverage
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| credential_generation | bigint | нет | — |
+| week_start | date | нет | — |
+| week_end | date | нет | — |
+| check_reasons | ARRAY | нет | '{}'::text[] |
+| coverage_status | text | нет | 'pending'::text |
+| inventory_confirmed_at | timestamp with time zone | да | — |
+| last_checked_at | timestamp with time zone | да | — |
+| freshness_due_at | timestamp with time zone | да | — |
+| next_retry_at | timestamp with time zone | да | — |
+| last_error_code | text | да | — |
+| created_at | timestamp with time zone | нет | now() |
+| updated_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `UNIQUE (business_id, store_id, credential_generation, week_start)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `CHECK (((EXTRACT(isodow FROM week_start) = (1)::numeric) AND (week_end = (week_start + 6))))`
+- `CHECK ((cardinality(check_reasons) > 0))`
+- `CHECK ((coverage_status = ANY (ARRAY['pending'::text, 'inventory_confirmed'::text, 'fetching'::text, 'complete'::text, 'partial'::text, 'retry'::text, 'unavailable'::text])))`
+- `CHECK ((credential_generation > 0))`
+- `CHECK (((last_error_code IS NULL) OR (last_error_code ~ '^[a-z0-9][a-z0-9_.:-]{0,99}$'::text)))`
+- `PRIMARY KEY (id)`
+
+## financial_week_inventory
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| coverage_id | uuid | нет | — |
+| external_report_id | text | нет | — |
+| inventory_checksum | text | нет | — |
+| report_type | text | да | — |
+| country | text | да | — |
+| period_start | date | нет | — |
+| period_end | date | нет | — |
+| fetch_status | text | нет | 'pending'::text |
+| first_seen_at | timestamp with time zone | нет | now() |
+| last_seen_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `UNIQUE (business_id, store_id, id)`
+- `CHECK ((period_end >= period_start))`
+- `UNIQUE (coverage_id, external_report_id)`
+- `FOREIGN KEY (coverage_id) REFERENCES mc.financial_week_coverage(id) ON DELETE CASCADE`
+- `CHECK ((external_report_id ~ '^[0-9]+$'::text))`
+- `CHECK ((fetch_status = ANY (ARRAY['pending'::text, 'fetching'::text, 'accepted'::text, 'retry'::text, 'failed'::text])))`
+- `CHECK ((inventory_checksum ~ '^[0-9a-f]{64}$'::text))`
 - `PRIMARY KEY (id)`
 
 ## import_batches

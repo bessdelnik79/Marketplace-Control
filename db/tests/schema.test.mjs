@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,34);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,36);
   pass('password identity and expiring session are stored by migration 2');
   const financialMethod=await one("select implementation_version from mc.method_versions where code='wb_finance_import' and version_no=1");
   assert.equal(financialMethod.implementation_version,'wb-finance-v1');
@@ -610,6 +610,29 @@ try {
   assert.equal((await one("select has_table_privilege('public','mc.job_dispatch','select') as allowed")).allowed,false);
   pass('durable queue functions are not executable by public');
 
+  await q(`update mc.connections set scopes='["finance"]'::jsonb,credential_generation=1,status='active' where id=$1`,[connection.id]);
+  await q(`update mc.connection_secrets set credential_fingerprint=$2 where connection_id=$1`,[connection.id,'a'.repeat(64)]);
+  const annualPlan=await one(`select * from mc.plan_financial_credential_refresh($1,1,$2)`,[store.id,'2026-09-27T21:00:00Z']);
+  assert.equal(annualPlan.week_count,53);
+  assert.ok(annualPlan.job_id);
+  assert.equal((await one(`select count(*)::int as n from mc.financial_week_coverage where store_id=$1 and credential_generation=1`,[store.id])).n,53);
+  assert.deepEqual(await one(`select min(week_start)::text as first,max(week_end)::text as last from mc.financial_week_coverage where store_id=$1 and credential_generation=1`,[store.id]),{first:'2025-09-22',last:'2026-09-27'});
+  const mondayScheduled=await q(`select store_id,credential_generation,schedule_boundary::text as schedule_boundary,job_id from mc.schedule_financial_inventory($1,100)`,['2026-10-04T21:05:00Z']);
+  assert.equal(mondayScheduled.length,1);
+  assert.equal(mondayScheduled[0].schedule_boundary,'2026-10-05');
+  assert.equal((await q(`select * from mc.schedule_financial_inventory($1,100)`,['2026-10-04T21:06:00Z'])).length,0);
+  assert.equal((await one(`select count(*)::int as n from mc.jobs where job_type='financial_inventory_refresh' and store_id=$1`,[store.id])).n,2);
+  await q(`update mc.financial_schedule_targets set requested_by=$2 where store_id=$1`,[store.id,queueOutsider.id]);
+  assert.equal((await q(`select * from mc.schedule_financial_inventory($1,100)`,['2026-10-11T21:01:00Z'])).length,1);
+  pass('credential and Monday scheduler seed closed-week coverage exactly once');
+
+  const schedulerPrivileges=await q("select p.proname,has_function_privilege('public',p.oid,'execute') as executable from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='mc' and p.proname in ('plan_financial_credential_refresh','schedule_financial_inventory','get_financial_inventory_context','apply_financial_inventory','apply_financial_period_fallback','list_financial_credential_backfill','defer_financial_credential_backfill') order by p.proname");
+  assert.equal(schedulerPrivileges.length,7);
+  assert.ok(schedulerPrivileges.every(row=>row.executable===false));
+  assert.equal((await one("select has_table_privilege('public','mc.financial_schedule_targets','select') as allowed")).allowed,false);
+  assert.equal((await one("select has_table_privilege('public','mc.financial_credential_backfill_targets','select') as allowed")).allowed,false);
+  pass('financial scheduler discovery and worker functions stay closed to public');
+
   // Deliberately use a non-owner role: superusers bypass row-level security.
   await db.exec('create role mc_test_reader; grant usage on schema mc to mc_test_reader; grant select on all tables in schema mc to mc_test_reader; grant execute on function mc.context_business_id(),mc.context_user_id() to mc_test_reader; set role mc_test_reader;');
   await context(b.id,user.id);
@@ -963,6 +986,27 @@ try {
     assert.equal((await jone(`select max(version)::int as version from mc.schema_migrations`)).version,34);
     pass('migration 34 safely maps legacy queue states and releases legacy running leases');
   }finally{await queueUpgradeDb.close();}
+
+  const credentialUpgradeDb=new PGlite();
+  try{
+    for(const migration of migrations.filter(name=>Number(name.split('_')[0])<=35))await credentialUpgradeDb.exec(await readFile(path.join(root,'db/migrations',migration),'utf8'));
+    const cq=async(sql,params=[])=>(await credentialUpgradeDb.query(sql,params)).rows;
+    const cone=async(sql,params=[])=>(await cq(sql,params))[0];
+    const legacyUser=await cone(`insert into mc.users(display_name) values('Legacy credential owner') returning id`);
+    const legacyBusiness=await cone(`insert into mc.businesses(name) values('Legacy credential business') returning id`);
+    await cq(`insert into mc.memberships(business_id,user_id,role) values($1,$2,'owner')`,[legacyBusiness.id,legacyUser.id]);
+    await cq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[legacyUser.id,legacyBusiness.id]);
+    const legacyStore=await cone(`insert into mc.stores(business_id,external_account_id,name,status) values($1,'legacy-cabinet','Legacy','active') returning id`,[legacyBusiness.id]);
+    const legacyConnection=await cone(`insert into mc.connections(business_id,store_id,secret_ref,scopes,status) values($1,$2,'database:legacy','["finance"]','active') returning id`,[legacyBusiness.id,legacyStore.id]);
+    await cq(`insert into mc.connection_secrets(business_id,connection_id,ciphertext,nonce,auth_tag) values($1,$2,$3,$4,$5)`,[legacyBusiness.id,legacyConnection.id,Buffer.from('encrypted'),Buffer.alloc(12),Buffer.alloc(16)]);
+    await credentialUpgradeDb.exec(await readFile(path.join(root,'db/migrations/036_financial_coverage_scheduler.sql'),'utf8'));
+    const backfill=await cq(`select connection_id,user_id,store_id,seller_id,scopes from mc.list_financial_credential_backfill(10)`);
+    assert.deepEqual(backfill,[{connection_id:legacyConnection.id,user_id:legacyUser.id,store_id:legacyStore.id,seller_id:'legacy-cabinet',scopes:['finance']}]);
+    assert.equal(await cone(`select mc.defer_financial_credential_backfill($1,60) as deferred`,[legacyConnection.id]).then(row=>row.deferred),true);
+    assert.equal((await cq(`select * from mc.list_financial_credential_backfill(10)`)).length,0);
+    assert.equal((await cone(`select count(*)::int as n from mc.financial_schedule_targets`)).n,0);
+    pass('migration 36 exposes each existing active finance credential for one safe startup backfill');
+  }finally{await credentialUpgradeDb.close();}
 
   // Produce a machine-derived field/constraint inventory for review.
   const cols = await q("select table_name,column_name,data_type,udt_name,is_nullable,column_default,numeric_precision,numeric_scale from information_schema.columns where table_schema='mc' order by table_name,ordinal_position");

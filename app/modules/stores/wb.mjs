@@ -21,7 +21,7 @@ export function decodeWbToken(value) {
 }
 
 export function assertWbFinancialToken(decoded) {
-  if (decoded?.accountType !== 3) throw new Error('financial_token_type_unsupported');
+  if (![1,3].includes(decoded?.accountType)) throw new Error('financial_token_type_unsupported');
   return decoded;
 }
 

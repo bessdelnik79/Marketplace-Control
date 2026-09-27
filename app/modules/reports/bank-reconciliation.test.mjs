@@ -63,3 +63,13 @@ test('summary rate limit stops after one request and cannot create a verified ch
   assert.equal(calls, 1);
   assert.equal(reconcileBankPayment(report, undefined).status, 'not_checkable');
 });
+
+test('summary loader distinguishes an explicit registration-country limitation from generic denial', async () => {
+  const options={dateFrom:'2026-09-01',dateTo:'2026-09-07'};
+  await assert.rejects(()=>loadWbFinancialSummaries('token',{
+    ...options,fetchImpl:async()=>new Response(JSON.stringify({detail:'Method is unavailable for your registration country.'}),{status:400})
+  }),/financial_summary_unsupported_country/);
+  await assert.rejects(()=>loadWbFinancialSummaries('token',{
+    ...options,fetchImpl:async()=>new Response(JSON.stringify({detail:'access denied'}),{status:403})
+  }),/financial_summary_unauthorized/);
+});

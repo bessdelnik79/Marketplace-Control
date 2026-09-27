@@ -1,10 +1,28 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'node:crypto';
+
+const WB_TOKEN_FINGERPRINT_DOMAIN = 'marketplace-control:wb-token-fingerprint:v1\0';
+
+function loadBase64Key(value, errorCode) {
+  const encoded = String(value ?? '').trim();
+  if (!/^[A-Za-z0-9+/]{43}=$/.test(encoded)) throw new Error(errorCode);
+  const key = Buffer.from(encoded, 'base64');
+  if (key.length !== 32 || key.toString('base64') !== encoded) throw new Error(errorCode);
+  return key;
+}
 
 export function loadEncryptionKey(env = process.env) {
-  const encoded = String(env.WB_TOKEN_ENCRYPTION_KEY ?? '').trim();
-  const key = Buffer.from(encoded, 'base64');
-  if (!encoded || key.length !== 32) throw new Error('wb_encryption_not_configured');
-  return key;
+  return loadBase64Key(env.WB_TOKEN_ENCRYPTION_KEY, 'wb_encryption_not_configured');
+}
+
+export function loadFingerprintKey(env = process.env) {
+  return loadBase64Key(env.WB_TOKEN_FINGERPRINT_KEY, 'wb_fingerprint_not_configured');
+}
+
+export function fingerprintSecret(value, key = loadFingerprintKey()) {
+  return createHmac('sha256', key)
+    .update(WB_TOKEN_FINGERPRINT_DOMAIN, 'utf8')
+    .update(String(value), 'utf8')
+    .digest('hex');
 }
 
 export function encryptSecret(value, key = loadEncryptionKey()) {

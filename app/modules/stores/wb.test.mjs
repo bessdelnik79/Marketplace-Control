@@ -43,9 +43,10 @@ test('WB token validation rejects missing categories, expiry and API denial',asy
   await assert.rejects(()=>verifyWbToken(token({sid:sellerId,exp:2_000_000_000,s:Number(fullMask&~(1n<<30n)),acc:1,t:false}),{fetchImpl:async()=>new Response('{}')}),/wb_write_token_forbidden/);
 });
 
-test('financial reports require a personal token for the private MVP',()=>{
+test('financial reports accept supported service and personal tokens',()=>{
   const base=decodeWbToken(token({sid:sellerId,exp:2_000_000_000,s:Number(fullMask),acc:1,t:false}));
   const personal=decodeWbToken(token({sid:sellerId,exp:2_000_000_000,s:Number(fullMask),acc:3,t:false,for:'self'}));
-  assert.throws(()=>assertWbFinancialToken(base),/financial_token_type_unsupported/);
+  assert.equal(assertWbFinancialToken(base),base);
   assert.equal(assertWbFinancialToken(personal),personal);
+  assert.throws(()=>assertWbFinancialToken({accountType:2}),/financial_token_type_unsupported/);
 });
