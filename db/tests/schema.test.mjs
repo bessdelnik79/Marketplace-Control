@@ -1085,6 +1085,33 @@ try {
     pass('migrations 36-37 expose legacy credentials and repair tenant-safe inventory leases');
   }finally{await credentialUpgradeDb.close();}
 
+  const dailyUpgradeDb=new PGlite();
+  try{
+    for(const migration of migrations.filter(name=>Number(name.split('_')[0])<=38))await dailyUpgradeDb.exec(await readFile(path.join(root,'db/migrations',migration),'utf8'));
+    const dq=async(sql,params=[])=>(await dailyUpgradeDb.query(sql,params)).rows;
+    const done=async(sql,params=[])=>(await dq(sql,params))[0];
+    const dailyUser=await done(`insert into mc.users(display_name) values('Daily upgrade owner') returning id`);
+    const dailyBusiness=await done(`insert into mc.businesses(name) values('Daily upgrade business') returning id`);
+    await dq(`insert into mc.memberships(business_id,user_id,role) values($1,$2,'owner')`,[dailyBusiness.id,dailyUser.id]);
+    await dq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[dailyUser.id,dailyBusiness.id]);
+    const dailyStore=await done(`insert into mc.stores(business_id,external_account_id,name,status) values($1,'daily-upgrade','Daily upgrade','active') returning id`,[dailyBusiness.id]);
+    const dailyDocument=await done(`insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness) values($1,$2,'wb_api','weekly_realization','daily-upgrade-doc','complete') returning id`,[dailyBusiness.id,dailyStore.id]);
+    const dailyReport=await done(`insert into mc.reports(business_id,store_id,external_report_id,period_start,period_end) values($1,$2,'daily-upgrade-report','2026-09-07','2026-09-13') returning id`,[dailyBusiness.id,dailyStore.id]);
+    const dailyVersion=await done(`insert into mc.report_versions(business_id,store_id,report_id,document_id,version_no,checksum,parser_version) values($1,$2,$3,$4,1,'daily-upgrade-version','wb-finance-v11') returning id`,[dailyBusiness.id,dailyStore.id,dailyReport.id,dailyDocument.id]);
+    await dq(`update mc.report_versions set status='validated' where id=$1`,[dailyVersion.id]);
+    await dq(`update mc.report_versions set status='accepted',accepted_at=clock_timestamp() where id=$1`,[dailyVersion.id]);
+    const dailyMethod=await done(`select id from mc.method_versions where code='wb_finance_import' and version_no=11`);
+    const dailyNormalization=await done(`insert into mc.report_normalizations(business_id,store_id,report_version_id,method_version_id,normalization_key,status) values($1,$2,$3,$4,'daily-upgrade-normalization','succeeded') returning id`,[dailyBusiness.id,dailyStore.id,dailyVersion.id,dailyMethod.id]);
+    const dailyJob=await done(`select * from mc.enqueue_job($1,'financial_dates_recalculate','daily-upgrade-job','{"schemaVersion":1,"eventGeneration":1,"affectedFrom":"2026-09-07","affectedTo":"2026-09-13","allowsWbApi":false}'::jsonb,clock_timestamp(),200,20)`,[dailyStore.id]);
+    await dq(`insert into mc.financial_store_event_state(business_id,store_id,next_generation) values($1,$2,2)`,[dailyBusiness.id,dailyStore.id]);
+    const legacyEvent=await done(`insert into mc.financial_input_events(business_id,store_id,event_generation,event_key,event_type,affected_from,affected_to,source_report_version_id,source_normalization_id,dispatch_job_id) values($1,$2,1,'daily-upgrade-event','report_accepted','2026-09-07','2026-09-13',$3,$4,$5) returning id`,[dailyBusiness.id,dailyStore.id,dailyVersion.id,dailyNormalization.id,dailyJob.id]);
+    await dailyUpgradeDb.exec(await readFile(path.join(root,'db/migrations/039_financial_daily_generations.sql'),'utf8'));
+    assert.equal((await done(`select actor_user_id from mc.financial_input_events where id=$1`,[legacyEvent.id])).actor_user_id,dailyUser.id);
+    await assert.rejects(()=>dq(`update mc.financial_input_events set event_key='changed' where id=$1`,[legacyEvent.id]),/immutable record/);
+    assert.equal((await done(`select max(version)::int version from mc.schema_migrations`)).version,39);
+    pass('migration 39 upgrades populated immutable financial events and restores their mutation guard');
+  }finally{await dailyUpgradeDb.close();}
+
   // Produce a machine-derived field/constraint inventory for review.
   const cols = await q("select table_name,column_name,data_type,udt_name,is_nullable,column_default,numeric_precision,numeric_scale from information_schema.columns where table_schema='mc' order by table_name,ordinal_position");
   const constraints = await q("select c.relname as table_name,con.conname,con.contype,pg_get_constraintdef(con.oid) as definition from pg_constraint con join pg_class c on c.oid=con.conrelid join pg_namespace n on n.oid=c.relnamespace where n.nspname='mc' order by c.relname,con.conname");
