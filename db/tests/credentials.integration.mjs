@@ -8,10 +8,12 @@ const databaseName=new URL(integrationUrl).pathname.slice(1);
 if(!databaseName.toLowerCase().includes('test'))throw new Error('Refusing to run credential integration tests outside a database whose name contains "test".');
 process.env.DATABASE_URL=integrationUrl;
 
-const [{migrate,pool,saveWbConnection,enqueueJob,claimJobs,completeJob,getFinancialSyncState,requestFinancialInventoryRefresh},{encryptSecret,fingerprintSecret}]=await Promise.all([
+const [{migrate,pool,saveWbConnection,enqueueJob,claimJobs,completeJob,getFinancialSyncState,requestFinancialInventoryRefresh},{encryptSecret,fingerprintSecret},{createFinancialInventoryRepository}]=await Promise.all([
   import('../../app/db.mjs'),
-  import('../../app/infrastructure/security/secrets.mjs')
+  import('../../app/infrastructure/security/secrets.mjs'),
+  import('../../app/modules/reports/financial-inventory.repository.mjs')
 ]);
+const inventoryRepository=createFinancialInventoryRepository({pool});
 
 const ids={user:randomUUID(),business:randomUUID(),store:randomUUID()};
 const encryptionKey=randomBytes(32),fingerprintKey=randomBytes(32);
@@ -157,10 +159,26 @@ test('inventory context and writes require the current lease and latest credenti
   await enqueueJob(ids.user,{storeId:ids.store,jobType:'financial_inventory_refresh',deduplicationKey:`integration-refresh:${ids.store}`,
     payload:{schemaVersion:1,credentialGeneration:3,window:{dateFrom:'2026-09-21',dateTo:'2026-09-27'}},priority:500,maxAttempts:3});
   const [refresh]=await claimJobs({workerId:'credential-refresh-worker',jobTypes:['financial_inventory_refresh'],leaseSeconds:300,limit:1});
-  const reapplied=(await pool.query(`select * from mc.apply_financial_inventory($1,$2,$3,$4,$5::jsonb)`,[
-    refresh.id,3,refresh.lease_token,'credential-refresh-worker',JSON.stringify(inventory)
-  ])).rows[0];
+  const outsideCoverage=await inContext(async client=>(await client.query(`update mc.financial_week_coverage set
+      coverage_status='pending',last_checked_at=null,next_retry_at=null,last_error_code=null,updated_at='2026-01-01T00:00:00Z'
+    where id=(select id from mc.financial_week_coverage where store_id=$1 and credential_generation=3
+      and week_end<'2026-09-21' order by week_start limit 1)
+    returning id,coverage_status,last_checked_at,next_retry_at,last_error_code,updated_at`,[ids.store])).rows[0]);
+  const outsideInventory={reportId:'90071992547409932',checksum:'c'.repeat(64),dateFrom:'2026-09-14',dateTo:'2026-09-20',reportType:'1',country:'Россия',summaryRaw:{marker:'after'}};
+  await inContext(client=>client.query(`insert into mc.financial_week_inventory(
+      business_id,store_id,coverage_id,external_report_id,inventory_checksum,report_type,country,period_start,period_end,summary_raw_data
+    ) select business_id,store_id,id,$2,$3,'1','Россия','2026-09-14','2026-09-20',$4::jsonb
+      from mc.financial_week_coverage where store_id=$1 and credential_generation=3 and week_start='2026-09-14'`,
+    [ids.store,outsideInventory.reportId,outsideInventory.checksum,JSON.stringify({marker:'before'})]));
+  const reapplied=await inventoryRepository.apply(
+    refresh.id,3,refresh.lease_token,'credential-refresh-worker',[...inventory,outsideInventory]
+  );
+  assert.equal(Number(reapplied.uncovered_weeks),0);
   assert.equal(Number(reapplied.enqueued_fetches),1);
+  assert.deepEqual(await inContext(async client=>(await client.query(`select id,coverage_status,last_checked_at,next_retry_at,last_error_code,updated_at
+      from mc.financial_week_coverage where id=$1`,[outsideCoverage.id])).rows[0]),outsideCoverage);
+  assert.deepEqual(await inContext(async client=>(await client.query(`select summary_raw_data from mc.financial_week_inventory
+      where store_id=$1 and external_report_id=$2`,[ids.store,outsideInventory.reportId])).rows[0].summary_raw_data),{marker:'before'});
   assert.equal(await inContext(async client=>Number((await client.query(
     `select count(*) from mc.jobs where store_id=$1 and job_type='financial_report_fetch'`,[ids.store]
   )).rows[0].count)),2);

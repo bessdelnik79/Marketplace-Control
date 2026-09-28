@@ -28,13 +28,18 @@ export function createFinancialInventoryRepository({ pool }) {
       await client.query('begin');
       const encoded = JSON.stringify(rows);
       const result = (await client.query('select * from mc.apply_financial_inventory($1,$2,$3,$4,$5::jsonb)', [jobId, credentialGeneration, leaseToken, workerId, encoded])).rows[0];
-      await client.query(
-        `update mc.financial_week_inventory wi set summary_raw_data=item.value->'summaryRaw'
-           from jsonb_array_elements($2::jsonb) item,mc.jobs j
-          where j.id=$1 and wi.business_id=j.business_id and wi.store_id=j.store_id
-            and wi.external_report_id=item.value->>'reportId'`,
-        [jobId, encoded]
-      );
+      if(result?.superseded!==true){
+        await client.query(
+          `update mc.financial_week_inventory wi set summary_raw_data=item.value->'summaryRaw'
+             from jsonb_array_elements($2::jsonb) item,mc.jobs j,mc.financial_week_coverage wc
+            where j.id=$1 and wi.business_id=j.business_id and wi.store_id=j.store_id
+              and wc.id=wi.coverage_id and wc.credential_generation=$3
+              and wc.week_start<=(j.payload->'window'->>'dateTo')::date
+              and wc.week_end>=(j.payload->'window'->>'dateFrom')::date
+              and wi.external_report_id=item.value->>'reportId'`,
+          [jobId, encoded, credentialGeneration]
+        );
+      }
       await client.query('commit');
       return result;
     } catch (error) {
