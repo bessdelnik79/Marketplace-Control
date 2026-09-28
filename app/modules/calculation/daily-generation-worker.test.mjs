@@ -41,6 +41,7 @@ test('daily worker retries transient errors and terminates invalid inputs',async
   assert.equal(decisions[3].retryable,false);
   assert.equal(decisions[4].errorCode,'financial_daily_publication_shadow_incompatible');
   assert.equal(decisions[4].retryable,true);
+  assert.equal(decisions[4].retryDelaySeconds,30);
   assert.equal(financialDailyErrorCode(new Error('secret path')), 'financial_daily_internal_error');
 });
 

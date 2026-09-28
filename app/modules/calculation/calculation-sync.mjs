@@ -1,4 +1,4 @@
-import { acknowledgeFinancialCalculationInvalidation, getFinancialCompatibilityBootstrapState, listFinancialCalculationInvalidations, runFinancialCalculation } from '../../db.mjs';
+import { acknowledgeFinancialCalculationInvalidation, getFinancialCompatibilityBootstrapState, listFinancialCalculationInvalidations, runFinancialCalculation, wakeFinancialDailyAfterCompatibility } from '../../db.mjs';
 
 const expectedUnavailable = new Set([
   'calculation_store_unavailable',
@@ -12,9 +12,10 @@ export function createFinancialCalculationWorker({
   list=listFinancialCalculationInvalidations,
   bootstrap=getFinancialCompatibilityBootstrapState,
   run=runFinancialCalculation,
+  wakeDaily=wakeFinancialDailyAfterCompatibility,
   acknowledge=acknowledgeFinancialCalculationInvalidation
 }={}){
-  if(typeof list!=='function'||typeof bootstrap!=='function'||typeof run!=='function'||typeof acknowledge!=='function')throw new TypeError('financial calculation worker dependencies are required');
+  if(typeof list!=='function'||typeof bootstrap!=='function'||typeof run!=='function'||typeof wakeDaily!=='function'||typeof acknowledge!=='function')throw new TypeError('financial calculation worker dependencies are required');
   async function runOnce(){
     const pendingItems=await list();
     for(const pending of pendingItems){
@@ -24,6 +25,7 @@ export function createFinancialCalculationWorker({
         if(state.waitingForPipeline&&!state.targets?.length)continue;
         let result={requestId:null,runId:null,quality:null,changed:false};
         for(const targetPeriod of state.targets)result=await run(pending.requested_by,pending.store_id,{targetPeriod});
+        if(state.targets.length)await wakeDaily(pending.requested_by,pending.store_id);
         await acknowledge(pending.requested_by,pending.store_id,pending.generation_token);
         console.info('[Financial compatibility calculation completed]',JSON.stringify({
           time:new Date().toISOString(),storeId:pending.store_id,requestId:result.requestId,

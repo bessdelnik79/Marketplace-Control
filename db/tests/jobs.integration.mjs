@@ -265,6 +265,49 @@ test('two concurrent claimants receive disjoint durable jobs', async() => {
   assert.ok(new Date(retry.available_at) > new Date());
 });
 
+test('compatibility wake follows dispatch-first locking and never deadlocks a concurrent claim', async() => {
+  const waiting = await enqueueJob(ids.user, {
+    storeId: ids.store,
+    jobType: 'financial_dates_recalculate',
+    deduplicationKey: `${type}:daily-shadow-wait`,
+    priority: 500,
+    maxAttempts: 20
+  });
+  await withOwnedBusinessContext(ids.user, async(client, businessId) => {
+    const updated = (await client.query(`update mc.jobs set
+      available_at=clock_timestamp()+interval '15 minutes',
+      last_error_code='financial_daily_publication_shadow_incompatible',updated_at=clock_timestamp()
+      where business_id=$1 and id=$2 returning available_at`, [businessId, waiting.id])).rows[0];
+    await client.query(`update mc.job_dispatch set available_at=$2 where job_id=$1`, [waiting.id, updated.available_at]);
+  });
+
+  const lockClient = await pool.connect();
+  try {
+    await lockClient.query('begin');
+    await lockClient.query(`select job_id from mc.job_dispatch where job_id=$1 for update`, [waiting.id]);
+    const skipped = await Promise.race([
+      withOwnedBusinessContext(ids.user, async client => (await client.query(
+        `select * from mc.wake_financial_daily_after_compatibility($1)`, [ids.store]
+      )).rows[0]),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('compatibility wake blocked behind dispatch lock')), 2000))
+    ]);
+    assert.equal(skipped.id, null);
+    await lockClient.query('rollback');
+  } catch (error) {
+    await lockClient.query('rollback');
+    throw error;
+  } finally {
+    lockClient.release();
+  }
+
+  const awakened = await withOwnedBusinessContext(ids.user, async client => (await client.query(
+    `select * from mc.wake_financial_daily_after_compatibility($1)`, [ids.store]
+  )).rows[0]);
+  assert.equal(awakened.id, waiting.id);
+  const [claimed] = await claimAsWorker({ workerId: `${type}:daily`, jobTypes: ['financial_dates_recalculate'], leaseSeconds: 60, limit: 1 });
+  await completeAsWorker({ jobId: claimed.id, leaseToken: claimed.lease_token, workerId: `${type}:daily` });
+});
+
 test('expired leases are reclaimed with a new token and exhaustion is terminal', async() => {
   const job = await enqueueJob(ids.user, {
     storeId: ids.store,

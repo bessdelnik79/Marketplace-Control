@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,48);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,49);
   assert.deepEqual((await q("select table_name from information_schema.tables where table_schema='mc' and table_name in ('financial_input_events','financial_store_event_state') order by table_name")).map(row=>row.table_name),['financial_input_events','financial_store_event_state']);
   assert.equal((await one("select relforcerowsecurity as forced from pg_class join pg_namespace on pg_namespace.oid=pg_class.relnamespace where nspname='mc' and relname='financial_input_events'")).forced,true);
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.establish_financial_pipeline_context(uuid,bigint,uuid,text,text)'::regprocedure"));
@@ -60,6 +60,7 @@ try {
     'mc.publish_financial_daily_generation(uuid,uuid,text,uuid,bigint)',
     'mc.financial_daily_shadow_day_compatible(uuid,date)',
     'mc.retry_financial_daily_job(uuid,date,date)',
+    'mc.wake_financial_daily_after_compatibility(uuid)',
     'mc.request_financial_inventory_refresh(uuid,timestamp with time zone)'
   ]) {
     assert.equal((await one(`select has_function_privilege('public',$1::regprocedure,'execute') as allowed`,[signature])).allowed,false);
@@ -77,6 +78,17 @@ try {
   const selectionTrigger=await one(`select pg_get_triggerdef(oid) as definition from pg_trigger where tgrelid='mc.product_selection_items'::regclass and tgname='financial_selection_event'`);
   assert.match(selectionTrigger.definition,/FOR EACH STATEMENT/);
   pass('daily shadow schema has exact tax facts, immutable tenant rows and private worker CAS helpers');
+  const dispatchColumns=(await q(`select column_name from information_schema.columns where table_schema='mc' and table_name='job_dispatch'`)).map(row=>row.column_name);
+  assert.ok(dispatchColumns.includes('recency_date'));
+  const claimJobsFunction=(await one(`select pg_get_functiondef('mc.claim_jobs(text,text[],integer,integer)'::regprocedure) definition`)).definition;
+  const enqueueJobFunction=(await one(`select pg_get_functiondef('mc.enqueue_job(uuid,text,text,jsonb,timestamp with time zone,integer,integer)'::regprocedure) definition`)).definition;
+  const wakeDailyFunction=(await one(`select pg_get_functiondef('mc.wake_financial_daily_after_compatibility(uuid)'::regprocedure) definition`)).definition;
+  assert.match(claimJobsFunction,/recency_date.*DESC NULLS LAST/s);
+  assert.match(enqueueJobFunction,/financial_report_fetch/);
+  assert.match(enqueueJobFunction,/recency_date/);
+  assert.match(wakeDailyFunction,/financial_daily_publication_shadow_incompatible/);
+  assert.match(wakeDailyFunction,/UPDATE mc\.job_dispatch/);
+  pass('financial bootstrap prioritizes recent reports and wakes a shadow retry after compatibility is saved');
   assert.deepEqual((await q(`select table_name from information_schema.tables where table_schema='mc' and table_name in (
     'financial_daily_publications','financial_daily_publication_days','financial_daily_current_publications') order by table_name`)).map(row=>row.table_name),[
     'financial_daily_current_publications','financial_daily_publication_days','financial_daily_publications'
@@ -624,6 +636,20 @@ try {
   assert.equal((await one("select count(*)::int as n from mc.jobs where deduplication_key='sync:week:1' and status='pending'")).n,1);
   pass('claim filters job types and orders ready jobs by priority');
 
+  const olderFetch=await one("select * from mc.enqueue_job($1,'financial_report_fetch',$2,$3::jsonb,clock_timestamp(),300,3)",[
+    store.id,'fetch:older',JSON.stringify({periodStart:'2026-01-05',periodEnd:'2026-01-11'})
+  ]);
+  const newerFetch=await one("select * from mc.enqueue_job($1,'financial_report_fetch',$2,$3::jsonb,clock_timestamp(),300,3)",[
+    store.id,'fetch:newer',JSON.stringify({periodStart:'2026-09-21',periodEnd:'2026-09-27'})
+  ]);
+  const newestFirst=await one("select * from mc.claim_jobs($1,$2::text[],60,1)",['fetch-recency-worker',['financial_report_fetch']]);
+  assert.equal(newestFirst.id,newerFetch.id);
+  await one("select * from mc.complete_job($1,$2,$3,'completed')",[newestFirst.id,newestFirst.lease_token,'fetch-recency-worker']);
+  const oldestSecond=await one("select * from mc.claim_jobs($1,$2::text[],60,1)",['fetch-recency-worker',['financial_report_fetch']]);
+  assert.equal(oldestSecond.id,olderFetch.id);
+  await one("select * from mc.complete_job($1,$2,$3,'completed')",[oldestSecond.id,oldestSecond.lease_token,'fetch-recency-worker']);
+  pass('equal-priority financial report fetches are claimed from the newest closed week to the oldest');
+
   await rejects("select * from mc.heartbeat_job($1,$2,$3,$4)",[claimed[0].id,claimed[1].lease_token,'worker-a',60],/not owned/,'heartbeat rejects a foreign lease token');
   const heartbeat=await one("select * from mc.heartbeat_job($1,$2,$3,$4)",[claimed[0].id,claimed[0].lease_token,'worker-a',120]);
   assert.ok(new Date(heartbeat.lease_until)>new Date(claimed[0].lease_until));
@@ -647,6 +673,54 @@ try {
   assert.equal(terminal.status,'failed');
   assert.ok(terminal.finished_at);
   pass('failure retries with backoff and becomes terminal at max attempts');
+
+  for(;;){
+    const existingDaily=await one("select * from mc.claim_jobs($1,$2::text[],60,1)",['pre-shadow-drain',['financial_dates_recalculate']]);
+    if(!existingDaily)break;
+    await one("select * from mc.complete_job($1,$2,$3,'superseded')",[existingDaily.id,existingDaily.lease_token,'pre-shadow-drain']);
+  }
+  const exhaustedShadow=await one("select * from mc.enqueue_job($1,'financial_dates_recalculate',$2,'{}'::jsonb,clock_timestamp(),500,1)",[
+    store.id,'daily-shadow:exhausted'
+  ]);
+  const exhaustedShadowClaim=await one("select * from mc.claim_jobs($1,$2::text[],60,1)",['shadow-exhaust-worker',['financial_dates_recalculate']]);
+  assert.equal(exhaustedShadowClaim.id,exhaustedShadow.id);
+  const exhaustedShadowFailure=await one("select * from mc.fail_job($1,$2,$3,$4,true,30)",[
+    exhaustedShadowClaim.id,exhaustedShadowClaim.lease_token,'shadow-exhaust-worker','financial_daily_publication_shadow_incompatible'
+  ]);
+  assert.equal(exhaustedShadowFailure.status,'failed');
+  const recoveredShadow=await one("select * from mc.wake_financial_daily_after_compatibility($1)",[store.id]);
+  assert.equal(recoveredShadow.id,exhaustedShadow.id);
+  assert.equal(recoveredShadow.status,'pending');
+  assert.equal(recoveredShadow.attempt_count,0);
+  assert.equal((await one('select count(*)::int n from mc.job_dispatch where job_id=$1',[exhaustedShadow.id])).n,1);
+  const recoveredShadowClaim=await one("select * from mc.claim_jobs($1,$2::text[],60,1)",['shadow-recovered-worker',['financial_dates_recalculate']]);
+  await one("select * from mc.complete_job($1,$2,$3,'completed')",[
+    recoveredShadowClaim.id,recoveredShadowClaim.lease_token,'shadow-recovered-worker'
+  ]);
+  pass('successful compatibility work safely reopens only an exhausted shadow publication wait');
+
+  const historicalShadow=await one("select * from mc.enqueue_job($1,'financial_dates_recalculate',$2,'{}'::jsonb,clock_timestamp(),500,1)",[
+    store.id,'daily-shadow:historical-failed'
+  ]);
+  const historicalClaim=await one("select * from mc.claim_jobs($1,$2::text[],60,1)",['historical-shadow-worker',['financial_dates_recalculate']]);
+  await one("select * from mc.fail_job($1,$2,$3,$4,true,30)",[
+    historicalClaim.id,historicalClaim.lease_token,'historical-shadow-worker','financial_daily_publication_shadow_incompatible'
+  ]);
+  const currentDaily=await one("select * from mc.enqueue_job($1,'financial_dates_recalculate',$2,'{}'::jsonb,clock_timestamp(),500,3)",[
+    store.id,'daily-shadow:current-active'
+  ]);
+  assert.equal((await one('select * from mc.wake_financial_daily_after_compatibility($1)',[store.id])).id,null);
+  assert.equal((await one('select status from mc.jobs where id=$1',[historicalShadow.id])).status,'failed');
+  const currentClaim=await one("select * from mc.claim_jobs($1,$2::text[],60,1)",['current-daily-worker',['financial_dates_recalculate']]);
+  assert.equal(currentClaim.id,currentDaily.id);
+  await one("select * from mc.complete_job($1,$2,$3,'completed')",[currentClaim.id,currentClaim.lease_token,'current-daily-worker']);
+  const reopenedHistorical=await one('select * from mc.wake_financial_daily_after_compatibility($1)',[store.id]);
+  assert.equal(reopenedHistorical.id,historicalShadow.id);
+  const reopenedHistoricalClaim=await one("select * from mc.claim_jobs($1,$2::text[],60,1)",['historical-recovery-worker',['financial_dates_recalculate']]);
+  await one("select * from mc.complete_job($1,$2,$3,'completed')",[
+    reopenedHistoricalClaim.id,reopenedHistoricalClaim.lease_token,'historical-recovery-worker'
+  ]);
+  pass('compatibility wake never reopens historical shadow work beside an active daily job');
 
   const queueAuditActions=(await q("select action from mc.audit_events where entity_type='jobs' and entity_id in ($1,$2) order by created_at,id",[claimed[0].id,claimed[1].id])).map(row=>row.action);
   for(const action of ['job_enqueued','job_claimed','job_succeeded','job_retry_scheduled','job_failed']) assert.ok(queueAuditActions.includes(action),action);

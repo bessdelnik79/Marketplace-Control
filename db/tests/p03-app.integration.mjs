@@ -8,7 +8,7 @@ const databaseName=new URL(integrationUrl).pathname.slice(1);
 if(!databaseName.toLowerCase().includes('test'))throw new Error('Refusing to run P0.3 integration tests outside a database whose name contains "test".');
 process.env.DATABASE_URL=integrationUrl;
 
-const {migrate,pool,runFinancialCalculation,beginFinancialSync,completeFinancialSync,failFinancialSync,getFinancialBankReconciliationState,getPublishedFinancialPeriod,getPublishedFinancialPeriodPair,getFinancialSellerOffsetReference,getFinancialSyncState,getFinancialCalculationInvalidation,getFinancialCompatibilityBootstrapState,acknowledgeFinancialCalculationInvalidation,retryFinancialDailyPublication,jobsRepository,financialDailyGenerationRepository}=await import('../../app/db.mjs');
+const {migrate,pool,runFinancialCalculation,beginFinancialSync,completeFinancialSync,failFinancialSync,getFinancialBankReconciliationState,getPublishedFinancialPeriod,getPublishedFinancialPeriodPair,getFinancialSellerOffsetReference,getFinancialSyncState,getFinancialCalculationInvalidation,getFinancialCompatibilityBootstrapState,acknowledgeFinancialCalculationInvalidation,retryFinancialDailyPublication,wakeFinancialDailyAfterCompatibility,jobsRepository,financialDailyGenerationRepository}=await import('../../app/db.mjs');
 const ids={user:randomUUID(),business:randomUUID(),store:randomUUID()};
 let compatibilityV20;
 
@@ -111,6 +111,24 @@ test('compatibility bootstrap replays every current week until the first daily p
   assert.equal(compatibilityV20.changed,true);
   const repeated=await getFinancialCompatibilityBootstrapState(ids.user,ids.store);
   assert.deepEqual(repeated.targets,[{periodStart:'2026-07-13',periodEnd:'2026-07-19'}]);
+});
+
+test('completed compatibility calculation wakes the delayed daily shadow retry',async()=>{
+  const delayed=await context(async client=>{
+    const job=(await client.query(`update mc.jobs set available_at=clock_timestamp()+interval '15 minutes',
+      last_error_code='financial_daily_publication_shadow_incompatible',updated_at=clock_timestamp()
+      where id=(select id from mc.jobs where store_id=$1 and job_type='financial_dates_recalculate' and status='pending'
+        order by created_at limit 1) returning id,available_at`,[ids.store])).rows[0];
+    assert.ok(job?.id);
+    await client.query(`update mc.job_dispatch set available_at=$2 where job_id=$1`,[job.id,job.available_at]);
+    return job;
+  });
+  const awakened=await wakeFinancialDailyAfterCompatibility(ids.user,ids.store);
+  assert.equal(awakened.id,delayed.id);
+  const state=await context(async client=>(await client.query(`select job.available_at,dispatch.available_at dispatch_available_at
+    from mc.jobs job join mc.job_dispatch dispatch on dispatch.job_id=job.id where job.id=$1`,[delayed.id])).rows[0]);
+  assert.ok(new Date(state.available_at)<new Date(delayed.available_at));
+  assert.equal(new Date(state.dispatch_available_at).getTime(),new Date(state.available_at).getTime());
 });
 
 test('daily shadow generation rebuilds saved inputs and matches the exact published week without WB fetches',async()=>{

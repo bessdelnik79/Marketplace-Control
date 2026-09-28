@@ -9,12 +9,14 @@ test('compatibility calculation worker drains durable invalidation and acknowled
     list:async()=>(calls.push(['list']),[pending]),
     bootstrap:async(...args)=>(calls.push(['bootstrap',...args]),{selectionReady:true,targets:[{periodStart:'2026-09-21',periodEnd:'2026-09-27'}]}),
     run:async(...args)=>(calls.push(['run',...args]),{requestId:'request-1',runId:'run-1',quality:'complete',changed:true}),
+    wakeDaily:async(...args)=>(calls.push(['wake',...args]),true),
     acknowledge:async(...args)=>(calls.push(['ack',...args]),true)
   });
   assert.equal(await worker.runOnce(),true);
   assert.deepEqual(calls,[
     ['list'],['bootstrap','user-1','store-1'],
     ['run','user-1','store-1',{targetPeriod:{periodStart:'2026-09-21',periodEnd:'2026-09-27'}}],
+    ['wake','user-1','store-1'],
     ['ack','user-1','store-1','generation-1']
   ]);
 });
@@ -25,6 +27,7 @@ test('compatibility calculation worker leaves failed invalidation durable and id
   const worker=createFinancialCalculationWorker({
     list:async()=>[pending],bootstrap:async()=>({selectionReady:true,targets:[{periodStart:'2026-09-21',periodEnd:'2026-09-27'}]}),
     run:async()=>{throw new Error('calculation_financial_inputs_missing');},
+    wakeDaily:async()=>assert.fail('failed compatibility calculation must not wake daily publication'),
     acknowledge:async()=>{acknowledged=true;}
   });
   assert.equal(await worker.runOnce(),true);
@@ -38,6 +41,7 @@ test('compatibility calculation worker only acknowledges local changes after dai
   const worker=createFinancialCalculationWorker({
     list:async()=>[pending],bootstrap:async()=>({dailyPublished:true,selectionReady:true,targets:[]}),
     run:async()=>assert.fail('published daily stores do not need another legacy calculation'),
+    wakeDaily:async()=>assert.fail('published daily stores do not need a wake-up'),
     acknowledge:async()=>{acknowledged=true;}
   });
   assert.equal(await worker.runOnce(),true);
@@ -50,6 +54,7 @@ test('compatibility calculation worker keeps invalidation while durable WB pipel
   const worker=createFinancialCalculationWorker({
     list:async()=>[pending],bootstrap:async()=>({selectionReady:true,waitingForPipeline:true,targets:[]}),
     run:async()=>assert.fail('compatibility calculation waits for accepted durable inputs'),
+    wakeDaily:async()=>assert.fail('waiting compatibility calculation must not wake daily publication'),
     acknowledge:async()=>{acknowledged=true;}
   });
   assert.equal(await worker.runOnce(),true);
@@ -63,11 +68,13 @@ test('compatibility calculation uses accepted periods while later WB reports are
     list:async()=>[pending],
     bootstrap:async()=>({selectionReady:true,waitingForPipeline:true,targets:[{periodStart:'2026-01-05',periodEnd:'2026-01-11'}]}),
     run:async(...args)=>(calls.push(['run',...args]),{requestId:'request-1',runId:'run-1',quality:'partial',changed:true}),
+    wakeDaily:async(...args)=>(calls.push(['wake',...args]),true),
     acknowledge:async(...args)=>(calls.push(['ack',...args]),true)
   });
   assert.equal(await worker.runOnce(),true);
   assert.deepEqual(calls,[
     ['run','user-1','store-1',{targetPeriod:{periodStart:'2026-01-05',periodEnd:'2026-01-11'}}],
+    ['wake','user-1','store-1'],
     ['ack','user-1','store-1','generation-4']
   ]);
 });

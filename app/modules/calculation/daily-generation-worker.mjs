@@ -49,9 +49,12 @@ export function createFinancialDailyGenerationWorker({jobs,repository,workerId=`
       const databaseClass=errorCode.match(/^financial_daily_db_([0-9a-z]{2})/)?.[1];
       const retryableDatabase=databaseClass===undefined||['08','40','53','55'].includes(databaseClass);
       const retryable=!terminalErrors.has(errorCode)&&!invalidDailyInput&&retryableDatabase&&attemptsRemain(job);
+      const retryDelaySeconds=errorCode==='financial_daily_publication_shadow_incompatible'
+        ?30
+        :Math.max(30,Math.round((2**Math.min(Number(job.attempt_count??1),8))*30*(0.8+random()*0.4)));
       await jobs.failJob({
         jobId:job.id,leaseToken:job.lease_token,workerId,errorCode,retryable,
-        retryDelaySeconds:retryable?Math.max(30,Math.round((2**Math.min(Number(job.attempt_count??1),8))*30*(0.8+random()*0.4))):0
+        retryDelaySeconds:retryable?retryDelaySeconds:0
       }).catch(()=>{});
     }
     return true;

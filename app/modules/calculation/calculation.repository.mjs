@@ -813,6 +813,15 @@ export async function retryFinancialDailyPublication(userId,storeId,periodStart,
   });
 }
 
+export async function wakeFinancialDailyAfterCompatibility(userId,storeId){
+  return withOwnedBusinessContext(userId,async client=>{
+    const awakened=(await client.query(
+      `select * from mc.wake_financial_daily_after_compatibility($1)`,[storeId]
+    )).rows[0];
+    return awakened?.id?awakened:null;
+  });
+}
+
 export async function prepareFinancialCalculation(userId,storeId,{targetPeriod=null}={}){
   const target=normalizeTargetPeriod(targetPeriod);
   return withOwnedBusinessContext(userId,async(client,businessId)=>{

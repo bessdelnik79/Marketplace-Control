@@ -1359,6 +1359,7 @@
 | max_attempts | integer | нет | — |
 | lease_until | timestamp with time zone | да | — |
 | created_at | timestamp with time zone | нет | — |
+| recency_date | date | да | — |
 
 Ограничения и связи:
 
