@@ -1,6 +1,11 @@
 import test from'node:test';
 import assert from'node:assert/strict';
 import{loadWbCatalog,normalizeCatalogCards}from'./catalog.mjs';
+import{createCatalogChecksum}from'./catalog.repository.mjs';
+
+test('catalog checksum is available before catalog persistence',()=>{
+  assert.equal(createCatalogChecksum([{nmId:42,vendorCode:'VC'}]),'bd491df93a4f5ecd384757649dd2361125651ac1e45a7075fec0faa4b8d5422e');
+});
 
 test('WB catalog loads all cursor pages and keeps variants',async()=>{
   const requests=[];

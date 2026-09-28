@@ -1,4 +1,9 @@
+import { createHash } from 'node:crypto';
 import { withOwnedBusinessContext } from '../../infrastructure/database/client.mjs';
+
+export function createCatalogChecksum(cards){
+  return createHash('sha256').update(JSON.stringify(cards)).digest('hex');
+}
 
 export async function beginCatalogSync(userId,storeId,{force=false}={}){
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
@@ -28,7 +33,7 @@ export async function beginCatalogSync(userId,storeId,{force=false}={}){
 export async function completeCatalogSync(userId,job,catalog){
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
     if(businessId!==job.business_id)throw new Error('catalog_context_mismatch');
-    const serialized=JSON.stringify(catalog.cards),checksum=createHash('sha256').update(serialized).digest('hex');
+    const checksum=createCatalogChecksum(catalog.cards);
     const document=(await client.query(
       `insert into mc.source_documents(business_id,store_id,sync_run_id,origin,document_type,external_document_id,checksum,completeness)
        values($1,$2,$3,'wb_api','catalog',$4,$5,'complete') returning id`,
