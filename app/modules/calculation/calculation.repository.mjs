@@ -675,7 +675,7 @@ async function getDailyPeriodEnvelope(client,publication,periodStart,periodEnd){
       where mapped_day.publication_id=$1 and mapped_day.accounting_date between $2 and $3
       order by fact.accounting_date,fact.product_id,fact.tax_setting_version_id`,[publication.publication_id,periodStart,periodEnd]
   )).rows;
-  const metadata=(await client.query(
+  const reportMetadata=(await client.query(
     `select max(document.received_at) as source_freshness,
             count(distinct report.external_report_id) filter(where summary.raw_data->>'reportType'='2'
               and nullif(btrim(summary.raw_data->>'country'),'') is not null
@@ -690,8 +690,20 @@ async function getDailyPeriodEnvelope(client,publication,periodStart,periodEnd){
          where candidate.report_version_id=report_version.id order by candidate.created_at desc,candidate.id desc limit 1) summary on true`,
     [publication.publication_id,periodStart,periodEnd]
   )).rows[0]??{};
+  const emptyMetadata=(await client.query(
+    `select max(coalesce(confirmation.finished_at,confirmation.updated_at,confirmation.created_at)) as source_freshness
+       from (select distinct generation_id from mc.financial_daily_publication_days
+              where publication_id=$1 and accounting_date between $2 and $3) mapped_generation
+       join mc.financial_daily_generation_inputs input on input.generation_id=mapped_generation.generation_id
+        and input.source_kind='empty_week'
+       join mc.financial_week_coverage coverage on coverage.id=input.financial_week_coverage_id
+        and coverage.week_start<=$3::date and coverage.week_end>=$2::date
+       join mc.jobs confirmation on confirmation.id=input.empty_confirmation_job_id`,
+    [publication.publication_id,periodStart,periodEnd]
+  )).rows[0]??{};
   return aggregateDailyPublicationPeriod(periodStart,periodEnd,{days:mapped,lines,reasons,taxFacts,
-    sourceFreshness:metadata.source_freshness??null,crossBorderReportCount:metadata.cross_border_report_count??0});
+    sourceFreshness:latestTimestamp([reportMetadata.source_freshness,emptyMetadata.source_freshness]),
+    crossBorderReportCount:reportMetadata.cross_border_report_count??0});
 }
 
 async function getDailyUpdateStatus(client,businessId,storeId,periodStart=null,periodEnd=null,publication=null,canRetry=false){

@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,46);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,47);
   assert.deepEqual((await q("select table_name from information_schema.tables where table_schema='mc' and table_name in ('financial_input_events','financial_store_event_state') order by table_name")).map(row=>row.table_name),['financial_input_events','financial_store_event_state']);
   assert.equal((await one("select relforcerowsecurity as forced from pg_class join pg_namespace on pg_namespace.oid=pg_class.relnamespace where nspname='mc' and relname='financial_input_events'")).forced,true);
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.establish_financial_pipeline_context(uuid,bigint,uuid,text,text)'::regprocedure"));
@@ -53,6 +53,7 @@ try {
   }
   for(const signature of [
     'mc.emit_financial_input_event(uuid,text,text,date,date,uuid,uuid,uuid,uuid,uuid,uuid,uuid,uuid)',
+    'mc.emit_financial_empty_week_event(uuid)',
     'mc.establish_financial_daily_context(uuid,uuid,text)',
     'mc.start_financial_daily_generation(uuid,uuid,text,bigint,text,uuid,uuid)',
     'mc.finalize_financial_daily_generation(uuid,uuid,text,uuid,bigint,text,text,text)',
@@ -69,7 +70,10 @@ try {
   assert.equal(taxPrecision.length,3);
   assert.ok(taxPrecision.every(column=>column.numeric_precision===30&&column.numeric_scale===12));
   const eventColumns=(await q(`select column_name from information_schema.columns where table_schema='mc' and table_name='financial_input_events'`)).map(row=>row.column_name);
-  for(const column of ['actor_user_id','source_cost_version_id','source_expense_version_id','source_tax_setting_version_id','source_selection_id','source_parser_method_version_id','source_result_method_version_id']) assert.ok(eventColumns.includes(column));
+  for(const column of ['actor_user_id','source_cost_version_id','source_expense_version_id','source_tax_setting_version_id','source_selection_id','source_parser_method_version_id','source_result_method_version_id','source_financial_week_coverage_id','source_empty_confirmation_job_id']) assert.ok(eventColumns.includes(column));
+  const dailyInputColumns=(await q(`select column_name from information_schema.columns where table_schema='mc' and table_name='financial_daily_generation_inputs'`)).map(row=>row.column_name);
+  assert.ok(dailyInputColumns.includes('financial_week_coverage_id'));
+  assert.ok(dailyInputColumns.includes('empty_confirmation_job_id'));
   const selectionTrigger=await one(`select pg_get_triggerdef(oid) as definition from pg_trigger where tgrelid='mc.product_selection_items'::regclass and tgname='financial_selection_event'`);
   assert.match(selectionTrigger.definition,/FOR EACH STATEMENT/);
   pass('daily shadow schema has exact tax facts, immutable tenant rows and private worker CAS helpers');
@@ -89,6 +93,8 @@ try {
   assert.match(shadowDayFunction,/comparison.status='matched'/);
   assert.match(shadowDayFunction,/legacy_method.version_no=20/);
   assert.match(shadowDayFunction,/p_accounting_date BETWEEN comparison.period_start AND comparison.period_end/);
+  assert.match(shadowDayFunction,/day\.quality IN \('complete','partial'\)/);
+  assert.match(shadowDayFunction,/financial_empty_week_evidence_valid/);
   assert.match(publicationFunction,/financial_daily_publication_scope_incompatible/);
   assert.match(shadowDayFunction,/EXCEPT/);
   assert.match(pointerGuard,/mapped_day\.generation_id\s*<>\s*generation\.id/);
@@ -725,6 +731,64 @@ try {
   assert.ok(annualPlan.job_id);
   assert.equal((await one(`select count(*)::int as n from mc.financial_week_coverage where store_id=$1 and credential_generation=1`,[store.id])).n,53);
   assert.deepEqual(await one(`select min(week_start)::text as first,max(week_end)::text as last from mc.financial_week_coverage where store_id=$1 and credential_generation=1`,[store.id]),{first:'2025-09-22',last:'2026-09-27'});
+  await q(`update mc.jobs set status='running',attempt_count=attempt_count+1,worker_id='schema-empty-confirmation',
+    lease_token='77777777-7777-4777-8777-777777777777',lease_until=clock_timestamp()+interval '5 minutes',
+    heartbeat_at=clock_timestamp(),updated_at=clock_timestamp() where id=$1`,[annualPlan.job_id]);
+  await q(`update mc.job_dispatch set status='running',attempt_count=attempt_count+1,
+    lease_until=clock_timestamp()+interval '5 minutes' where job_id=$1`,[annualPlan.job_id]);
+  const emptyCoverages=await q(`update mc.financial_week_coverage set
+      coverage_status='empty',inventory_confirmed_at=clock_timestamp(),empty_confirmed_by_job_id=$2,
+      last_checked_at=clock_timestamp(),next_retry_at=null,last_error_code=null,updated_at=clock_timestamp()
+    where store_id=$1 and credential_generation=1 and week_start in ('2025-09-29','2025-10-06')
+    returning id,week_start::text as week_start,week_end::text as week_end,empty_confirmed_by_job_id`,[store.id,annualPlan.job_id]);
+  assert.equal(emptyCoverages.length,2);
+  const emptyEvents=await q(`select event_generation,event_type,affected_from::text as affected_from,
+      affected_to::text as affected_to,source_financial_week_coverage_id,source_empty_confirmation_job_id,dispatch_job_id
+    from mc.financial_input_events where source_financial_week_coverage_id=any($1::uuid[]) order by event_generation`,
+    [emptyCoverages.map(coverage=>coverage.id)]);
+  assert.equal(emptyEvents.length,2);
+  assert.ok(emptyEvents.every(event=>event.event_type==='report_empty_confirmed'
+    && event.source_empty_confirmation_job_id===annualPlan.job_id
+    && event.dispatch_job_id===emptyEvents[0].dispatch_job_id));
+  assert.deepEqual([emptyEvents[0].affected_from,emptyEvents[1].affected_to],['2025-09-29','2025-10-12']);
+  await q(`update mc.financial_week_coverage set updated_at=clock_timestamp()
+    where id=any($1::uuid[])`,[emptyCoverages.map(coverage=>coverage.id)]);
+  assert.equal((await one(`select count(*)::int n from mc.financial_input_events
+    where source_financial_week_coverage_id=any($1::uuid[])`,[emptyCoverages.map(coverage=>coverage.id)])).n,2);
+  await one(`select * from mc.complete_job($1,$2,$3,'completed')`,[
+    annualPlan.job_id,'77777777-7777-4777-8777-777777777777','schema-empty-confirmation'
+  ]);
+  const [emptyDailyClaim]=await q(`select * from mc.claim_jobs($1,$2::text[],60,1)`,['empty-week-worker',['financial_dates_recalculate']]);
+  assert.equal(emptyDailyClaim.id,emptyEvents[0].dispatch_job_id);
+  assert.deepEqual(emptyDailyClaim.payload.affectedFrom,'2025-09-29');
+  assert.deepEqual(emptyDailyClaim.payload.affectedTo,'2025-10-12');
+  const emptyDailyContext=await one(`select * from mc.establish_financial_daily_context($1,$2,$3)`,[
+    emptyDailyClaim.id,emptyDailyClaim.lease_token,'empty-week-worker'
+  ]);
+  const emptyDailyGeneration=await one(`select * from mc.start_financial_daily_generation($1,$2,$3,$4,$5,$6,$7)`,[
+    emptyDailyClaim.id,emptyDailyClaim.lease_token,'empty-week-worker',emptyDailyContext.event_generation,
+    'schema-test-empty-week-inputs',parserMethodId,dailyResultMethodId
+  ]);
+  for(const coverage of emptyCoverages)await q(`insert into mc.financial_daily_generation_inputs(
+      business_id,store_id,generation_id,source_kind,financial_week_coverage_id,empty_confirmation_job_id
+    ) values($1,$2,$3,'empty_week',$4,$5)`,[
+    b.id,store.id,emptyDailyGeneration.id,coverage.id,coverage.empty_confirmed_by_job_id
+  ]);
+  assert.equal((await one(`select count(*)::int n from mc.financial_daily_generation_inputs
+    where generation_id=$1 and source_kind='empty_week'`,[emptyDailyGeneration.id])).n,2);
+  await rejects(`insert into mc.financial_daily_generation_inputs(
+      business_id,store_id,generation_id,source_kind,financial_week_coverage_id,empty_confirmation_job_id
+    ) values($1,$2,$3,'empty_week',$4,$5)`,[
+    b.id,store.id,emptyDailyGeneration.id,emptyCoverages[0].id,dailyClaim.id
+  ],/financial empty week evidence is invalid/,'daily input rejects a mismatched empty-week confirmation job');
+  await one(`select * from mc.finalize_financial_daily_generation($1,$2,$3,$4,$5,'failed','unavailable',$6)`,[
+    emptyDailyClaim.id,emptyDailyClaim.lease_token,'empty-week-worker',emptyDailyGeneration.id,
+    emptyDailyContext.event_generation,'schema_test_complete'
+  ]);
+  await one(`select * from mc.complete_job($1,$2,$3,'completed')`,[
+    emptyDailyClaim.id,emptyDailyClaim.lease_token,'empty-week-worker'
+  ]);
+  pass('confirmed empty weeks emit idempotent recalculation events and remain audited daily inputs');
   const mondayScheduled=await q(`select store_id,credential_generation,schedule_boundary::text as schedule_boundary,job_id from mc.schedule_financial_inventory($1,100)`,['2026-10-04T21:05:00Z']);
   assert.equal(mondayScheduled.length,1);
   assert.equal(mondayScheduled[0].schedule_boundary,'2026-10-05');
@@ -1221,6 +1285,99 @@ try {
     assert.equal((await done(`select max(version)::int version from mc.schema_migrations`)).version,39);
     pass('migration 39 upgrades populated immutable financial events and restores their mutation guard');
   }finally{await dailyUpgradeDb.close();}
+
+  const emptyCoverageUpgradeDb=new PGlite();
+  try{
+    for(const migration of migrations.filter(name=>Number(name.split('_')[0])<=46))await emptyCoverageUpgradeDb.exec(await readFile(path.join(root,'db/migrations',migration),'utf8'));
+    const eq=async(sql,params=[])=>(await emptyCoverageUpgradeDb.query(sql,params)).rows;
+    const eone=async(sql,params=[])=>(await eq(sql,params))[0];
+    const emptyUser=await eone(`insert into mc.users(display_name) values('Empty coverage upgrade owner') returning id`);
+    const emptyBusiness=await eone(`insert into mc.businesses(name) values('Empty coverage upgrade business') returning id`);
+    await eq(`insert into mc.memberships(business_id,user_id,role) values($1,$2,'owner')`,[emptyBusiness.id,emptyUser.id]);
+    await eq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[emptyUser.id,emptyBusiness.id]);
+    const emptyStore=await eone(`insert into mc.stores(business_id,external_account_id,name,status)
+      values($1,'empty-upgrade','Empty upgrade','active') returning id`,[emptyBusiness.id]);
+    await eq(`insert into mc.connections(business_id,store_id,secret_ref,scopes,status,credential_generation)
+      values($1,$2,'database:empty-upgrade','["finance"]','active',1)`,[emptyBusiness.id,emptyStore.id]);
+    const confirmationJob=await eone(`select * from mc.enqueue_job($1,'financial_inventory_refresh','empty-upgrade-confirmation',
+      '{"schemaVersion":1,"credentialGeneration":1,"window":{"dateFrom":"2026-09-07","dateTo":"2026-09-13"}}'::jsonb,
+      clock_timestamp(),100,3)`,[emptyStore.id]);
+    await eq(`update mc.jobs set status='succeeded',outcome='completed',finished_at=clock_timestamp() where id=$1`,[confirmationJob.id]);
+    const legacyEmpty=await eone(`insert into mc.financial_week_coverage(
+      business_id,store_id,credential_generation,week_start,week_end,check_reasons,coverage_status,
+      inventory_confirmed_at,last_checked_at,empty_confirmed_by_job_id
+    ) values($1,$2,1,'2026-09-07','2026-09-13','{annual_backfill}','empty',
+      clock_timestamp(),clock_timestamp(),$3) returning id`,[emptyBusiness.id,emptyStore.id,confirmationJob.id]);
+    const staleConfirmationJob=await eone(`select * from mc.enqueue_job($1,'financial_inventory_refresh','stale-empty-upgrade-confirmation',
+      '{"schemaVersion":1,"credentialGeneration":2,"window":{"dateFrom":"2026-08-31","dateTo":"2026-09-06"}}'::jsonb,
+      clock_timestamp(),100,3)`,[emptyStore.id]);
+    await eq(`update mc.jobs set status='succeeded',outcome='completed',finished_at=clock_timestamp() where id=$1`,[staleConfirmationJob.id]);
+    const staleLegacyEmpty=await eone(`insert into mc.financial_week_coverage(
+      business_id,store_id,credential_generation,week_start,week_end,check_reasons,coverage_status,
+      inventory_confirmed_at,last_checked_at,empty_confirmed_by_job_id
+    ) values($1,$2,2,'2026-08-31','2026-09-06','{annual_backfill}','empty',
+      clock_timestamp(),clock_timestamp(),$3) returning id`,[emptyBusiness.id,emptyStore.id,staleConfirmationJob.id]);
+    const inactiveUser=await eone(`insert into mc.users(display_name) values('Inactive empty coverage owner') returning id`);
+    const inactiveBusiness=await eone(`insert into mc.businesses(name) values('Inactive empty coverage business') returning id`);
+    await eq(`insert into mc.memberships(business_id,user_id,role) values($1,$2,'owner')`,[inactiveBusiness.id,inactiveUser.id]);
+    await eq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[inactiveUser.id,inactiveBusiness.id]);
+    const inactiveStore=await eone(`insert into mc.stores(business_id,external_account_id,name,status)
+      values($1,'inactive-empty-upgrade','Inactive empty upgrade','active') returning id`,[inactiveBusiness.id]);
+    await eq(`insert into mc.connections(business_id,store_id,secret_ref,scopes,status,credential_generation)
+      values($1,$2,'database:inactive-empty-upgrade','["finance"]','active',1)`,[inactiveBusiness.id,inactiveStore.id]);
+    const inactiveConfirmationJob=await eone(`select * from mc.enqueue_job($1,'financial_inventory_refresh','inactive-empty-upgrade-confirmation',
+      '{"schemaVersion":1,"credentialGeneration":1,"window":{"dateFrom":"2026-09-07","dateTo":"2026-09-13"}}'::jsonb,
+      clock_timestamp(),100,3)`,[inactiveStore.id]);
+    await eq(`update mc.jobs set status='succeeded',outcome='completed',finished_at=clock_timestamp() where id=$1`,[inactiveConfirmationJob.id]);
+    const inactiveLegacyEmpty=await eone(`insert into mc.financial_week_coverage(
+      business_id,store_id,credential_generation,week_start,week_end,check_reasons,coverage_status,
+      inventory_confirmed_at,last_checked_at,empty_confirmed_by_job_id
+    ) values($1,$2,1,'2026-09-07','2026-09-13','{annual_backfill}','empty',
+      clock_timestamp(),clock_timestamp(),$3) returning id`,[inactiveBusiness.id,inactiveStore.id,inactiveConfirmationJob.id]);
+    await eq(`update mc.stores set status='archived' where id=$1`,[inactiveStore.id]);
+    await eq(`select set_config('app.user_id','',false),set_config('app.business_id','',false)`);
+    await emptyCoverageUpgradeDb.exec(await readFile(path.join(root,'db/migrations/047_financial_empty_week_calculation.sql'),'utf8'));
+    await eq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[emptyUser.id,emptyBusiness.id]);
+    assert.deepEqual(await eone(`select event_type,affected_from::text as affected_from,affected_to::text as affected_to,
+        source_financial_week_coverage_id,source_empty_confirmation_job_id
+      from mc.financial_input_events where source_financial_week_coverage_id=$1`,[legacyEmpty.id]),{
+      event_type:'report_empty_confirmed',affected_from:'2026-09-07',affected_to:'2026-09-13',
+      source_financial_week_coverage_id:legacyEmpty.id,source_empty_confirmation_job_id:confirmationJob.id
+    });
+    assert.deepEqual(await eone(`select payload->>'affectedFrom' affected_from,payload->>'affectedTo' affected_to,
+        payload->>'allowsWbApi' allows_wb_api
+      from mc.jobs where store_id=$1 and job_type='financial_dates_recalculate' and status='pending'`,[emptyStore.id]),{
+      affected_from:'2026-09-07',affected_to:'2026-09-13',allows_wb_api:'false'
+    });
+    assert.equal((await eone(`select count(*)::int n from mc.financial_input_events
+      where source_financial_week_coverage_id=$1`,[staleLegacyEmpty.id])).n,0);
+    const wrongTypeJob=await eone(`select * from mc.enqueue_job($1,'financial_dates_recalculate','empty-evidence-wrong-type',
+      '{"schemaVersion":1,"credentialGeneration":1,"window":{"dateFrom":"2026-09-07","dateTo":"2026-09-13"}}'::jsonb,
+      clock_timestamp(),100,3)`,[emptyStore.id]);
+    const wrongWindowJob=await eone(`select * from mc.enqueue_job($1,'financial_inventory_refresh','empty-evidence-wrong-window',
+      '{"schemaVersion":1,"credentialGeneration":1,"window":{"dateFrom":"2026-09-08","dateTo":"2026-09-13"}}'::jsonb,
+      clock_timestamp(),100,3)`,[emptyStore.id]);
+    const wrongGenerationJob=await eone(`select * from mc.enqueue_job($1,'financial_inventory_refresh','empty-evidence-wrong-generation',
+      '{"schemaVersion":1,"credentialGeneration":2,"window":{"dateFrom":"2026-09-07","dateTo":"2026-09-13"}}'::jsonb,
+      clock_timestamp(),100,3)`,[emptyStore.id]);
+    await eq(`update mc.jobs set status='running',worker_id='invalid-evidence-test',
+      lease_token=gen_random_uuid(),lease_until=clock_timestamp()+interval '5 minutes',heartbeat_at=clock_timestamp()
+      where id=any($1::uuid[])`,[[wrongTypeJob.id,wrongWindowJob.id,wrongGenerationJob.id]]);
+    assert.equal((await eone(`select mc.financial_empty_week_evidence_valid($1,$2) valid`,[legacyEmpty.id,confirmationJob.id])).valid,true);
+    for(const invalidJob of [wrongTypeJob,wrongWindowJob,wrongGenerationJob]){
+      await assert.rejects(()=>eq(`update mc.financial_week_coverage set empty_confirmed_by_job_id=$2
+        where id=$1`,[legacyEmpty.id,invalidJob.id]),/confirmed empty financial week is required/);
+      assert.equal((await eone(`select mc.financial_empty_week_evidence_valid($1,$2) valid`,[legacyEmpty.id,invalidJob.id])).valid,false);
+    }
+    await eq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[inactiveUser.id,inactiveBusiness.id]);
+    assert.equal((await eone(`select count(*)::int n from mc.financial_input_events
+      where source_financial_week_coverage_id=$1`,[inactiveLegacyEmpty.id])).n,0);
+    assert.equal((await eone(`select count(*)::int n from mc.jobs
+      where store_id=$1 and job_type='financial_dates_recalculate'`,[inactiveStore.id])).n,0);
+    await eq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[emptyUser.id,emptyBusiness.id]);
+    assert.equal((await eone(`select max(version)::int version from mc.schema_migrations`)).version,47);
+    pass('migration 47 validates empty evidence and backfills only current active finance coverage');
+  }finally{await emptyCoverageUpgradeDb.close();}
 
   // Produce a machine-derived field/constraint inventory for review.
   const cols = await q("select table_name,column_name,data_type,udt_name,is_nullable,column_default,numeric_precision,numeric_scale from information_schema.columns where table_schema='mc' order by table_name,ordinal_position");

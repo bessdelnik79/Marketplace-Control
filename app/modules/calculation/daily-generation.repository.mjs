@@ -63,15 +63,29 @@ async function loadSnapshot(client,context){
   const candidates=await loadCalculationReportCandidates(client,businessId,storeId);
   const reports=selectFullyNormalizedReportPeriods(candidates).filter(row=>row.period_start<=context.affected_to);
   const affectedReports=reports.filter(row=>row.period_end>=context.affected_from&&row.period_start<=context.affected_to);
-  if(!affectedReports.length)throw new Error('financial_daily_inputs_missing');
-  const affectedStart=affectedReports.reduce((value,row)=>row.period_start<value?row.period_start:value,affectedReports[0].period_start);
-  const affectedEnd=affectedReports.reduce((value,row)=>row.period_end>value?row.period_end:value,affectedReports[0].period_end);
+  const emptyWeeks=(await client.query(
+    `select wc.id,wc.empty_confirmed_by_job_id,wc.week_start::text as period_start,wc.week_end::text as period_end
+       from mc.financial_week_coverage wc
+       join mc.connections connection on connection.business_id=wc.business_id and connection.store_id=wc.store_id
+        and connection.status='active' and connection.scopes ? 'finance'
+        and connection.credential_generation=wc.credential_generation
+      where wc.business_id=$1 and wc.store_id=$2 and wc.coverage_status='empty'
+        and wc.empty_confirmed_by_job_id is not null and wc.week_start<=$3
+      order by wc.week_start,wc.id`,[businessId,storeId,context.affected_to])).rows
+    .filter(row=>!affectedReports.some(report=>report.period_start<=row.period_end&&report.period_end>=row.period_start));
+  const affectedEmptyWeeks=emptyWeeks.filter(row=>row.period_end>=context.affected_from&&row.period_start<=context.affected_to);
+  const affectedPeriods=[...affectedReports,...affectedEmptyWeeks];
+  if(!affectedPeriods.length)throw new Error('financial_daily_inputs_missing');
+  const affectedStart=affectedPeriods.reduce((value,row)=>row.period_start<value?row.period_start:value,affectedPeriods[0].period_start);
+  const affectedEnd=affectedPeriods.reduce((value,row)=>row.period_end>value?row.period_end:value,affectedPeriods[0].period_end);
   const method=(await client.query(`select id,implementation_version from mc.method_versions where code='financial_result' and version_no=20`,[])).rows[0];
   if(!method)throw new Error('financial_daily_method_missing');
   const normalizationIds=reports.map(row=>row.normalization_id);
-  const parserMethods=(await client.query(
+  const parserMethods=normalizationIds.length?(await client.query(
     `select distinct n.method_version_id,m.implementation_version from mc.report_normalizations n join mc.method_versions m on m.id=n.method_version_id
-      where n.id=any($1::uuid[]) and m.code='wb_finance_import'`,[normalizationIds])).rows;
+      where n.id=any($1::uuid[]) and m.code='wb_finance_import'`,[normalizationIds])).rows:(await client.query(
+    `select id as method_version_id,implementation_version from mc.method_versions
+      where code='wb_finance_import' and implementation_version=$1 order by version_no desc limit 1`,[financialParserVersion])).rows;
   if(parserMethods.length!==1||parserMethods[0].implementation_version!==financialParserVersion)throw new Error('financial_daily_method_missing');
   const operationLinks=await createConfirmedReturnLinks(client,businessId,storeId,normalizationIds,method.id);
   const components=(await client.query(
@@ -117,17 +131,20 @@ async function loadSnapshot(client,context){
       where s.business_id=$1 and s.effective_from<=$2 order by s.effective_from,v.id`,[businessId,affectedEnd])).rows;
   const fingerprint=createInputFingerprint({resultMethodVersion:`${method.id}:${method.implementation_version}`,selectedProductIds:products,
     reportVersionIds:reports.map(row=>row.report_version_id),reportNormalizationIds:normalizationIds,costVersionIds:costs.map(row=>row.id),
+    emptyWeekCoverageIds:emptyWeeks.map(row=>`${row.id}:${row.empty_confirmed_by_job_id}`),
     operationLinkIds:operationLinks,expenseVersionIds:expenses.map(row=>row.id),taxSettingVersionIds:taxSettings.map(row=>row.id),
     periodStart:affectedStart,periodEnd:affectedEnd});
-  return{businessId,storeId,selection,products,reports,affectedReports,affectedStart,affectedEnd,method,
+  return{businessId,storeId,selection,products,reports,affectedReports,emptyWeeks,affectedEmptyWeeks,affectedStart,affectedEnd,method,
     parserMethod:parserMethods[0],operationLinks,components,operations,costs,expenses,taxSettings,fingerprint};
 }
 
-function calculatePeriods(snapshot){
+export function calculateFinancialPeriods(snapshot){
   const groups=[...groupBy(snapshot.affectedReports,periodKey).values()].sort((a,b)=>a[0].period_start.localeCompare(b[0].period_start));
-  return groups.map(rows=>{
-    const periodStart=rows[0].period_start,periodEnd=rows[0].period_end;
-    const coverageComplete=rows.every(row=>row.normalization_id)&&reportPeriodsCoverRange(rows,periodStart,periodEnd);
+  const periods=[...groups.map(rows=>({rows,periodStart:rows[0].period_start,periodEnd:rows[0].period_end})),
+    ...snapshot.affectedEmptyWeeks.map(row=>({rows:[],periodStart:row.period_start,periodEnd:row.period_end}))]
+    .sort((a,b)=>a.periodStart.localeCompare(b.periodStart)||a.periodEnd.localeCompare(b.periodEnd));
+  return periods.map(({rows,periodStart,periodEnd})=>{
+    const coverageComplete=rows.length===0||(rows.every(row=>row.normalization_id)&&reportPeriodsCoverRange(rows,periodStart,periodEnd));
     const retail=snapshot.components.filter(row=>row.sourceField==='retailAmount');
     const retailIds=new Set(retail.map(row=>String(row.operationVersionId)));
     const missing=snapshot.operations.filter(row=>!retailIds.has(String(row.id))).map(row=>({id:`missing-retail:${row.id}`,productId:row.productId,
@@ -141,7 +158,7 @@ function calculatePeriods(snapshot){
     const result=calculateFinancialResult({periodStart,periodEnd,selectedProductIds:snapshot.products,financialComponents:snapshot.components,
       operations:snapshot.operations,operationLinks:snapshot.operationLinks,costVersions:snapshot.costs,expenses:snapshot.expenses,
       taxSetting:currentTax?{regimeCode:currentTax.regime_code,usnRateFraction:currentTax.usn_rate_fraction,vatMode:currentTax.vat_mode,state:currentTax.state}:null,
-      taxReference,reportCoverageComplete:coverageComplete});
+      taxReference,reportCoverageComplete:coverageComplete,allowEmptyResult:rows.length===0});
     return buildDailyFinancialGeneration({periodStart,periodEnd,result,taxReference,coverageComplete});
   });
 }
@@ -151,6 +168,9 @@ async function persistGeneration(client,context,snapshot,generation,daily){
   for(const report of snapshot.reports)await client.query(
     `insert into mc.financial_daily_generation_inputs(business_id,store_id,generation_id,source_kind,report_version_id,report_normalization_id)
      values($1,$2,$3,'report',$4,$5)`,[...args,report.report_version_id,report.normalization_id]);
+  for(const coverage of snapshot.emptyWeeks)await client.query(
+    `insert into mc.financial_daily_generation_inputs(business_id,store_id,generation_id,source_kind,financial_week_coverage_id,empty_confirmation_job_id)
+     values($1,$2,$3,'empty_week',$4,$5)`,[...args,coverage.id,coverage.empty_confirmed_by_job_id]);
   for(const cost of snapshot.costs)await client.query(
     `insert into mc.financial_daily_generation_inputs(business_id,store_id,generation_id,source_kind,cost_version_id) values($1,$2,$3,'cost',$4)`,[...args,cost.id]);
   for(const expense of snapshot.expenses)await client.query(
@@ -223,7 +243,7 @@ export function createFinancialDailyGenerationRepository({pool,publicationReposi
       if(!context)return{superseded:true};
       if(Number(context.event_generation)<Number(context.watermark_generation))return{superseded:true};
       const snapshot=await loadSnapshot(client,context);
-      const daily=fillCoverageGaps(combineDailyFinancialGenerations(calculatePeriods(snapshot)),context.affected_from,context.affected_to);
+      const daily=fillCoverageGaps(combineDailyFinancialGenerations(calculateFinancialPeriods(snapshot)),context.affected_from,context.affected_to);
       const generation=(await client.query(`select * from mc.start_financial_daily_generation($1,$2,$3,$4,$5,$6,$7)`,
         [jobId,leaseToken,workerId,context.event_generation,snapshot.fingerprint,snapshot.parserMethod.method_version_id,snapshot.method.id])).rows[0];
       if(generation.status!=='building'){

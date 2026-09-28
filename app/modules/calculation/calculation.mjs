@@ -172,6 +172,7 @@ export function createInputFingerprint({
   selectedProductIds = [],
   reportVersionIds = [],
   reportNormalizationIds = [],
+  emptyWeekCoverageIds = [],
   costVersionIds = [],
   operationLinkIds = [],
   expenseVersionIds = [],
@@ -185,6 +186,7 @@ export function createInputFingerprint({
     selection_snapshot_product_ids_sorted: sortedUnique(selectedProductIds),
     report_version_ids_sorted: sortedUnique(reportVersionIds),
     report_normalization_ids_sorted: sortedUnique(reportNormalizationIds),
+    empty_week_coverage_ids_sorted: sortedUnique(emptyWeekCoverageIds),
     cost_version_ids_sorted: sortedUnique(costVersionIds),
     operation_link_ids_sorted: sortedUnique(operationLinkIds),
     expense_version_ids_sorted: sortedUnique(expenseVersionIds),
@@ -514,7 +516,8 @@ export function calculateFinancialResult({
   expenses = [],
   taxSetting = null,
   taxReference = null,
-  reportCoverageComplete = true
+  reportCoverageComplete = true,
+  allowEmptyResult = false
 }) {
   const range = period(periodStart, periodEnd);
   const selected = new Set(selectedProductIds.map(value => requiredId(value)));
@@ -712,6 +715,14 @@ export function calculateFinancialResult({
     );
 
   const missingReasons = orderedReasons(reasons);
+  if (resultLines.length === 0 && reportCoverageComplete && allowEmptyResult) {
+    return {
+      quality: missingReasons.length ? 'partial' : 'complete',
+      missingReasons,
+      lines: [],
+      totals: totalsFor([], taxReference?.usable === true)
+    };
+  }
   if (resultLines.length === 0) {
     return { quality: 'unavailable', missingReasons, lines: [], totals: null };
   }

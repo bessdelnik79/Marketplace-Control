@@ -770,6 +770,8 @@
 | tax_setting_version_id | uuid | да | — |
 | selection_id | uuid | да | — |
 | created_at | timestamp with time zone | нет | clock_timestamp() |
+| financial_week_coverage_id | uuid | да | — |
+| empty_confirmation_job_id | uuid | да | — |
 
 Ограничения и связи:
 
@@ -781,11 +783,13 @@
 - `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, selection_id) REFERENCES mc.product_selections(business_id, store_id, id)`
 - `FOREIGN KEY (business_id, tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id)`
-- `UNIQUE NULLS NOT DISTINCT (generation_id, source_kind, report_version_id, report_normalization_id, cost_version_id, expense_version_id, tax_setting_version_id, selection_id)`
 - `UNIQUE (business_id, store_id, id)`
-- `CHECK ((((source_kind = 'report'::text) AND (report_version_id IS NOT NULL) AND (report_normalization_id IS NOT NULL) AND (num_nonnulls(cost_version_id, expense_version_id, tax_setting_version_id, selection_id) = 0)) OR ((source_kind = 'cost'::text) AND (cost_version_id IS NOT NULL) AND (num_nonnulls(report_version_id, report_normalization_id, expense_version_id, tax_setting_version_id, selection_id) = 0)) OR ((source_kind = 'expense'::text) AND (expense_version_id IS NOT NULL) AND (num_nonnulls(report_version_id, report_normalization_id, cost_version_id, tax_setting_version_id, selection_id) = 0)) OR ((source_kind = 'tax'::text) AND (tax_setting_version_id IS NOT NULL) AND (num_nonnulls(report_version_id, report_normalization_id, cost_version_id, expense_version_id, selection_id) = 0)) OR ((source_kind = 'selection'::text) AND (selection_id IS NOT NULL) AND (num_nonnulls(report_version_id, report_normalization_id, cost_version_id, expense_version_id, tax_setting_version_id) = 0))))`
+- `CHECK ((((source_kind = 'report'::text) AND (report_version_id IS NOT NULL) AND (report_normalization_id IS NOT NULL) AND (num_nonnulls(cost_version_id, expense_version_id, tax_setting_version_id, selection_id, financial_week_coverage_id, empty_confirmation_job_id) = 0)) OR ((source_kind = 'empty_week'::text) AND (financial_week_coverage_id IS NOT NULL) AND (empty_confirmation_job_id IS NOT NULL) AND (num_nonnulls(report_version_id, report_normalization_id, cost_version_id, expense_version_id, tax_setting_version_id, selection_id) = 0)) OR ((source_kind = 'cost'::text) AND (cost_version_id IS NOT NULL) AND (num_nonnulls(report_version_id, report_normalization_id, expense_version_id, tax_setting_version_id, selection_id, financial_week_coverage_id, empty_confirmation_job_id) = 0)) OR ((source_kind = 'expense'::text) AND (expense_version_id IS NOT NULL) AND (num_nonnulls(report_version_id, report_normalization_id, cost_version_id, tax_setting_version_id, selection_id, financial_week_coverage_id, empty_confirmation_job_id) = 0)) OR ((source_kind = 'tax'::text) AND (tax_setting_version_id IS NOT NULL) AND (num_nonnulls(report_version_id, report_normalization_id, cost_version_id, expense_version_id, selection_id, financial_week_coverage_id, empty_confirmation_job_id) = 0)) OR ((source_kind = 'selection'::text) AND (selection_id IS NOT NULL) AND (num_nonnulls(report_version_id, report_normalization_id, cost_version_id, expense_version_id, tax_setting_version_id, financial_week_coverage_id, empty_confirmation_job_id) = 0))))`
+- `FOREIGN KEY (business_id, store_id, financial_week_coverage_id) REFERENCES mc.financial_week_coverage(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, empty_confirmation_job_id) REFERENCES mc.jobs(business_id, store_id, id)`
 - `PRIMARY KEY (id)`
-- `CHECK ((source_kind = ANY (ARRAY['report'::text, 'cost'::text, 'expense'::text, 'tax'::text, 'selection'::text])))`
+- `CHECK ((source_kind = ANY (ARRAY['report'::text, 'empty_week'::text, 'cost'::text, 'expense'::text, 'tax'::text, 'selection'::text])))`
+- `UNIQUE NULLS NOT DISTINCT (generation_id, source_kind, report_version_id, report_normalization_id, cost_version_id, expense_version_id, tax_setting_version_id, selection_id, financial_week_coverage_id, empty_confirmation_job_id)`
 
 ## financial_daily_generation_products
 
@@ -1079,6 +1083,8 @@
 | source_selection_id | uuid | да | — |
 | source_parser_method_version_id | uuid | да | — |
 | source_result_method_version_id | uuid | да | — |
+| source_financial_week_coverage_id | uuid | да | — |
+| source_empty_confirmation_job_id | uuid | да | — |
 
 Ограничения и связи:
 
@@ -1093,16 +1099,18 @@
 - `CHECK ((affected_to >= affected_from))`
 - `FOREIGN KEY (business_id, store_id, source_cost_version_id) REFERENCES mc.cost_versions(business_id, store_id, id)`
 - `FOREIGN KEY (dispatch_job_id) REFERENCES mc.jobs(id)`
+- `FOREIGN KEY (business_id, store_id, source_financial_week_coverage_id) REFERENCES mc.financial_week_coverage(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, source_empty_confirmation_job_id) REFERENCES mc.jobs(business_id, store_id, id)`
 - `CHECK ((event_generation > 0))`
 - `CHECK (((length(event_key) >= 1) AND (length(event_key) <= 200)))`
-- `CHECK ((event_type = ANY (ARRAY['report_accepted'::text, 'report_updated'::text, 'cost_updated'::text, 'expense_updated'::text, 'tax_updated'::text, 'selection_updated'::text, 'parser_method_updated'::text, 'result_method_updated'::text, 'shadow_backfill'::text])))`
+- `CHECK ((event_type = ANY (ARRAY['report_accepted'::text, 'report_updated'::text, 'report_empty_confirmed'::text, 'cost_updated'::text, 'expense_updated'::text, 'tax_updated'::text, 'selection_updated'::text, 'parser_method_updated'::text, 'result_method_updated'::text, 'shadow_backfill'::text])))`
 - `FOREIGN KEY (business_id, store_id, source_expense_version_id) REFERENCES mc.expense_versions(business_id, store_id, id)`
 - `PRIMARY KEY (id)`
 - `FOREIGN KEY (business_id, store_id, source_report_version_id, source_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, report_version_id, id)`
 - `FOREIGN KEY (business_id, store_id, source_selection_id) REFERENCES mc.product_selections(business_id, store_id, id)`
 - `FOREIGN KEY (source_parser_method_version_id) REFERENCES mc.method_versions(id)`
 - `FOREIGN KEY (source_result_method_version_id) REFERENCES mc.method_versions(id)`
-- `CHECK ((((event_type = ANY (ARRAY['report_accepted'::text, 'report_updated'::text])) AND (source_report_version_id IS NOT NULL) AND (source_normalization_id IS NOT NULL) AND (num_nonnulls(source_cost_version_id, source_expense_version_id, source_tax_setting_version_id, source_selection_id, source_parser_method_version_id, source_result_method_version_id) = 0)) OR ((event_type = 'cost_updated'::text) AND (source_cost_version_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_expense_version_id, source_tax_setting_version_id, source_selection_id, source_parser_method_version_id, source_result_method_version_id) = 0)) OR ((event_type = 'expense_updated'::text) AND (source_expense_version_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_cost_version_id, source_tax_setting_version_id, source_selection_id, source_parser_method_version_id, source_result_method_version_id) = 0)) OR ((event_type = 'tax_updated'::text) AND (source_tax_setting_version_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_cost_version_id, source_expense_version_id, source_selection_id, source_parser_method_version_id, source_result_method_version_id) = 0)) OR ((event_type = 'selection_updated'::text) AND (source_selection_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_cost_version_id, source_expense_version_id, source_tax_setting_version_id, source_parser_method_version_id, source_result_method_version_id) = 0)) OR ((event_type = 'parser_method_updated'::text) AND (source_parser_method_version_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_cost_version_id, source_expense_version_id, source_tax_setting_version_id, source_selection_id, source_result_method_version_id) = 0)) OR ((event_type = ANY (ARRAY['result_method_updated'::text, 'shadow_backfill'::text])) AND (source_result_method_version_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_cost_version_id, source_expense_version_id, source_tax_setting_version_id, source_selection_id, source_parser_method_version_id) = 0))))`
+- `CHECK ((((event_type = ANY (ARRAY['report_accepted'::text, 'report_updated'::text])) AND (source_report_version_id IS NOT NULL) AND (source_normalization_id IS NOT NULL) AND (num_nonnulls(source_cost_version_id, source_expense_version_id, source_tax_setting_version_id, source_selection_id, source_parser_method_version_id, source_result_method_version_id, source_financial_week_coverage_id, source_empty_confirmation_job_id) = 0)) OR ((event_type = 'report_empty_confirmed'::text) AND (source_financial_week_coverage_id IS NOT NULL) AND (source_empty_confirmation_job_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_cost_version_id, source_expense_version_id, source_tax_setting_version_id, source_selection_id, source_parser_method_version_id, source_result_method_version_id) = 0)) OR ((event_type = 'cost_updated'::text) AND (source_cost_version_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_expense_version_id, source_tax_setting_version_id, source_selection_id, source_parser_method_version_id, source_result_method_version_id, source_financial_week_coverage_id, source_empty_confirmation_job_id) = 0)) OR ((event_type = 'expense_updated'::text) AND (source_expense_version_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_cost_version_id, source_tax_setting_version_id, source_selection_id, source_parser_method_version_id, source_result_method_version_id, source_financial_week_coverage_id, source_empty_confirmation_job_id) = 0)) OR ((event_type = 'tax_updated'::text) AND (source_tax_setting_version_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_cost_version_id, source_expense_version_id, source_selection_id, source_parser_method_version_id, source_result_method_version_id, source_financial_week_coverage_id, source_empty_confirmation_job_id) = 0)) OR ((event_type = 'selection_updated'::text) AND (source_selection_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_cost_version_id, source_expense_version_id, source_tax_setting_version_id, source_parser_method_version_id, source_result_method_version_id, source_financial_week_coverage_id, source_empty_confirmation_job_id) = 0)) OR ((event_type = 'parser_method_updated'::text) AND (source_parser_method_version_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_cost_version_id, source_expense_version_id, source_tax_setting_version_id, source_selection_id, source_result_method_version_id, source_financial_week_coverage_id, source_empty_confirmation_job_id) = 0)) OR ((event_type = ANY (ARRAY['result_method_updated'::text, 'shadow_backfill'::text])) AND (source_result_method_version_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_cost_version_id, source_expense_version_id, source_tax_setting_version_id, source_selection_id, source_parser_method_version_id, source_financial_week_coverage_id, source_empty_confirmation_job_id) = 0))))`
 - `FOREIGN KEY (business_id, source_tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id)`
 
 ## financial_period_results
@@ -1243,8 +1251,10 @@
 - `CHECK ((credential_generation > 0))`
 - `FOREIGN KEY (empty_confirmed_by_job_id) REFERENCES mc.jobs(id) ON DELETE RESTRICT`
 - `CHECK (((coverage_status <> 'empty'::text) OR ((inventory_confirmed_at IS NOT NULL) AND (empty_confirmed_by_job_id IS NOT NULL))))`
+- `FOREIGN KEY (business_id, store_id, empty_confirmed_by_job_id) REFERENCES mc.jobs(business_id, store_id, id)`
 - `CHECK (((last_error_code IS NULL) OR (last_error_code ~ '^[a-z0-9][a-z0-9_.:-]{0,99}$'::text)))`
 - `PRIMARY KEY (id)`
+- `UNIQUE (business_id, store_id, id)`
 
 ## financial_week_inventory
 

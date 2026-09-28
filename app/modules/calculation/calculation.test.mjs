@@ -154,6 +154,7 @@ test('canonical JSON and input fingerprint are stable across object and input ar
     selectedProductIds: ['product-b', 'product-a', 'product-a'],
     reportVersionIds: ['report-2', 'report-1'],
     reportNormalizationIds: ['normalization-2', 'normalization-1'],
+    emptyWeekCoverageIds: ['coverage-2', 'coverage-1'],
     costVersionIds: ['cost-2', 'cost-1'],
     operationLinkIds: ['link-2', 'link-1'],
     expenseVersionIds: ['expense-1'],
@@ -166,12 +167,14 @@ test('canonical JSON and input fingerprint are stable across object and input ar
     selectedProductIds: ['product-a', 'product-b'],
     reportVersionIds: [...base.reportVersionIds].reverse(),
     reportNormalizationIds: [...base.reportNormalizationIds].reverse(),
+    emptyWeekCoverageIds: [...base.emptyWeekCoverageIds].reverse(),
     costVersionIds: [...base.costVersionIds].reverse(),
     operationLinkIds: [...base.operationLinkIds].reverse()
   };
   assert.equal(createInputFingerprint(base), createInputFingerprint(reordered));
   assert.notEqual(createInputFingerprint(base), createInputFingerprint({ ...base, costVersionIds: ['cost-3'] }));
   assert.notEqual(createInputFingerprint(base), createInputFingerprint({ ...base, operationLinkIds: ['link-3'] }));
+  assert.notEqual(createInputFingerprint(base), createInputFingerprint({ ...base, emptyWeekCoverageIds: ['coverage-3'] }));
   assert.match(createInputFingerprint(base), /^[a-f0-9]{64}$/);
 });
 
@@ -594,6 +597,39 @@ test('full report coverage makes a selected SKU without sales an explicit zero t
   assert.equal(result.estimatedTax,'0.0000');
   assert.deepEqual(result.products,[{productId:'product-1',taxableBase:'0.0000',estimatedTax:'0.0000'}]);
   assert.equal(result.missingReasons.includes('tax_base_missing'),false);
+});
+
+test('an explicitly covered week without WB rows can publish a zero result when tax inputs are usable',()=>{
+  const taxReference=calculateStoreTaxReference({periodStart:'2026-07-13',periodEnd:'2026-07-19',selectedProductIds:['product-1'],sourceRows:[],
+    taxSettings:[{id:'active',effectiveFrom:'2026-01-01',regimeCode:'usn_income',usnRateFraction:'0.06'}]});
+  const result=calculateFinancialResult({periodStart:'2026-07-13',periodEnd:'2026-07-19',selectedProductIds:['product-1'],taxReference,
+    taxSetting:{regimeCode:'usn_income',usnRateFraction:'0.06',vatMode:'exempt'},reportCoverageComplete:true,allowEmptyResult:true});
+  assert.equal(result.quality,'complete');
+  assert.deepEqual(result.missingReasons,[]);
+  assert.deepEqual(result.lines,[]);
+  assert.equal(result.totals.availableResultBeforeTax,'0.0000');
+  assert.equal(result.totals.availableResultAfterTax,'0.0000');
+  assert.equal(result.totals.netProfit,null);
+});
+
+test('a rowless period without explicit empty evidence stays unavailable',()=>{
+  const taxReference=calculateStoreTaxReference({periodStart:'2026-07-13',periodEnd:'2026-07-19',selectedProductIds:['product-1'],sourceRows:[],
+    taxSettings:[{id:'active',effectiveFrom:'2026-01-01',regimeCode:'usn_income',usnRateFraction:'0.06'}]});
+  const result=calculateFinancialResult({periodStart:'2026-07-13',periodEnd:'2026-07-19',selectedProductIds:['product-1'],taxReference,
+    taxSetting:{regimeCode:'usn_income',usnRateFraction:'0.06',vatMode:'exempt'},reportCoverageComplete:true});
+  assert.equal(result.quality,'unavailable');
+  assert.equal(result.totals,null);
+});
+
+test('an explicitly empty week keeps its known before-tax zero when tax settings are missing',()=>{
+  const taxReference=calculateStoreTaxReference({periodStart:'2026-07-13',periodEnd:'2026-07-19',selectedProductIds:['product-1'],sourceRows:[],taxSettings:[]});
+  const result=calculateFinancialResult({periodStart:'2026-07-13',periodEnd:'2026-07-19',selectedProductIds:['product-1'],taxReference,
+    reportCoverageComplete:true,allowEmptyResult:true});
+  assert.equal(result.quality,'partial');
+  assert.deepEqual(result.missingReasons,['tax_setting_missing']);
+  assert.equal(result.totals.availableResultBeforeTax,'0.0000');
+  assert.equal(result.totals.availableResultAfterTax,null);
+  assert.equal(result.totals.netProfit,null);
 });
 
 test('full report coverage gives every no-sale selected SKU a zero computation',()=>{
