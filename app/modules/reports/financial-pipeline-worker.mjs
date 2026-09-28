@@ -18,7 +18,13 @@ const terminalErrors=new Set([
 
 export function financialPipelineErrorCode(error,fallback='financial_pipeline_internal_error'){
   const code=String(error?.message??'');
-  return /^financial_[a-z0-9_]{1,99}$/.test(code)?code:fallback;
+  if(/^financial_[a-z0-9_]{1,99}$/.test(code))return code;
+  const sqlState=String(error?.code??'').toLowerCase();
+  if(/^[0-9a-z]{5}$/.test(sqlState)){
+    const constraint=String(error?.constraint??'').toLowerCase().replace(/[^a-z0-9_]/g,'_').slice(0,60);
+    return `financial_db_${sqlState}${constraint?`_${constraint}`:''}`.slice(0,100);
+  }
+  return fallback;
 }
 
 function retryDecision(error,errorCode){

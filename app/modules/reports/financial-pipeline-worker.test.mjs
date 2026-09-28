@@ -176,4 +176,5 @@ test('combined worker alternates fetch and normalize claims and sanitizes unknow
   ]);
   assert.equal(financialPipelineErrorCode(new Error('token=unsafe value')),'financial_pipeline_internal_error');
   assert.equal(financialPipelineErrorCode(new Error('financial_detail_unavailable')),'financial_detail_unavailable');
+  assert.equal(financialPipelineErrorCode(Object.assign(new Error('unsafe database detail'),{code:'23514',constraint:'safe_check'})),'financial_db_23514_safe_check');
 });
