@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export function createFinancialInventoryRepository({ pool }) {
-  if (!pool?.query) throw new TypeError('financial inventory repository requires pool');
+  if (!pool?.query || !pool?.connect) throw new TypeError('financial inventory repository requires pool');
 
   async function getContext(jobId, credentialGeneration, leaseToken, workerId) {
     return (await pool.query('select * from mc.get_financial_inventory_context($1,$2,$3,$4)', [jobId, credentialGeneration, leaseToken, workerId])).rows[0] ?? null;
@@ -23,7 +23,24 @@ export function createFinancialInventoryRepository({ pool }) {
   }
 
   async function apply(jobId, credentialGeneration, leaseToken, workerId, rows) {
-    return (await pool.query('select * from mc.apply_financial_inventory($1,$2,$3,$4,$5::jsonb)', [jobId, credentialGeneration, leaseToken, workerId, JSON.stringify(rows)])).rows[0];
+    const client = await pool.connect();
+    try {
+      await client.query('begin');
+      const encoded = JSON.stringify(rows);
+      const result = (await client.query('select * from mc.apply_financial_inventory($1,$2,$3,$4,$5::jsonb)', [jobId, credentialGeneration, leaseToken, workerId, encoded])).rows[0];
+      await client.query(
+        `update mc.financial_week_inventory wi set summary_raw_data=item.value->'summaryRaw'
+           from jsonb_array_elements($2::jsonb) item,mc.jobs j
+          where j.id=$1 and wi.business_id=j.business_id and wi.store_id=j.store_id
+            and wi.external_report_id=item.value->>'reportId'`,
+        [jobId, encoded]
+      );
+      await client.query('commit');
+      return result;
+    } catch (error) {
+      await client.query('rollback');
+      throw error;
+    } finally { client.release(); }
   }
 
   async function applyPeriodFallback(jobId, credentialGeneration, leaseToken, workerId) {

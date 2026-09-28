@@ -674,6 +674,40 @@
 - `CHECK ((attempt_count >= 0))`
 - `PRIMARY KEY (connection_id)`
 
+## financial_input_events
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| event_generation | bigint | нет | — |
+| event_key | text | нет | — |
+| event_type | text | нет | — |
+| affected_from | date | нет | — |
+| affected_to | date | нет | — |
+| source_report_version_id | uuid | нет | — |
+| source_normalization_id | uuid | нет | — |
+| allows_wb_api | boolean | нет | false |
+| dispatch_job_id | uuid | нет | — |
+| created_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `CHECK ((allows_wb_api = false))`
+- `UNIQUE (business_id, event_key)`
+- `UNIQUE (business_id, store_id, event_generation)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `UNIQUE (business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, source_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, source_report_version_id) REFERENCES mc.report_versions(business_id, store_id, id)`
+- `CHECK ((affected_to >= affected_from))`
+- `FOREIGN KEY (dispatch_job_id) REFERENCES mc.jobs(id)`
+- `CHECK ((event_generation > 0))`
+- `CHECK (((length(event_key) >= 1) AND (length(event_key) <= 200)))`
+- `CHECK ((event_type = ANY (ARRAY['report_accepted'::text, 'report_updated'::text])))`
+- `PRIMARY KEY (id)`
+
 ## financial_period_results
 
 | Поле | Тип | NULL | По умолчанию |
@@ -767,6 +801,20 @@
 - `PRIMARY KEY (store_id)`
 - `CHECK ((store_status = ANY (ARRAY['active'::text, 'paused'::text, 'archived'::text])))`
 
+## financial_store_event_state
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| next_generation | bigint | нет | 1 |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `CHECK ((next_generation > 0))`
+- `PRIMARY KEY (business_id, store_id)`
+
 ## financial_week_coverage
 
 | Поле | Тип | NULL | По умолчанию |
@@ -815,18 +863,29 @@
 | fetch_status | text | нет | 'pending'::text |
 | first_seen_at | timestamp with time zone | нет | now() |
 | last_seen_at | timestamp with time zone | нет | now() |
+| summary_raw_data | jsonb | да | — |
+| report_version_id | uuid | да | — |
+| accepted_normalization_id | uuid | да | — |
+| accepted_inventory_checksum | text | да | — |
+| accepted_at | timestamp with time zone | да | — |
+| last_error_code | text | да | — |
 
 Ограничения и связи:
 
+- `CHECK (((fetch_status = 'accepted'::text) = ((report_version_id IS NOT NULL) AND (accepted_normalization_id IS NOT NULL) AND (accepted_inventory_checksum = inventory_checksum) AND (accepted_at IS NOT NULL))))`
 - `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
 - `UNIQUE (business_id, store_id, id)`
 - `CHECK ((period_end >= period_start))`
 - `UNIQUE (coverage_id, external_report_id)`
 - `FOREIGN KEY (coverage_id) REFERENCES mc.financial_week_coverage(id) ON DELETE CASCADE`
+- `CHECK (((last_error_code IS NULL) OR (last_error_code ~ '^[a-z0-9][a-z0-9_.:-]{0,99}$'::text)))`
 - `CHECK ((external_report_id ~ '^[0-9]+$'::text))`
-- `CHECK ((fetch_status = ANY (ARRAY['pending'::text, 'fetching'::text, 'accepted'::text, 'retry'::text, 'failed'::text])))`
+- `CHECK ((fetch_status = ANY (ARRAY['pending'::text, 'fetching'::text, 'received'::text, 'normalizing'::text, 'accepted'::text, 'retry'::text, 'failed'::text])))`
 - `CHECK ((inventory_checksum ~ '^[0-9a-f]{64}$'::text))`
+- `FOREIGN KEY (business_id, store_id, accepted_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, report_version_id, accepted_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, report_version_id, id)`
 - `PRIMARY KEY (id)`
+- `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id)`
 
 ## import_batches
 
@@ -1348,6 +1407,7 @@
 - `UNIQUE (report_version_id, method_version_id)`
 - `CHECK ((status = ANY (ARRAY['succeeded'::text, 'failed'::text])))`
 - `UNIQUE (store_id, normalization_key)`
+- `UNIQUE (business_id, store_id, report_version_id, id)`
 
 ## report_rows
 
@@ -1387,9 +1447,11 @@
 | status | text | нет | 'received'::text |
 | accepted_at | timestamp with time zone | да | — |
 | created_at | timestamp with time zone | нет | now() |
+| supersedes_version_id | uuid | да | — |
 
 Ограничения и связи:
 
+- `FOREIGN KEY (business_id, store_id, report_id, supersedes_version_id) REFERENCES mc.report_versions(business_id, store_id, report_id, id)`
 - `FOREIGN KEY (business_id, store_id, document_id) REFERENCES mc.source_documents(business_id, store_id, id)`
 - `UNIQUE (business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, report_id) REFERENCES mc.reports(business_id, store_id, id)`

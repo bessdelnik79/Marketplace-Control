@@ -1,6 +1,7 @@
 import { createCostsRepository } from './modules/costs/costs.repository.mjs';
 import { createJobsRepository } from './infrastructure/jobs/jobs.repository.mjs';
 import { createFinancialInventoryRepository } from './modules/reports/financial-inventory.repository.mjs';
+import { createFinancialPipelineRepository } from './modules/reports/financial-pipeline.repository.mjs';
 import { createFinancialScheduler } from './modules/reports/financial-scheduler.mjs';
 import { pool, withOwnedBusinessContext } from './infrastructure/database/client.mjs';
 
@@ -18,4 +19,5 @@ export const { getCostState, importVariantCosts } = createCostsRepository({ with
 export const jobsRepository = createJobsRepository({ pool, withOwnedBusinessContext });
 export const { enqueueJob, claimJobs, heartbeatJob, completeJob, failJob } = jobsRepository;
 export const financialInventoryRepository = createFinancialInventoryRepository({ pool });
+export const financialPipelineRepository = createFinancialPipelineRepository({ pool });
 export const { scheduleDue: scheduleDueFinancialInventory } = createFinancialScheduler({ pool });

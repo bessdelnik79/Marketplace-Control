@@ -9,7 +9,7 @@ const job = { id: '11111111-1111-4111-8111-111111111111', lease_token: '22222222
 
 test('inventory rows keep report ids as strings and safe list metadata', () => {
   const rows = inventoryRows(new Map([['9223372036854775808', { checksum: 'a'.repeat(64), rawData: { reportId: 9223372036854775808, dateFrom: '2026-09-21T00:00:00Z', dateTo: '2026-09-27T00:00:00Z', reportType: 1, country: 'Россия' } }]]));
-  assert.deepEqual(rows[0], { reportId: '9223372036854775808', checksum: 'a'.repeat(64), dateFrom: '2026-09-21', dateTo: '2026-09-27', reportType: '1', country: 'Россия' });
+  assert.deepEqual(rows[0], { reportId: '9223372036854775808', checksum: 'a'.repeat(64), dateFrom: '2026-09-21', dateTo: '2026-09-27', reportType: '1', country: 'Россия', summaryRaw: { reportId: 9223372036854775808, dateFrom: '2026-09-21T00:00:00Z', dateTo: '2026-09-27T00:00:00Z', reportType: 1, country: 'Россия' } });
 });
 
 test('worker lists inventory then persists it and completes the durable job', async () => {

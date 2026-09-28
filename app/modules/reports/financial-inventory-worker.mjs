@@ -17,6 +17,7 @@ export function inventoryErrorCode(error) {
 export function inventoryRows(summaries) {
   return [...summaries.entries()].map(([reportId, summary]) => {
     const row = summary.rawData;
+    if (Buffer.byteLength(JSON.stringify(row), 'utf8') > 262144) throw new Error('financial_invalid_summary');
     const dateFrom = exactDate(String(row.dateFrom ?? '').slice(0, 10));
     const dateTo = exactDate(String(row.dateTo ?? '').slice(0, 10));
     if (!dateFrom || !dateTo || dateTo < dateFrom) throw new Error('financial_invalid_summary');
@@ -26,7 +27,8 @@ export function inventoryRows(summaries) {
       dateFrom,
       dateTo,
       reportType: row.reportType == null ? null : String(row.reportType).slice(0, 100),
-      country: row.country == null ? null : String(row.country).slice(0, 200)
+      country: row.country == null ? null : String(row.country).slice(0, 200),
+      summaryRaw: row
     };
   });
 }
