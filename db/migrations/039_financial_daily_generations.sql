@@ -3,6 +3,8 @@ BEGIN;
 -- Generalize the report-only outbox without rewriting its immutable history.
 ALTER TABLE mc.financial_input_events NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE mc.financial_input_events DISABLE TRIGGER financial_input_events_no_update;
+ALTER TABLE mc.audit_events NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE mc.memberships NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE mc.financial_input_events
   DROP CONSTRAINT financial_input_events_event_type_check,
   ALTER COLUMN source_report_version_id DROP NOT NULL,
@@ -31,6 +33,8 @@ UPDATE mc.financial_input_events event
   );
 
 ALTER TABLE mc.financial_input_events ENABLE TRIGGER financial_input_events_no_update;
+ALTER TABLE mc.audit_events FORCE ROW LEVEL SECURITY;
+ALTER TABLE mc.memberships FORCE ROW LEVEL SECURITY;
 
 ALTER TABLE mc.financial_input_events
   ALTER COLUMN actor_user_id SET NOT NULL,
