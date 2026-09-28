@@ -231,12 +231,10 @@ export function createFinancialReportNormalizeWorker({
 export function createFinancialPipelineWorker(options={}){
   const fetchWorker=createFinancialReportFetchWorker(options);
   const normalizeWorker=createFinancialReportNormalizeWorker(options);
-  let next='fetch';
   async function runOnce(){
-    const primary=next==='fetch'?fetchWorker:normalizeWorker;
-    const secondary=next==='fetch'?normalizeWorker:fetchWorker;
-    next=next==='fetch'?'normalize':'fetch';
-    return await primary.runOnce()||await secondary.runOnce();
+    // Drain local work first: it neither consumes the WB rate slot nor should
+    // wait behind a multi-minute paginated fetch after a process restart.
+    return await normalizeWorker.runOnce()||await fetchWorker.runOnce();
   }
   return {runOnce};
 }

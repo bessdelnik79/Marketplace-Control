@@ -164,7 +164,7 @@ test('normalize worker completes local normalization and keeps terminal failures
   ]);
 });
 
-test('combined worker alternates fetch and normalize claims and sanitizes unknown errors',async()=>{
+test('combined worker prioritizes local normalization before another WB fetch',async()=>{
   const jobs=jobsFor([]),repository={
     getFetchContext:async()=>null,reserveRequestSlot:async()=>({waitMs:0}),persistRaw:async()=>({}),fallbackToPeriod:async()=>({}),normalize:async()=>({})
   };
@@ -172,7 +172,7 @@ test('combined worker alternates fetch and normalize claims and sanitizes unknow
   assert.equal(await worker.runOnce(),false);
   assert.equal(await worker.runOnce(),false);
   assert.deepEqual(jobs.calls.claim.map(call=>call.jobTypes[0]),[
-    'financial_report_fetch','financial_report_normalize','financial_report_normalize','financial_report_fetch'
+    'financial_report_normalize','financial_report_fetch','financial_report_normalize','financial_report_fetch'
   ]);
   assert.equal(financialPipelineErrorCode(new Error('token=unsafe value')),'financial_pipeline_internal_error');
   assert.equal(financialPipelineErrorCode(new Error('financial_detail_unavailable')),'financial_detail_unavailable');
