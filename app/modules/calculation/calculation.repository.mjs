@@ -267,7 +267,7 @@ export async function getFinancialCompatibilityBootstrapState(userId,storeId){
       where business_id=$1 and store_id=$2
         and job_type in ('financial_inventory_refresh','financial_report_fetch','financial_report_normalize')
         and status in ('pending','running') limit 1`,[businessId,storeId])).rows[0]);
-    if(dailyPublished||!selection||pipelineActive)return{dailyPublished,selectionReady:Boolean(selection),waitingForPipeline:pipelineActive,targets:[]};
+    if(dailyPublished||!selection)return{dailyPublished,selectionReady:Boolean(selection),waitingForPipeline:false,targets:[]};
     const targets=(await client.query(
       `select distinct report.period_start::text as "periodStart",report.period_end::text as "periodEnd"
          from mc.reports report
@@ -277,7 +277,7 @@ export async function getFinancialCompatibilityBootstrapState(userId,storeId){
            where normalization.report_version_id=report.current_version_id and normalization.status='succeeded'
              and parser_method.code='wb_finance_import' and parser_method.version_no=11)
         order by "periodStart","periodEnd"`,[businessId,storeId])).rows;
-    return{dailyPublished:false,selectionReady:true,waitingForPipeline:false,targets};
+    return{dailyPublished:false,selectionReady:true,waitingForPipeline:pipelineActive&&!targets.length,targets};
   });
 }
 

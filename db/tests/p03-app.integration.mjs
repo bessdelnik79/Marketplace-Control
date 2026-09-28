@@ -98,9 +98,15 @@ test('P0.3 persists selected-SKU USN, deducts it once and idempotently keeps one
   assert.deepEqual(rebill,{components:1,result_lines:0,issues:0});
 });
 
-test('compatibility bootstrap replays every current week until the first daily pointer exists',async()=>{
+test('compatibility bootstrap replays every current week until the first daily pointer exists',async t=>{
+  const activeFetchJob=await context(async client=>(await client.query(
+    `select job.id from mc.enqueue_job($1,'financial_report_fetch',$2,$3::jsonb,clock_timestamp(),100,5) job`,
+    [ids.store,`bootstrap-active-pipeline:${randomUUID()}`,JSON.stringify({schemaVersion:1})]
+  )).rows[0]);
+  t.after(()=>context(client=>client.query(`delete from mc.jobs where id=$1`,[activeFetchJob.id])));
   const before=await getFinancialCompatibilityBootstrapState(ids.user,ids.store);
   assert.deepEqual(before.targets,[{periodStart:'2026-07-13',periodEnd:'2026-07-19'}]);
+  assert.equal(before.waitingForPipeline,false);
   compatibilityV20=await runFinancialCalculation(ids.user,ids.store,{targetPeriod:before.targets[0]});
   assert.equal(compatibilityV20.changed,true);
   const repeated=await getFinancialCompatibilityBootstrapState(ids.user,ids.store);

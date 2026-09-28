@@ -21,7 +21,7 @@ export function createFinancialCalculationWorker({
       try{
         const state=await bootstrap(pending.requested_by,pending.store_id);
         if(!state.selectionReady)throw new Error('calculation_selection_missing');
-        if(state.waitingForPipeline)continue;
+        if(state.waitingForPipeline&&!state.targets?.length)continue;
         let result={requestId:null,runId:null,quality:null,changed:false};
         for(const targetPeriod of state.targets)result=await run(pending.requested_by,pending.store_id,{targetPeriod});
         await acknowledge(pending.requested_by,pending.store_id,pending.generation_token);

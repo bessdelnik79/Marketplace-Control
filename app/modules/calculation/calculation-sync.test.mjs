@@ -55,3 +55,19 @@ test('compatibility calculation worker keeps invalidation while durable WB pipel
   assert.equal(await worker.runOnce(),true);
   assert.equal(acknowledged,false);
 });
+
+test('compatibility calculation uses accepted periods while later WB reports are still loading',async()=>{
+  const pending={requested_by:'user-1',store_id:'store-1',generation_token:'generation-4'};
+  const calls=[];
+  const worker=createFinancialCalculationWorker({
+    list:async()=>[pending],
+    bootstrap:async()=>({selectionReady:true,waitingForPipeline:true,targets:[{periodStart:'2026-01-05',periodEnd:'2026-01-11'}]}),
+    run:async(...args)=>(calls.push(['run',...args]),{requestId:'request-1',runId:'run-1',quality:'partial',changed:true}),
+    acknowledge:async(...args)=>(calls.push(['ack',...args]),true)
+  });
+  assert.equal(await worker.runOnce(),true);
+  assert.deepEqual(calls,[
+    ['run','user-1','store-1',{targetPeriod:{periodStart:'2026-01-05',periodEnd:'2026-01-11'}}],
+    ['ack','user-1','store-1','generation-4']
+  ]);
+});
