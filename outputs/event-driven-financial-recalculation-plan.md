@@ -4,7 +4,7 @@
 
 Этот документ фиксирует следующий архитектурный этап после P0.3/P0.4: устойчивую загрузку финансовых отчётов WB, локальный событийный пересчёт и дневную read-модель. Текущее поведение описано в [«Финансовых отчётах Wildberries»](financial-reports.md), финансовая методика — в [«Формулах финансового расчёта»](financial-formulas.md), проверенные контракты — в [планах P0.3](p0.3-plan.md) и [P0.4](p0.4-plan.md).
 
-Статус выполнения: этап 1 (durable queue) и этап 2 (credential generation, недельный ledger, list-first inventory worker и глобальное понедельничное расписание) реализованы. Детальная загрузка по `reportId`, неизменяемый raw/version pipeline и последующие этапы остаются планом.
+Статус выполнения: этапы 1–4 реализованы. Durable queue, credential generation, недельный ledger, list-first inventory, понедельничное расписание, адресный raw/version pipeline и локальная дневная shadow-generation работают; действующий read path и publication pointer пока остаются на проверенном P0.3/P0.4. Их переключение относится к этапу 5.
 
 ## Цель
 
@@ -233,10 +233,24 @@ append-only события и `financial_dates_recalculate` происходит
 
 ### Этап 4. Локальные события и дневная generation
 
-- Перевести отчёты, себестоимость, расходы, налоги, selection и method bump на общий event/outbox.
-- Построить дневные суммы, coverage, quality/reasons, evidence и tax bases.
-- Запустить shadow backfill из сохранённых `report_versions` без WB API.
-- Сверить каждую опубликованную неделю с P0.3/P0.4.
+- [x] Перевести отчёты, себестоимость, расходы, налоги, selection и совместимые method bump на общий event/outbox.
+- [x] Построить дневные суммы, coverage, quality/reasons, evidence и tax bases.
+- [x] Запустить shadow backfill из сохранённых `report_versions` без WB API.
+- [x] Сверять каждую опубликованную неделю с конкретными P0.3 publication/run/period result.
+
+Изменение локального входа атомарно добавляет append-only событие и
+`financial_dates_recalculate`; pending-события coalesce в одном job, а при
+уже запущенном predecessor его диапазон переносится в successor. Исходные
+причины при этом остаются в журнале. Worker строит
+неизменяемую generation только по сохранённым версиям, хранит непрерывное
+дневное coverage, evidence и точные неокруглённые налоговые numerators, а
+налог округляет один раз на SKU при агрегации периода. Результат остаётся
+shadow: сравнение записывается для точной legacy publication, но не меняет
+`mc.publications`, `getPublishedFinancialPeriod` или WB queue.
+Первичный backfill охватывает union всех опубликованных period results
+магазина, а не только текущую публикацию. Новая parser/result method получает
+события лишь после явного compatibility gate: неизвестная версия не может
+тихо рассчитаться формулами v11/v20.
 
 ### Этап 5. Переключение публикации и UI
 

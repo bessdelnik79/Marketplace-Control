@@ -674,6 +674,316 @@
 - `CHECK ((attempt_count >= 0))`
 - `PRIMARY KEY (connection_id)`
 
+## financial_daily_days
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| generation_id | uuid | нет | — |
+| accounting_date | date | нет | — |
+| coverage_complete | boolean | нет | — |
+| quality | text | нет | — |
+| tax_usable | boolean | нет | — |
+| store_profit_before_tax | numeric(20,4) | да | — |
+| selected_profit_before_tax | numeric(20,4) | да | — |
+| available_profit_before_tax | numeric(20,4) | да | — |
+| created_at | timestamp with time zone | нет | clock_timestamp() |
+
+Ограничения и связи:
+
+- `CHECK (isfinite(accounting_date))`
+- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id)`
+- `UNIQUE (business_id, store_id, id)`
+- `CHECK ((coverage_complete OR (quality <> 'complete'::text)))`
+- `UNIQUE (generation_id, accounting_date)`
+- `PRIMARY KEY (id)`
+- `CHECK ((quality = ANY (ARRAY['complete'::text, 'partial'::text, 'unavailable'::text])))`
+
+## financial_daily_evidence
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| generation_id | uuid | нет | — |
+| daily_result_id | uuid | нет | — |
+| financial_component_id | uuid | да | — |
+| cost_version_id | uuid | да | — |
+| expense_version_id | uuid | да | — |
+| tax_computation_id | uuid | да | — |
+| report_row_id | uuid | да | — |
+| source_operation_version_id | uuid | да | — |
+| operation_link_id | uuid | да | — |
+| quantity | numeric(20,6) | да | — |
+| contribution_amount | numeric(20,4) | нет | — |
+| created_at | timestamp with time zone | нет | clock_timestamp() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id, cost_version_id) REFERENCES mc.cost_versions(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, expense_version_id) REFERENCES mc.expense_versions(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, financial_component_id) REFERENCES mc.financial_components(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, generation_id, daily_result_id) REFERENCES mc.financial_daily_results(business_id, store_id, generation_id, id)`
+- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id)`
+- `UNIQUE (business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, operation_link_id) REFERENCES mc.operation_links(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, report_row_id) REFERENCES mc.report_rows(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, source_operation_version_id) REFERENCES mc.operation_versions(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, tax_computation_id) REFERENCES mc.tax_computations(business_id, store_id, id)`
+- `CHECK ((num_nonnulls(financial_component_id, cost_version_id, expense_version_id, tax_computation_id, report_row_id) = 1))`
+- `CHECK ((((cost_version_id IS NULL) AND (source_operation_version_id IS NULL) AND (operation_link_id IS NULL) AND (quantity IS NULL)) OR ((cost_version_id IS NOT NULL) AND (source_operation_version_id IS NOT NULL) AND (quantity IS NOT NULL))))`
+- `PRIMARY KEY (id)`
+
+## financial_daily_generation_inputs
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| generation_id | uuid | нет | — |
+| source_kind | text | нет | — |
+| report_version_id | uuid | да | — |
+| report_normalization_id | uuid | да | — |
+| cost_version_id | uuid | да | — |
+| expense_version_id | uuid | да | — |
+| tax_setting_version_id | uuid | да | — |
+| selection_id | uuid | да | — |
+| created_at | timestamp with time zone | нет | clock_timestamp() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id, report_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, report_version_id, report_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, report_version_id, id)`
+- `FOREIGN KEY (business_id, store_id, cost_version_id) REFERENCES mc.cost_versions(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, expense_version_id) REFERENCES mc.expense_versions(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, selection_id) REFERENCES mc.product_selections(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id)`
+- `UNIQUE NULLS NOT DISTINCT (generation_id, source_kind, report_version_id, report_normalization_id, cost_version_id, expense_version_id, tax_setting_version_id, selection_id)`
+- `UNIQUE (business_id, store_id, id)`
+- `CHECK ((((source_kind = 'report'::text) AND (report_version_id IS NOT NULL) AND (report_normalization_id IS NOT NULL) AND (num_nonnulls(cost_version_id, expense_version_id, tax_setting_version_id, selection_id) = 0)) OR ((source_kind = 'cost'::text) AND (cost_version_id IS NOT NULL) AND (num_nonnulls(report_version_id, report_normalization_id, expense_version_id, tax_setting_version_id, selection_id) = 0)) OR ((source_kind = 'expense'::text) AND (expense_version_id IS NOT NULL) AND (num_nonnulls(report_version_id, report_normalization_id, cost_version_id, tax_setting_version_id, selection_id) = 0)) OR ((source_kind = 'tax'::text) AND (tax_setting_version_id IS NOT NULL) AND (num_nonnulls(report_version_id, report_normalization_id, cost_version_id, expense_version_id, selection_id) = 0)) OR ((source_kind = 'selection'::text) AND (selection_id IS NOT NULL) AND (num_nonnulls(report_version_id, report_normalization_id, cost_version_id, expense_version_id, tax_setting_version_id) = 0))))`
+- `PRIMARY KEY (id)`
+- `CHECK ((source_kind = ANY (ARRAY['report'::text, 'cost'::text, 'expense'::text, 'tax'::text, 'selection'::text])))`
+
+## financial_daily_generation_products
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| generation_id | uuid | нет | — |
+| product_id | uuid | нет | — |
+| variant_id | uuid | да | — |
+| selected | boolean | нет | — |
+| created_at | timestamp with time zone | нет | clock_timestamp() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id, product_id, variant_id) REFERENCES mc.variants(business_id, store_id, product_id, id)`
+- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.products(business_id, store_id, id)`
+- `UNIQUE NULLS NOT DISTINCT (generation_id, product_id, variant_id)`
+- `UNIQUE (business_id, store_id, id)`
+- `PRIMARY KEY (id)`
+
+## financial_daily_generations
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| generation_no | bigint | нет | — |
+| source_event_generation | bigint | нет | — |
+| watermark_generation | bigint | нет | — |
+| job_id | uuid | нет | — |
+| affected_from | date | нет | — |
+| affected_to | date | нет | — |
+| parser_method_version_id | uuid | нет | — |
+| result_method_version_id | uuid | нет | — |
+| frozen_input_fingerprint | text | нет | — |
+| status | text | нет | 'building'::text |
+| quality | text | нет | 'unavailable'::text |
+| failure_code | text | да | — |
+| created_at | timestamp with time zone | нет | clock_timestamp() |
+| finished_at | timestamp with time zone | да | — |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id, job_id) REFERENCES mc.jobs(business_id, store_id, id)`
+- `CHECK (isfinite(affected_from))`
+- `CHECK (isfinite(affected_to))`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `UNIQUE (business_id, store_id, generation_no)`
+- `UNIQUE (business_id, store_id, id)`
+- `CHECK ((watermark_generation >= source_event_generation))`
+- `CHECK ((affected_to >= affected_from))`
+- `CHECK ((((status = 'building'::text) AND (finished_at IS NULL) AND (failure_code IS NULL)) OR ((status = 'succeeded'::text) AND (finished_at IS NOT NULL) AND (failure_code IS NULL)) OR ((status = ANY (ARRAY['failed'::text, 'superseded'::text])) AND (finished_at IS NOT NULL) AND (failure_code IS NOT NULL))))`
+- `CHECK (((failure_code IS NULL) OR (failure_code ~ '^[a-z0-9][a-z0-9_.:-]{0,99}$'::text)))`
+- `CHECK (((length(frozen_input_fingerprint) >= 1) AND (length(frozen_input_fingerprint) <= 200)))`
+- `CHECK ((generation_no > 0))`
+- `UNIQUE (job_id)`
+- `FOREIGN KEY (parser_method_version_id) REFERENCES mc.method_versions(id)`
+- `PRIMARY KEY (id)`
+- `CHECK ((quality = ANY (ARRAY['complete'::text, 'partial'::text, 'unavailable'::text])))`
+- `FOREIGN KEY (result_method_version_id) REFERENCES mc.method_versions(id)`
+- `CHECK ((source_event_generation > 0))`
+- `CHECK ((status = ANY (ARRAY['building'::text, 'succeeded'::text, 'failed'::text, 'superseded'::text])))`
+
+## financial_daily_reasons
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| generation_id | uuid | нет | — |
+| accounting_date | date | нет | — |
+| reason_code | text | нет | — |
+| scope | text | нет | — |
+| product_id | uuid | да | — |
+| variant_id | uuid | да | — |
+| severity | text | нет | — |
+| details | jsonb | нет | '{}'::jsonb |
+| created_at | timestamp with time zone | нет | clock_timestamp() |
+
+Ограничения и связи:
+
+- `CHECK (isfinite(accounting_date))`
+- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id)`
+- `UNIQUE (business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.products(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, product_id, variant_id) REFERENCES mc.variants(business_id, store_id, product_id, id)`
+- `CHECK ((((scope = ANY (ARRAY['store'::text, 'selected_products'::text])) AND (product_id IS NULL) AND (variant_id IS NULL)) OR ((scope = 'product'::text) AND (product_id IS NOT NULL) AND (variant_id IS NULL)) OR ((scope = 'variant'::text) AND (product_id IS NOT NULL) AND (variant_id IS NOT NULL))))`
+- `UNIQUE NULLS NOT DISTINCT (generation_id, accounting_date, reason_code, scope, product_id, variant_id)`
+- `PRIMARY KEY (id)`
+- `CHECK ((reason_code ~ '^[a-z0-9][a-z0-9_.:-]{0,99}$'::text))`
+- `CHECK ((scope = ANY (ARRAY['store'::text, 'selected_products'::text, 'product'::text, 'variant'::text])))`
+- `CHECK ((severity = ANY (ARRAY['partial'::text, 'unavailable'::text])))`
+
+## financial_daily_results
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| generation_id | uuid | нет | — |
+| accounting_date | date | нет | — |
+| category_code | text | нет | — |
+| scope | text | нет | — |
+| product_id | uuid | да | — |
+| variant_id | uuid | да | — |
+| amount_signed | numeric(20,4) | нет | — |
+| tax_base_unrounded | numeric(30,12) | да | — |
+| tax_numerator_unrounded | numeric(30,12) | да | — |
+| quality | text | нет | — |
+| created_at | timestamp with time zone | нет | clock_timestamp() |
+
+Ограничения и связи:
+
+- `CHECK (isfinite(accounting_date))`
+- `UNIQUE (business_id, store_id, generation_id, id)`
+- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id)`
+- `UNIQUE (business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.products(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, product_id, variant_id) REFERENCES mc.variants(business_id, store_id, product_id, id)`
+- `FOREIGN KEY (category_code) REFERENCES mc.financial_categories(code)`
+- `CHECK ((((scope = 'store'::text) AND (product_id IS NULL) AND (variant_id IS NULL)) OR ((scope = 'selected_products'::text) AND (product_id IS NOT NULL))))`
+- `CHECK (((variant_id IS NULL) OR (product_id IS NOT NULL)))`
+- `UNIQUE NULLS NOT DISTINCT (generation_id, accounting_date, category_code, scope, product_id, variant_id)`
+- `PRIMARY KEY (id)`
+- `CHECK ((quality = ANY (ARRAY['complete'::text, 'partial'::text, 'unavailable'::text])))`
+- `CHECK ((scope = ANY (ARRAY['store'::text, 'selected_products'::text])))`
+
+## financial_daily_shadow_comparisons
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| generation_id | uuid | нет | — |
+| publication_id | uuid | нет | — |
+| period_result_id | uuid | нет | — |
+| legacy_run_id | uuid | нет | — |
+| period_start | date | нет | — |
+| period_end | date | нет | — |
+| status | text | нет | — |
+| compared_metrics | jsonb | нет | '{}'::jsonb |
+| difference_details | jsonb | нет | '{}'::jsonb |
+| created_at | timestamp with time zone | нет | clock_timestamp() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, legacy_run_id) REFERENCES mc.calculation_runs(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, period_result_id) REFERENCES mc.financial_period_results(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, publication_id) REFERENCES mc.publications(business_id, store_id, id)`
+- `UNIQUE (generation_id, publication_id, period_result_id)`
+- `UNIQUE (business_id, store_id, id)`
+- `CHECK ((period_end >= period_start))`
+- `CHECK (isfinite(period_end))`
+- `CHECK (isfinite(period_start))`
+- `PRIMARY KEY (id)`
+- `CHECK ((status = ANY (ARRAY['matched'::text, 'mismatch'::text, 'not_comparable'::text])))`
+
+## financial_daily_tax_evidence
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| generation_id | uuid | нет | — |
+| tax_fact_id | uuid | нет | — |
+| financial_component_id | uuid | нет | — |
+| contribution_amount | numeric(30,12) | нет | — |
+| created_at | timestamp with time zone | нет | clock_timestamp() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id, financial_component_id) REFERENCES mc.financial_components(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, generation_id, tax_fact_id) REFERENCES mc.financial_daily_tax_facts(business_id, store_id, generation_id, id)`
+- `UNIQUE (business_id, store_id, id)`
+- `PRIMARY KEY (id)`
+- `UNIQUE (tax_fact_id, financial_component_id)`
+
+## financial_daily_tax_facts
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| generation_id | uuid | нет | — |
+| accounting_date | date | нет | — |
+| product_id | uuid | нет | — |
+| tax_setting_version_id | uuid | нет | — |
+| tax_base_unrounded | numeric(30,12) | нет | — |
+| tax_numerator_unrounded | numeric(30,12) | нет | — |
+| tax_rate_fraction | numeric(20,10) | да | — |
+| tax_amount_rounded | numeric(20,4) | да | — |
+| created_at | timestamp with time zone | нет | clock_timestamp() |
+
+Ограничения и связи:
+
+- `CHECK (isfinite(accounting_date))`
+- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id)`
+- `UNIQUE (business_id, store_id, generation_id, id)`
+- `UNIQUE (business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.products(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id)`
+- `UNIQUE (generation_id, accounting_date, product_id, tax_setting_version_id)`
+- `PRIMARY KEY (id)`
+- `CHECK (((tax_rate_fraction IS NULL) OR ((tax_rate_fraction >= (0)::numeric) AND (tax_rate_fraction <= (1)::numeric))))`
+
 ## financial_input_events
 
 | Поле | Тип | NULL | По умолчанию |
@@ -686,14 +996,22 @@
 | event_type | text | нет | — |
 | affected_from | date | нет | — |
 | affected_to | date | нет | — |
-| source_report_version_id | uuid | нет | — |
-| source_normalization_id | uuid | нет | — |
+| source_report_version_id | uuid | да | — |
+| source_normalization_id | uuid | да | — |
 | allows_wb_api | boolean | нет | false |
 | dispatch_job_id | uuid | нет | — |
 | created_at | timestamp with time zone | нет | now() |
+| actor_user_id | uuid | нет | mc.context_user_id() |
+| source_cost_version_id | uuid | да | — |
+| source_expense_version_id | uuid | да | — |
+| source_tax_setting_version_id | uuid | да | — |
+| source_selection_id | uuid | да | — |
+| source_parser_method_version_id | uuid | да | — |
+| source_result_method_version_id | uuid | да | — |
 
 Ограничения и связи:
 
+- `FOREIGN KEY (actor_user_id) REFERENCES mc.users(id)`
 - `CHECK ((allows_wb_api = false))`
 - `UNIQUE (business_id, event_key)`
 - `UNIQUE (business_id, store_id, event_generation)`
@@ -702,11 +1020,19 @@
 - `FOREIGN KEY (business_id, store_id, source_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, source_report_version_id) REFERENCES mc.report_versions(business_id, store_id, id)`
 - `CHECK ((affected_to >= affected_from))`
+- `FOREIGN KEY (business_id, store_id, source_cost_version_id) REFERENCES mc.cost_versions(business_id, store_id, id)`
 - `FOREIGN KEY (dispatch_job_id) REFERENCES mc.jobs(id)`
 - `CHECK ((event_generation > 0))`
 - `CHECK (((length(event_key) >= 1) AND (length(event_key) <= 200)))`
-- `CHECK ((event_type = ANY (ARRAY['report_accepted'::text, 'report_updated'::text])))`
+- `CHECK ((event_type = ANY (ARRAY['report_accepted'::text, 'report_updated'::text, 'cost_updated'::text, 'expense_updated'::text, 'tax_updated'::text, 'selection_updated'::text, 'parser_method_updated'::text, 'result_method_updated'::text, 'shadow_backfill'::text])))`
+- `FOREIGN KEY (business_id, store_id, source_expense_version_id) REFERENCES mc.expense_versions(business_id, store_id, id)`
 - `PRIMARY KEY (id)`
+- `FOREIGN KEY (business_id, store_id, source_report_version_id, source_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, report_version_id, id)`
+- `FOREIGN KEY (business_id, store_id, source_selection_id) REFERENCES mc.product_selections(business_id, store_id, id)`
+- `FOREIGN KEY (source_parser_method_version_id) REFERENCES mc.method_versions(id)`
+- `FOREIGN KEY (source_result_method_version_id) REFERENCES mc.method_versions(id)`
+- `CHECK ((((event_type = ANY (ARRAY['report_accepted'::text, 'report_updated'::text])) AND (source_report_version_id IS NOT NULL) AND (source_normalization_id IS NOT NULL) AND (num_nonnulls(source_cost_version_id, source_expense_version_id, source_tax_setting_version_id, source_selection_id, source_parser_method_version_id, source_result_method_version_id) = 0)) OR ((event_type = 'cost_updated'::text) AND (source_cost_version_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_expense_version_id, source_tax_setting_version_id, source_selection_id, source_parser_method_version_id, source_result_method_version_id) = 0)) OR ((event_type = 'expense_updated'::text) AND (source_expense_version_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_cost_version_id, source_tax_setting_version_id, source_selection_id, source_parser_method_version_id, source_result_method_version_id) = 0)) OR ((event_type = 'tax_updated'::text) AND (source_tax_setting_version_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_cost_version_id, source_expense_version_id, source_selection_id, source_parser_method_version_id, source_result_method_version_id) = 0)) OR ((event_type = 'selection_updated'::text) AND (source_selection_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_cost_version_id, source_expense_version_id, source_tax_setting_version_id, source_parser_method_version_id, source_result_method_version_id) = 0)) OR ((event_type = 'parser_method_updated'::text) AND (source_parser_method_version_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_cost_version_id, source_expense_version_id, source_tax_setting_version_id, source_selection_id, source_result_method_version_id) = 0)) OR ((event_type = ANY (ARRAY['result_method_updated'::text, 'shadow_backfill'::text])) AND (source_result_method_version_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_cost_version_id, source_expense_version_id, source_tax_setting_version_id, source_selection_id, source_parser_method_version_id) = 0))))`
+- `FOREIGN KEY (business_id, source_tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id)`
 
 ## financial_period_results
 
@@ -997,6 +1323,7 @@
 - `PRIMARY KEY (id)`
 - `CHECK (((priority >= '-1000'::integer) AND (priority <= 1000)))`
 - `CHECK ((status = ANY (ARRAY['pending'::text, 'running'::text, 'succeeded'::text, 'failed'::text])))`
+- `UNIQUE (business_id, store_id, id)`
 
 ## memberships
 
@@ -1359,6 +1686,7 @@
 - `FOREIGN KEY (business_id, store_id, run_id) REFERENCES mc.calculation_runs(business_id, store_id, id)`
 - `PRIMARY KEY (id)`
 - `UNIQUE (run_id)`
+- `UNIQUE (business_id, store_id, id)`
 
 ## reconciliation_checks
 

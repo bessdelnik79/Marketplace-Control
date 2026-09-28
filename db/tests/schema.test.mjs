@@ -35,11 +35,40 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,38);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,39);
   assert.deepEqual((await q("select table_name from information_schema.tables where table_schema='mc' and table_name in ('financial_input_events','financial_store_event_state') order by table_name")).map(row=>row.table_name),['financial_input_events','financial_store_event_state']);
   assert.equal((await one("select relforcerowsecurity as forced from pg_class join pg_namespace on pg_namespace.oid=pg_class.relnamespace where nspname='mc' and relname='financial_input_events'")).forced,true);
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.establish_financial_pipeline_context(uuid,bigint,uuid,text,text)'::regprocedure"));
   pass('financial report pipeline keeps accepted evidence and append-only date events behind tenant RLS');
+  assert.deepEqual((await q(`select table_name from information_schema.tables where table_schema='mc' and table_name in (
+    'financial_daily_generations','financial_daily_generation_inputs','financial_daily_generation_products',
+    'financial_daily_days','financial_daily_results','financial_daily_reasons','financial_daily_evidence',
+    'financial_daily_tax_facts','financial_daily_tax_evidence','financial_daily_shadow_comparisons') order by table_name`)).map(row=>row.table_name),[
+    'financial_daily_days','financial_daily_evidence','financial_daily_generation_inputs',
+    'financial_daily_generation_products','financial_daily_generations','financial_daily_reasons',
+    'financial_daily_results','financial_daily_shadow_comparisons','financial_daily_tax_evidence','financial_daily_tax_facts'
+  ]);
+  for(const table of ['financial_daily_generations','financial_daily_days','financial_daily_results','financial_daily_evidence','financial_daily_tax_facts','financial_daily_tax_evidence','financial_daily_shadow_comparisons']) {
+    assert.equal((await one(`select relforcerowsecurity as forced from pg_class join pg_namespace on pg_namespace.oid=pg_class.relnamespace where nspname='mc' and relname=$1`,[table])).forced,true);
+  }
+  for(const signature of [
+    'mc.emit_financial_input_event(uuid,text,text,date,date,uuid,uuid,uuid,uuid,uuid,uuid,uuid,uuid)',
+    'mc.establish_financial_daily_context(uuid,uuid,text)',
+    'mc.start_financial_daily_generation(uuid,uuid,text,bigint,text,uuid,uuid)',
+    'mc.finalize_financial_daily_generation(uuid,uuid,text,uuid,bigint,text,text,text)'
+  ]) {
+    assert.equal((await one(`select has_function_privilege('public',$1::regprocedure,'execute') as allowed`,[signature])).allowed,false);
+  }
+  const taxPrecision=await q(`select table_name,column_name,numeric_precision,numeric_scale from information_schema.columns
+    where table_schema='mc' and ((table_name='financial_daily_tax_facts' and column_name in ('tax_base_unrounded','tax_numerator_unrounded'))
+      or (table_name='financial_daily_tax_evidence' and column_name='contribution_amount')) order by table_name,column_name`);
+  assert.equal(taxPrecision.length,3);
+  assert.ok(taxPrecision.every(column=>column.numeric_precision===30&&column.numeric_scale===12));
+  const eventColumns=(await q(`select column_name from information_schema.columns where table_schema='mc' and table_name='financial_input_events'`)).map(row=>row.column_name);
+  for(const column of ['actor_user_id','source_cost_version_id','source_expense_version_id','source_tax_setting_version_id','source_selection_id','source_parser_method_version_id','source_result_method_version_id']) assert.ok(eventColumns.includes(column));
+  const selectionTrigger=await one(`select pg_get_triggerdef(oid) as definition from pg_trigger where tgrelid='mc.product_selection_items'::regclass and tgname='financial_selection_event'`);
+  assert.match(selectionTrigger.definition,/FOR EACH STATEMENT/);
+  pass('daily shadow schema has exact tax facts, immutable tenant rows and private worker CAS helpers');
   for (const signature of [
     'mc.get_financial_inventory_context(uuid,bigint,uuid,text)',
     'mc.apply_financial_inventory(uuid,bigint,uuid,text,jsonb)',
@@ -622,6 +651,39 @@ try {
   assert.ok(publicQueuePrivileges.every(row=>row.executable===false));
   assert.equal((await one("select has_table_privilege('public','mc.job_dispatch','select') as allowed")).allowed,false);
   pass('durable queue functions are not executable by public');
+
+  const dailyEvent=await one(`select * from mc.emit_financial_input_event($1,$2,'selection_updated',$3,$4,
+    p_source_selection_id=>$5)`,[store.id,'schema-test:selection-daily','2026-08-31','2026-09-06',selection.id]);
+  const widenedDailyEvent=await one(`select * from mc.emit_financial_input_event($1,$2,'selection_updated',$3,$4,
+    p_source_selection_id=>$5)`,[store.id,'schema-test:selection-daily-next','2026-09-07','2026-09-13',selection.id]);
+  assert.equal(dailyEvent.actor_user_id,user.id);
+  assert.equal(dailyEvent.allows_wb_api,false);
+  assert.equal(widenedDailyEvent.dispatch_job_id,dailyEvent.dispatch_job_id);
+  await rejects(`select * from mc.emit_financial_input_event($1,$2,'selection_updated',$3,$4,p_source_selection_id=>$5)`,
+    [store.id,'schema-test:selection-daily','2026-08-30','2026-09-06',selection.id],/event key collision/,
+    'event idempotency key cannot hide different content');
+  const dailyClaims=await q(`select * from mc.claim_jobs($1,$2::text[],60,100)`,['daily-schema-worker',['financial_dates_recalculate']]);
+  const dailyClaim=dailyClaims.find(job=>job.id===dailyEvent.dispatch_job_id);
+  assert.ok(dailyClaim);
+  assert.equal(dailyClaim.payload.affectedFrom,'2026-08-31');
+  assert.equal(dailyClaim.payload.affectedTo,'2026-09-13');
+  const dailyContext=await one(`select * from mc.establish_financial_daily_context($1,$2,$3)`,[dailyClaim.id,dailyClaim.lease_token,'daily-schema-worker']);
+  assert.equal(dailyContext.actor_user_id,user.id);
+  assert.equal(Number(dailyContext.event_generation),Number(widenedDailyEvent.event_generation));
+  assert.equal(dailyContext.payload.allowsWbApi,false);
+  const parserMethodId=(await one(`select id from mc.method_versions where code='wb_finance_import' order by version_no desc limit 1`)).id;
+  const dailyResultMethodId=(await one(`select id from mc.method_versions where code='financial_result' and version_no=20`)).id;
+  const dailyGeneration=await one(`select * from mc.start_financial_daily_generation($1,$2,$3,$4,$5,$6,$7)`,[
+    dailyClaim.id,dailyClaim.lease_token,'daily-schema-worker',widenedDailyEvent.event_generation,'schema-test-inputs',parserMethodId,dailyResultMethodId
+  ]);
+  const failedDailyGeneration=await one(`select * from mc.finalize_financial_daily_generation($1,$2,$3,$4,$5,'failed','unavailable',$6)`,[
+    dailyClaim.id,dailyClaim.lease_token,'daily-schema-worker',dailyGeneration.id,widenedDailyEvent.event_generation,'schema_test_failure'
+  ]);
+  assert.equal(failedDailyGeneration.status,'failed');
+  await rejects(`update mc.financial_daily_generations set failure_code='changed' where id=$1`,[dailyGeneration.id],/transition is invalid/,
+    'daily generation lifecycle is immutable after terminal state');
+  await one(`select * from mc.complete_job($1,$2,$3,'completed')`,[dailyClaim.id,dailyClaim.lease_token,'daily-schema-worker']);
+  pass('daily worker context validates local jobs and seals one immutable generation');
 
   await q(`update mc.connections set scopes='["finance"]'::jsonb,credential_generation=1,status='active' where id=$1`,[connection.id]);
   await q(`update mc.connection_secrets set credential_fingerprint=$2 where connection_id=$1`,[connection.id,'a'.repeat(64)]);

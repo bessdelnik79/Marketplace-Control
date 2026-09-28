@@ -293,23 +293,10 @@ export function createFinancialPipelineRepository({pool}){
 
       const eventKey=`report-normalize-job:${jobId}`;
       stage='event';
-      const existing=(await client.query('select id from mc.financial_input_events where business_id=$1 and event_key=$2',
-        [context.business_id,eventKey])).rows[0];
-      if(!existing){
-        await client.query(`insert into mc.financial_store_event_state(business_id,store_id,next_generation) values($1,$2,1)
-          on conflict(business_id,store_id) do nothing`,[context.business_id,context.store_id]);
-        const state=(await client.query(`select next_generation from mc.financial_store_event_state where business_id=$1 and store_id=$2 for update`,
-          [context.business_id,context.store_id])).rows[0];
-        const generationNo=Number(state.next_generation);
-        const recalc=await enqueue(client,context.store_id,'financial_dates_recalculate',
-          `financial-dates-recalculate:${context.store_id}:g${generationNo}`,
-          {schemaVersion:1,eventGeneration:generationNo,affectedFrom:source.period_start,affectedTo:source.period_end,allowsWbApi:false},200);
-        await client.query(
-          `insert into mc.financial_input_events(business_id,store_id,event_generation,event_key,event_type,affected_from,affected_to,source_report_version_id,source_normalization_id,dispatch_job_id)
-           values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-          [context.business_id,context.store_id,generationNo,eventKey,pointerCurrent?'report_updated':'report_accepted',source.period_start,source.period_end,versionId,normalization.id,recalc.id]);
-        await client.query(`update mc.financial_store_event_state set next_generation=next_generation+1 where business_id=$1 and store_id=$2`,[context.business_id,context.store_id]);
-      }
+      await client.query(
+        `select id from mc.emit_financial_input_event($1,$2,$3,$4,$5,
+           p_source_report_version_id=>$6,p_source_normalization_id=>$7)`,
+        [context.store_id,eventKey,pointerCurrent?'report_updated':'report_accepted',source.period_start,source.period_end,versionId,normalization.id]);
       return{superseded:false,insertedRows,issues,normalizationId:normalization.id};
     });}catch(error){
       if(/^financial_[a-z0-9_]{1,99}$/.test(String(error?.message??''))||(error?.code&&error.code!=='P0001'))throw error;

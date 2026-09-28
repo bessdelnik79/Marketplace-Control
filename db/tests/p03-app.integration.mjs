@@ -8,7 +8,7 @@ const databaseName=new URL(integrationUrl).pathname.slice(1);
 if(!databaseName.toLowerCase().includes('test'))throw new Error('Refusing to run P0.3 integration tests outside a database whose name contains "test".');
 process.env.DATABASE_URL=integrationUrl;
 
-const {migrate,pool,runFinancialCalculation,beginFinancialSync,completeFinancialSync,failFinancialSync,getFinancialBankReconciliationState,getPublishedFinancialPeriod,getPublishedFinancialPeriodPair,getFinancialSellerOffsetReference,getFinancialSyncState,getFinancialCalculationInvalidation,acknowledgeFinancialCalculationInvalidation}=await import('../../app/db.mjs');
+const {migrate,pool,runFinancialCalculation,beginFinancialSync,completeFinancialSync,failFinancialSync,getFinancialBankReconciliationState,getPublishedFinancialPeriod,getPublishedFinancialPeriodPair,getFinancialSellerOffsetReference,getFinancialSyncState,getFinancialCalculationInvalidation,acknowledgeFinancialCalculationInvalidation,jobsRepository,financialDailyGenerationRepository}=await import('../../app/db.mjs');
 const ids={user:randomUUID(),business:randomUUID(),store:randomUUID()};
 
 await migrate();
@@ -95,6 +95,58 @@ test('P0.3 persists selected-SKU USN, deducts it once and idempotently keeps one
       where n.store_id=$1 and n.normalization_key like 'wb-finance-v11:%' group by n.id`,[ids.store]
   )).rows[0]);
   assert.deepEqual(rebill,{components:1,result_lines:0,issues:0});
+});
+
+test('daily shadow generation rebuilds saved inputs and matches the exact published week without WB fetches',async()=>{
+  const workerId=`daily-integration:${randomUUID()}`;
+  const drainDaily=async()=>{
+    let processed=0;
+    for(;processed<10;processed+=1){
+      const[job]=await jobsRepository.claimJobs({workerId,jobTypes:['financial_dates_recalculate'],leaseSeconds:300,limit:1});
+      if(!job)break;
+      const result=await financialDailyGenerationRepository.build(job.id,job.lease_token,workerId);
+      await jobsRepository.completeJob({jobId:job.id,leaseToken:job.lease_token,workerId,outcome:result.superseded?'superseded':'completed'});
+    }
+    assert.ok(processed<10,'daily queue must drain');
+  };
+  await drainDaily();
+  const firstEvent=await context(async client=>(await client.query(
+    `select e.* from mc.publications p
+       join mc.calculation_runs r on r.id=p.run_id
+       cross join lateral mc.emit_financial_input_event(
+         p.store_id,$2,'shadow_backfill',p.period_start,'2026-07-15',
+         p_source_result_method_version_id=>r.method_version_id
+       ) e
+      where p.store_id=$1 and p.is_current`,[ids.store,`daily-shadow:${randomUUID()}`]
+  )).rows[0]);
+  const emitted=await context(async client=>(await client.query(
+    `select e.* from mc.publications p
+       join mc.calculation_runs r on r.id=p.run_id
+       cross join lateral mc.emit_financial_input_event(
+         p.store_id,$2,'shadow_backfill','2026-07-16',p.period_end,
+         p_source_result_method_version_id=>r.method_version_id
+       ) e
+      where p.store_id=$1 and p.is_current`,[ids.store,`daily-shadow:${randomUUID()}`]
+  )).rows[0]);
+  assert.equal(firstEvent.dispatch_job_id,emitted.dispatch_job_id);
+  assert.ok(emitted.id);
+  await drainDaily();
+
+  const saved=await context(async client=>(await client.query(
+    `select g.status,g.quality,count(distinct d.accounting_date)::int days,
+            count(distinct t.id)::int tax_facts,count(distinct te.id)::int tax_evidence,
+            c.status comparison_status,
+            (select count(*)::int from mc.jobs where store_id=$1 and job_type='financial_report_fetch') fetch_jobs
+       from mc.financial_daily_generations g
+       join mc.financial_input_events e on e.dispatch_job_id=g.job_id and e.event_generation=g.source_event_generation
+       join mc.financial_daily_days d on d.generation_id=g.id
+       left join mc.financial_daily_tax_facts t on t.generation_id=g.id
+       left join mc.financial_daily_tax_evidence te on te.tax_fact_id=t.id
+       left join mc.financial_daily_shadow_comparisons c on c.generation_id=g.id
+      where e.id=$2
+      group by g.status,g.quality,c.status`,[ids.store,emitted.id]
+  )).rows[0]);
+  assert.deepEqual(saved,{status:'succeeded',quality:'complete',days:7,tax_facts:1,tax_evidence:1,comparison_status:'matched',fetch_jobs:0});
 });
 
 test('verified 07-13 store sources do not create product-link issues and no-sale SKU persists zero tax',async()=>{

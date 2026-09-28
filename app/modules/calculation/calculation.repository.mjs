@@ -111,7 +111,7 @@ export function aggregatePublishedPeriodEnvelopes(periodStart,periodEnd,results)
   };
 }
 
-async function createConfirmedReturnLinks(client,businessId,storeId,normalizationIds,methodId){
+export async function createConfirmedReturnLinks(client,businessId,storeId,normalizationIds,methodId){
   if(!normalizationIds.length)return[];
   const returns=(await client.query(
     `select o.id,o.product_id,o.variant_id,o.accounting_date::text,o.quantity::text,o.srid,
@@ -366,7 +366,7 @@ function normalizeTargetPeriod(targetPeriod){
   return{periodStart,periodEnd};
 }
 
-async function loadCalculationReportCandidates(client,businessId,storeId){
+export async function loadCalculationReportCandidates(client,businessId,storeId){
   return (await client.query(
     `select r.id as report_id,rv.id as report_version_id,rv.accepted_at,r.period_start::text,r.period_end::text,rn.id as normalization_id
        from mc.reports r join mc.report_versions rv on rv.id=r.current_version_id
