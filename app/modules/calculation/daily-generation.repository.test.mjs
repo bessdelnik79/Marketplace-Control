@@ -1,12 +1,21 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {createFinancialDailyGenerationRepository,calculateFinancialPeriods,financialDailyDateOnly} from './daily-generation.repository.mjs';
+import {createFinancialDailyGenerationRepository,calculateFinancialPeriods,financialDailyAffectedEmptyWeeks,financialDailyDateOnly} from './daily-generation.repository.mjs';
 import {aggregateDailyFinancialGeneration,combineDailyFinancialGenerations} from './daily-generation.mjs';
 
 test('repository preserves PostgreSQL date-only calendar components',()=>{
   assert.equal(financialDailyDateOnly(new Date(2026,8,21)),'2026-09-21');
   assert.equal(financialDailyDateOnly('2026-09-27'),'2026-09-27');
   assert.throws(()=>financialDailyDateOnly('invalid'),/financial_daily_invalid_job/);
+});
+
+test('narrow generations retain only confirmed-empty weeks intersecting the affected range',()=>{
+  const weeks=[
+    {id:'historical',period_start:'2025-09-22',period_end:'2025-09-28'},
+    {id:'affected',period_start:'2026-08-03',period_end:'2026-08-09'},
+    {id:'future',period_start:'2026-08-10',period_end:'2026-08-16'}
+  ];
+  assert.deepEqual(financialDailyAffectedEmptyWeeks(weeks,'2026-08-03','2026-08-09'),[weeks[1]]);
 });
 
 test('repository supersedes an older event before loading financial inputs',async()=>{
@@ -32,7 +41,7 @@ test('mixed report and confirmed-empty weeks keep coverage and include expenses 
   const generations=calculateFinancialPeriods({
     products:['product-1'],
     affectedReports:[{period_start:'2026-06-01',period_end:'2026-06-07',normalization_id:'normalization-1'}],
-    affectedEmptyWeeks:[{id:'coverage-1',period_start:'2026-06-08',period_end:'2026-06-14'}],
+    emptyWeeks:[{id:'coverage-1',period_start:'2026-06-08',period_end:'2026-06-14'}],
     components:[{id:'component-1',operationVersionId:'operation-1',categoryCode:'revenue',sourceField:'retailAmount',rawValue:'100.0000',
       amountSigned:'100.0000',productId:'product-1',variantId:null,accountingDate:'2026-06-01',state:'active',operationType:'sale',
       docTypeName:'Продажа',sellerOperName:'Продажа',bonusTypeName:null,scopeCode:'selected_product',classificationStatus:'confirmed'}],

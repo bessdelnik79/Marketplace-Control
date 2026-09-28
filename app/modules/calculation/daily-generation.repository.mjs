@@ -13,6 +13,10 @@ import {createFinancialDailyPublicationRepository} from './daily-publication.rep
 const groupBy=(rows,key)=>rows.reduce((map,row)=>{const value=key(row),group=map.get(value)??[];group.push(row);map.set(value,group);return map;},new Map());
 const periodKey=row=>`${row.period_start}/${row.period_end}`;
 
+export function financialDailyAffectedEmptyWeeks(rows,periodStart,periodEnd){
+  return rows.filter(row=>row.period_end>=periodStart&&row.period_start<=periodEnd);
+}
+
 export function financialDailyDateOnly(value){
   if(value instanceof Date&&!Number.isNaN(value.getTime())){
     const year=value.getFullYear(),month=String(value.getMonth()+1).padStart(2,'0'),day=String(value.getDate()).padStart(2,'0');
@@ -63,7 +67,7 @@ async function loadSnapshot(client,context){
   const candidates=await loadCalculationReportCandidates(client,businessId,storeId);
   const reports=selectFullyNormalizedReportPeriods(candidates).filter(row=>row.period_start<=context.affected_to);
   const affectedReports=reports.filter(row=>row.period_end>=context.affected_from&&row.period_start<=context.affected_to);
-  const emptyWeeks=(await client.query(
+  const eligibleEmptyWeeks=(await client.query(
     `select wc.id,wc.empty_confirmed_by_job_id,wc.week_start::text as period_start,wc.week_end::text as period_end
        from mc.financial_week_coverage wc
        join mc.connections connection on connection.business_id=wc.business_id and connection.store_id=wc.store_id
@@ -73,8 +77,8 @@ async function loadSnapshot(client,context){
         and wc.empty_confirmed_by_job_id is not null and wc.week_start<=$3
       order by wc.week_start,wc.id`,[businessId,storeId,context.affected_to])).rows
     .filter(row=>!affectedReports.some(report=>report.period_start<=row.period_end&&report.period_end>=row.period_start));
-  const affectedEmptyWeeks=emptyWeeks.filter(row=>row.period_end>=context.affected_from&&row.period_start<=context.affected_to);
-  const affectedPeriods=[...affectedReports,...affectedEmptyWeeks];
+  const emptyWeeks=financialDailyAffectedEmptyWeeks(eligibleEmptyWeeks,context.affected_from,context.affected_to);
+  const affectedPeriods=[...affectedReports,...emptyWeeks];
   if(!affectedPeriods.length)throw new Error('financial_daily_inputs_missing');
   const affectedStart=affectedPeriods.reduce((value,row)=>row.period_start<value?row.period_start:value,affectedPeriods[0].period_start);
   const affectedEnd=affectedPeriods.reduce((value,row)=>row.period_end>value?row.period_end:value,affectedPeriods[0].period_end);
@@ -134,14 +138,14 @@ async function loadSnapshot(client,context){
     emptyWeekCoverageIds:emptyWeeks.map(row=>`${row.id}:${row.empty_confirmed_by_job_id}`),
     operationLinkIds:operationLinks,expenseVersionIds:expenses.map(row=>row.id),taxSettingVersionIds:taxSettings.map(row=>row.id),
     periodStart:affectedStart,periodEnd:affectedEnd});
-  return{businessId,storeId,selection,products,reports,affectedReports,emptyWeeks,affectedEmptyWeeks,affectedStart,affectedEnd,method,
+  return{businessId,storeId,selection,products,reports,affectedReports,emptyWeeks,affectedStart,affectedEnd,method,
     parserMethod:parserMethods[0],operationLinks,components,operations,costs,expenses,taxSettings,fingerprint};
 }
 
 export function calculateFinancialPeriods(snapshot){
   const groups=[...groupBy(snapshot.affectedReports,periodKey).values()].sort((a,b)=>a[0].period_start.localeCompare(b[0].period_start));
   const periods=[...groups.map(rows=>({rows,periodStart:rows[0].period_start,periodEnd:rows[0].period_end})),
-    ...snapshot.affectedEmptyWeeks.map(row=>({rows:[],periodStart:row.period_start,periodEnd:row.period_end}))]
+    ...snapshot.emptyWeeks.map(row=>({rows:[],periodStart:row.period_start,periodEnd:row.period_end}))]
     .sort((a,b)=>a.periodStart.localeCompare(b.periodStart)||a.periodEnd.localeCompare(b.periodEnd));
   return periods.map(({rows,periodStart,periodEnd})=>{
     const coverageComplete=rows.length===0||(rows.every(row=>row.normalization_id)&&reportPeriodsCoverRange(rows,periodStart,periodEnd));
