@@ -362,16 +362,41 @@ export async function failFinancialSync(userId,job,errorCode,{retryDelaySeconds=
 
 export async function getFinancialSyncState(userId,storeId){
   return withOwnedBusinessContext(userId,async(client,businessId)=>(await client.query(
-    `select ss.status as stream_status,ss.last_success_at,ss.next_run_at,
-            r.status as run_status,r.error_code,r.started_at,r.finished_at,r.requested_from,r.requested_to,r.progress,
-            (select max(ci.date_to) from mc.coverage_intervals ci where ci.business_id=ss.business_id and ci.store_id=ss.store_id and ci.stream_id=ss.id and ci.status='complete') as coverage_to,
-            (select count(*)::int from mc.reports rp where rp.business_id=ss.business_id and rp.store_id=ss.store_id and rp.current_version_id is not null) as report_count,
+    `select case when connection.status='active' and connection.scopes ? 'finance' then 'active' else 'blocked' end as stream_status,
+            pipeline.last_success_at,
+            (select min(coverage.next_retry_at) from mc.financial_week_coverage coverage
+              where coverage.business_id=store.business_id and coverage.store_id=store.id
+                and coverage.credential_generation=connection.credential_generation
+                and coverage.coverage_status='retry') as next_run_at,
+            case when active_job.id is not null then 'running'
+                 when coverage_state.terminal then 'failed'
+                 when coverage_state.waiting then 'running'
+                 when failed_job.id is not null and (pipeline.last_success_at is null or failed_job.finished_at>pipeline.last_success_at) then 'failed'
+                 when pipeline.last_success_at is not null then 'succeeded' end as run_status,
+            case when active_job.id is null
+                   and (coverage_state.terminal
+                     or (not coverage_state.waiting and (pipeline.last_success_at is null or failed_job.finished_at>pipeline.last_success_at)))
+                 then coalesce(coverage_state.terminal_error,failed_job.last_error_code) end as error_code,
+            coalesce(active_job.created_at,failed_job.created_at) as started_at,
+            case when active_job.id is null and not coverage_state.waiting then failed_job.finished_at end as finished_at,
+            coalesce(active_job.payload,failed_job.payload)->'window'->>'dateFrom' as requested_from,
+            coalesce(active_job.payload,failed_job.payload)->'window'->>'dateTo' as requested_to,
+            jsonb_build_object('stage',case coalesce(active_job.job_type,failed_job.job_type)
+              when 'financial_inventory_refresh' then 'inventory'
+              when 'financial_report_fetch' then 'loading'
+              when 'financial_report_normalize' then 'saving'
+              else case when coverage_state.waiting then 'inventory' else 'idle' end end) as progress,
+            (select max(coverage.week_end) from mc.financial_week_coverage coverage
+              where coverage.business_id=store.business_id and coverage.store_id=store.id
+                and coverage.credential_generation=connection.credential_generation
+                and coverage.coverage_status='complete') as coverage_to,
+            (select count(*)::int from mc.reports rp where rp.business_id=store.business_id and rp.store_id=store.id and rp.current_version_id is not null) as report_count,
             (select count(*)::int
                from mc.data_issues di
                join mc.report_normalizations rn on rn.id=di.report_normalization_id
                join mc.report_versions rv on rv.id=rn.report_version_id
                join mc.reports rp on rp.id=rv.report_id and rp.current_version_id=rv.id
-              where di.business_id=ss.business_id and di.store_id=ss.store_id and di.status='open'
+              where di.business_id=store.business_id and di.store_id=store.id and di.status='open'
                 and rn.status='succeeded'
                 and not exists(
                   select 1 from mc.report_normalizations newer
@@ -380,10 +405,48 @@ export async function getFinancialSyncState(userId,storeId){
                   where newer.report_version_id=rn.report_version_id and newer.status='succeeded'
                     and newer_method.code=current_method.code and newer_method.version_no>current_method.version_no
                 )) as issue_count,
-            exists(select 1 from mc.product_selections ps where ps.business_id=ss.business_id and ps.store_id=ss.store_id and ps.status='confirmed') as selection_ready
-       from mc.sync_streams ss
-       left join lateral (select status,error_code,started_at,finished_at,requested_from,requested_to,progress from mc.sync_runs where stream_id=ss.id order by created_at desc limit 1) r on true
-      where ss.business_id=$1 and ss.store_id=$2 and ss.source_type='financial_reports'`,[businessId,storeId]
+            exists(select 1 from mc.product_selections ps where ps.business_id=store.business_id and ps.store_id=store.id and ps.status='confirmed') as selection_ready
+       from mc.stores store
+       join mc.connections connection on connection.business_id=store.business_id and connection.store_id=store.id
+       left join lateral (
+         select max(job.finished_at) filter(where job.status='succeeded') as last_success_at
+           from mc.jobs job where job.business_id=store.business_id and job.store_id=store.id
+             and job.job_type in ('financial_inventory_refresh','financial_report_fetch','financial_report_normalize')
+             and (job.payload->>'credentialGeneration')::bigint=connection.credential_generation
+       ) pipeline on true
+       left join lateral (
+         select job.id,job.job_type,job.created_at,job.payload
+           from mc.jobs job where job.business_id=store.business_id and job.store_id=store.id
+             and job.job_type in ('financial_inventory_refresh','financial_report_fetch','financial_report_normalize')
+             and job.status in ('pending','running')
+             and (job.payload->>'credentialGeneration')::bigint=connection.credential_generation
+          order by case job.job_type when 'financial_report_normalize' then 0 when 'financial_report_fetch' then 1 else 2 end,
+                   job.created_at,job.id limit 1
+       ) active_job on true
+       left join lateral (
+         select job.id,job.job_type,job.last_error_code,job.created_at,job.finished_at,job.payload
+           from mc.jobs job where job.business_id=store.business_id and job.store_id=store.id
+             and job.job_type in ('financial_inventory_refresh','financial_report_fetch','financial_report_normalize')
+             and job.status='failed'
+             and (job.payload->>'credentialGeneration')::bigint=connection.credential_generation
+          order by job.finished_at desc nulls last,job.id desc limit 1
+       ) failed_job on true
+       left join lateral (
+         select coalesce(bool_or(coverage.coverage_status in ('pending','retry')),false) as waiting,
+                coalesce(bool_or(coverage.coverage_status in ('partial','unavailable')),false) as terminal,
+                (array_agg(coverage.last_error_code order by coverage.updated_at desc)
+                  filter(where coverage.coverage_status in ('partial','unavailable') and coverage.last_error_code is not null))[1] as terminal_error
+           from mc.financial_week_coverage coverage
+          where coverage.business_id=store.business_id and coverage.store_id=store.id
+            and coverage.credential_generation=connection.credential_generation
+       ) coverage_state on true
+      where store.business_id=$1 and store.id=$2`,[businessId,storeId]
+  )).rows[0]??null);
+}
+
+export async function requestFinancialInventoryRefresh(userId,storeId,{now=new Date()}={}){
+  return withOwnedBusinessContext(userId,async client=>(await client.query(
+    'select * from mc.request_financial_inventory_refresh($1,$2)',[storeId,now]
   )).rows[0]??null);
 }
 

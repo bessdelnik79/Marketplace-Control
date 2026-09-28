@@ -38,8 +38,7 @@ export function createCostsRoutes({
   redirect,
   sameOrigin,
   takeLimit,
-  multipart,
-  scheduleFinancialCalculation
+  multipart
 }) {
   async function sendCosts(res, status, current, stores, options = {}) {
     const store = stores[0],
@@ -93,7 +92,6 @@ export function createCostsRoutes({
           error: 'Файл не применён. Исправьте отмеченные строки и загрузите его снова.',
           importErrors: result.errors
         });
-        scheduleFinancialCalculation(current.user_id, store.id);
         return redirect(res, '/costs?imported=1');
       } catch (error) {
         if (error.message === 'cost_write_forbidden') return sendCosts(res, 403, current, stores, {

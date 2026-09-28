@@ -20,7 +20,6 @@ function setup(overrides = {}) {
     sameOrigin: () => true,
     takeLimit: async (...args) => { calls.push(['limit', ...args]); return { allowed: true }; },
     multipart: async (req, limit) => { calls.push(['multipart', limit]); return { fields: { storeId: 'store-1' }, files: { file: { fileName: 'costs.csv', buffer: csv } } }; },
-    scheduleFinancialCalculation: (...args) => calls.push(['calculate', ...args]),
     ...overrides,
   };
   const handler = createCostsRoutes(dependencies);
@@ -56,7 +55,7 @@ test('rate-limited upload does not read or import a file', async () => {
   assert.equal(state.response.status, 429);
   assert.deepEqual(state.calls, []);
 });
-test('successful upload preserves limits, parsed rows, checksum and recalculation', async () => {
+test('successful upload preserves limits, parsed rows and checksum while database events own recalculation', async () => {
   const state = setup();
   await state.run();
   assert.equal(state.response.location, '/costs?imported=1');
@@ -66,28 +65,28 @@ test('successful upload preserves limits, parsed rows, checksum and recalculatio
   assert.equal(state.calls[2][2].storeId, 'store-1');
   assert.equal(state.calls[2][2].rows[0].wbArticle, '123');
   assert.match(state.calls[2][2].checksum, /^[a-f0-9]{64}$/);
-  assert.deepEqual(state.calls[3], ['calculate', 'user-1', 'store-1']);
+  assert.equal(state.calls.length, 3);
 });
 test('foreign store cannot be imported', async () => {
   const state = setup({ multipart: async () => ({ fields: { storeId: 'foreign' }, files: {} }) });
   await state.run();
   assert.equal(state.response.status, 404);
-  assert.equal(state.calls.some(([name]) => ['import', 'calculate'].includes(name)), false);
+  assert.equal(state.calls.some(([name]) => name === 'import'), false);
 });
-test('row errors are shown without scheduling recalculation', async () => {
+test('row errors are shown without applying an import', async () => {
   const errors = [{ rowNumber: 2, code: 'cost_variant_not_found' }];
   const state = setup({ importVariantCosts: async () => ({ ok: false, errors }) });
   await state.run();
   assert.equal(state.response.status, 422);
   assert.deepEqual(state.response.body.options.importErrors, errors);
-  assert.equal(state.calls.some(([name]) => name === 'calculate'), false);
+  assert.equal(state.calls.some(([name]) => name === 'import'), false);
 });
-test('upload failures retain status and never schedule recalculation', async () => {
+test('upload failures retain status and never apply an import', async () => {
   for (const [message, status] of [['too_large', 413], ['cost_file_too_large', 413], ['cost_write_forbidden', 403], ['store_not_found', 404], ['multipart_invalid', 422], ['cost_file_empty', 422]]) {
     const state = setup({ multipart: async () => { throw new Error(message); } });
     await state.run();
     assert.equal(state.response.status, status, message);
-    assert.equal(state.calls.some(([name]) => name === 'calculate'), false);
+    assert.equal(state.calls.some(([name]) => name === 'import'), false);
   }
 });
 test('cost page displays successful import notice', async () => {

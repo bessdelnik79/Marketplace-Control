@@ -257,6 +257,30 @@ export async function listFinancialCalculationInvalidations(){
   return (await pool.query(`select * from mc.list_calculation_invalidations()`)).rows;
 }
 
+export async function getFinancialCompatibilityBootstrapState(userId,storeId){
+  return withOwnedBusinessContext(userId,async(client,businessId)=>{
+    const selection=(await client.query(`select id from mc.product_selections
+      where business_id=$1 and store_id=$2 and status='confirmed'`,[businessId,storeId])).rows[0];
+    const dailyPublished=Boolean((await client.query(`select 1 from mc.financial_daily_current_publications
+      where business_id=$1 and store_id=$2`,[businessId,storeId])).rows[0]);
+    const pipelineActive=Boolean((await client.query(`select 1 from mc.jobs
+      where business_id=$1 and store_id=$2
+        and job_type in ('financial_inventory_refresh','financial_report_fetch','financial_report_normalize')
+        and status in ('pending','running') limit 1`,[businessId,storeId])).rows[0]);
+    if(dailyPublished||!selection||pipelineActive)return{dailyPublished,selectionReady:Boolean(selection),waitingForPipeline:pipelineActive,targets:[]};
+    const targets=(await client.query(
+      `select distinct report.period_start::text as "periodStart",report.period_end::text as "periodEnd"
+         from mc.reports report
+        where report.business_id=$1 and report.store_id=$2 and report.current_version_id is not null
+          and exists(select 1 from mc.report_normalizations normalization
+            join mc.method_versions parser_method on parser_method.id=normalization.method_version_id
+           where normalization.report_version_id=report.current_version_id and normalization.status='succeeded'
+             and parser_method.code='wb_finance_import' and parser_method.version_no=11)
+        order by "periodStart","periodEnd"`,[businessId,storeId])).rows;
+    return{dailyPublished:false,selectionReady:true,waitingForPipeline:false,targets};
+  });
+}
+
 export async function getFinancialCalculationInvalidation(userId,storeId){
   return withOwnedBusinessContext(userId,async(client,businessId)=>(await client.query(
     `select generation_token from mc.calculation_invalidations where business_id=$1 and store_id=$2`,[businessId,storeId]

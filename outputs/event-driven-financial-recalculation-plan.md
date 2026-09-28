@@ -259,7 +259,7 @@ legacy history.
 - [x] Включить атомарный daily publication pointer.
 - [x] Перевести period read на дневную агрегацию с legacy fallback на время rollout.
 - [x] Реализовать stale-while-revalidate UI и polling до новой publication либо terminal job.
-- [x] Удалить расчёты и постановку заданий из overview GET; compatibility `Map` удалить после итоговой VM-приёмки durable worker на этапе 6.
+- [x] Удалить расчёты и постановку заданий из overview GET; process-local financial compatibility `Map` заменён durable invalidation worker, а ручная загрузка — PostgreSQL inventory job.
 
 Первая публикация допускается только для generation `financial-result-v20`,
 когда каждый публикуемый день покрыт matched shadow-сравнением с точной legacy

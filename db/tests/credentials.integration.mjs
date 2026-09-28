@@ -8,7 +8,7 @@ const databaseName=new URL(integrationUrl).pathname.slice(1);
 if(!databaseName.toLowerCase().includes('test'))throw new Error('Refusing to run credential integration tests outside a database whose name contains "test".');
 process.env.DATABASE_URL=integrationUrl;
 
-const [{migrate,pool,saveWbConnection,enqueueJob,claimJobs,completeJob},{encryptSecret,fingerprintSecret}]=await Promise.all([
+const [{migrate,pool,saveWbConnection,enqueueJob,claimJobs,completeJob,getFinancialSyncState,requestFinancialInventoryRefresh},{encryptSecret,fingerprintSecret}]=await Promise.all([
   import('../../app/db.mjs'),
   import('../../app/infrastructure/security/secrets.mjs')
 ]);
@@ -182,6 +182,32 @@ test('credential update and annual enqueue roll back together',async()=>{
     [ids.store]
   )).rows[0]);
   assert.deepEqual(after,before);
+});
+
+test('manual refresh is durable and mixed pipeline state remains running',async()=>{
+  const first=await requestFinancialInventoryRefresh(ids.user,ids.store,{now:new Date('2025-10-06T09:00:00Z')});
+  const duplicate=await requestFinancialInventoryRefresh(ids.user,ids.store,{now:new Date('2025-10-06T09:01:00Z')});
+  assert.equal(duplicate.id,first.id);
+  assert.equal(first.payload.reason,'manual_refresh');
+  assert.deepEqual(first.payload.window,{dateFrom:'2025-09-01',dateTo:'2025-10-05'});
+  const status=await getFinancialSyncState(ids.user,ids.store);
+  assert.equal(status.run_status,'running');
+  assert.equal(status.stream_status,'active');
+  assert.equal(await inContext(async client=>Number((await client.query(
+    `select count(*) from mc.financial_week_coverage where store_id=$1 and credential_generation=3
+      and 'manual_refresh'=any(check_reasons)`,[ids.store]
+  )).rows[0].count)),5);
+  for(const jobType of ['financial_report_fetch','financial_inventory_refresh']){
+    for(const job of await claimJobs({workerId:`credential-status-${jobType}`,jobTypes:[jobType],leaseSeconds:300,limit:100})){
+      await completeJob({jobId:job.id,leaseToken:job.lease_token,workerId:`credential-status-${jobType}`,outcome:'completed'});
+    }
+  }
+  await inContext(client=>client.query(`update mc.financial_week_coverage
+    set coverage_status='partial',last_error_code='financial_terminal_fixture',next_retry_at=null
+    where id=(select id from mc.financial_week_coverage where store_id=$1 and credential_generation=3 order by week_start limit 1)`,[ids.store]));
+  const terminal=await getFinancialSyncState(ids.user,ids.store);
+  assert.equal(terminal.run_status,'failed');
+  assert.equal(terminal.error_code,'financial_terminal_fixture');
 });
 
 test.after(async()=>{await pool.end();});

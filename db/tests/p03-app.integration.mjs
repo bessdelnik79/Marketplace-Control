@@ -8,8 +8,9 @@ const databaseName=new URL(integrationUrl).pathname.slice(1);
 if(!databaseName.toLowerCase().includes('test'))throw new Error('Refusing to run P0.3 integration tests outside a database whose name contains "test".');
 process.env.DATABASE_URL=integrationUrl;
 
-const {migrate,pool,runFinancialCalculation,beginFinancialSync,completeFinancialSync,failFinancialSync,getFinancialBankReconciliationState,getPublishedFinancialPeriod,getPublishedFinancialPeriodPair,getFinancialSellerOffsetReference,getFinancialSyncState,getFinancialCalculationInvalidation,acknowledgeFinancialCalculationInvalidation,retryFinancialDailyPublication,jobsRepository,financialDailyGenerationRepository}=await import('../../app/db.mjs');
+const {migrate,pool,runFinancialCalculation,beginFinancialSync,completeFinancialSync,failFinancialSync,getFinancialBankReconciliationState,getPublishedFinancialPeriod,getPublishedFinancialPeriodPair,getFinancialSellerOffsetReference,getFinancialSyncState,getFinancialCalculationInvalidation,getFinancialCompatibilityBootstrapState,acknowledgeFinancialCalculationInvalidation,retryFinancialDailyPublication,jobsRepository,financialDailyGenerationRepository}=await import('../../app/db.mjs');
 const ids={user:randomUUID(),business:randomUUID(),store:randomUUID()};
+let compatibilityV20;
 
 await migrate();
 async function context(action){
@@ -97,6 +98,15 @@ test('P0.3 persists selected-SKU USN, deducts it once and idempotently keeps one
   assert.deepEqual(rebill,{components:1,result_lines:0,issues:0});
 });
 
+test('compatibility bootstrap replays every current week until the first daily pointer exists',async()=>{
+  const before=await getFinancialCompatibilityBootstrapState(ids.user,ids.store);
+  assert.deepEqual(before.targets,[{periodStart:'2026-07-13',periodEnd:'2026-07-19'}]);
+  compatibilityV20=await runFinancialCalculation(ids.user,ids.store,{targetPeriod:before.targets[0]});
+  assert.equal(compatibilityV20.changed,true);
+  const repeated=await getFinancialCompatibilityBootstrapState(ids.user,ids.store);
+  assert.deepEqual(repeated.targets,[{periodStart:'2026-07-13',periodEnd:'2026-07-19'}]);
+});
+
 test('daily shadow generation rebuilds saved inputs and matches the exact published week without WB fetches',async()=>{
   const workerId=`daily-integration:${randomUUID()}`;
   const drainDaily=async()=>{
@@ -109,8 +119,8 @@ test('daily shadow generation rebuilds saved inputs and matches the exact publis
     }
     assert.ok(processed<10,'daily queue must drain');
   };
-  const legacyV20=await runFinancialCalculation(ids.user,ids.store,{targetPeriod:{periodStart:'2026-07-13',periodEnd:'2026-07-19'}});
-  assert.equal(legacyV20.changed,true);
+  const legacyV20=compatibilityV20;
+  assert.ok(legacyV20?.runId);
   await drainDaily();
   const initialPointer=await context(async client=>(await client.query(
     `select p.id,p.publication_no,count(d.accounting_date)::int mapped_days
