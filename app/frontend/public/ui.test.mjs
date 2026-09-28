@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { startFinancialResultPolling } from './financial-poll.js';
+import { startFinancialResultPolling, startFinancialSyncReload } from './financial-poll.js';
 
 function response(body,{ok=true}={}){return{ok,async json(){return body}}}
 
@@ -85,4 +85,16 @@ test('a hanging request is aborted and polling resumes',async()=>{
   timeout[1].fn();
   await checking;
   assert.deepEqual(delays(h),[4000]);
+});
+
+test('financial sync reload waits while account settings have unsaved changes',()=>{
+  let dirty=true,reloads=0,nextId=0;
+  const timers=new Map();
+  startFinancialSyncReload({reload(){reloads++},isDirty:()=>dirty,setTimer(fn,delay){const id=++nextId;timers.set(id,{fn,delay});return id},clearTimer(id){timers.delete(id)}});
+  assert.deepEqual([...timers.values()].map(timer=>timer.delay),[5000]);
+  let current=[...timers.entries()][0];timers.delete(current[0]);current[1].fn();
+  assert.equal(reloads,0);
+  dirty=false;
+  current=[...timers.entries()][0];timers.delete(current[0]);current[1].fn();
+  assert.equal(reloads,1);
 });

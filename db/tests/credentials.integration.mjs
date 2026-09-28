@@ -8,7 +8,7 @@ const databaseName=new URL(integrationUrl).pathname.slice(1);
 if(!databaseName.toLowerCase().includes('test'))throw new Error('Refusing to run credential integration tests outside a database whose name contains "test".');
 process.env.DATABASE_URL=integrationUrl;
 
-const [{migrate,pool,saveWbConnection,enqueueJob,claimJobs,completeJob,getFinancialSyncState,requestFinancialInventoryRefresh},{encryptSecret,fingerprintSecret},{createFinancialInventoryRepository}]=await Promise.all([
+const [{migrate,pool,saveWbConnection,enqueueJob,claimJobs,completeJob,failJob,getFinancialSyncState,requestFinancialInventoryRefresh},{encryptSecret,fingerprintSecret},{createFinancialInventoryRepository}]=await Promise.all([
   import('../../app/db.mjs'),
   import('../../app/infrastructure/security/secrets.mjs'),
   import('../../app/modules/reports/financial-inventory.repository.mjs')
@@ -226,6 +226,62 @@ test('manual refresh is durable and mixed pipeline state remains running',async(
   const terminal=await getFinancialSyncState(ids.user,ids.store);
   assert.equal(terminal.run_status,'failed');
   assert.equal(terminal.error_code,'financial_terminal_fixture');
+});
+
+test('exhausted inventory job makes its uncovered weeks terminal and visible as incomplete',async()=>{
+  await inContext(client=>client.query(`insert into mc.financial_week_coverage(
+      business_id,store_id,credential_generation,week_start,week_end,check_reasons,coverage_status,
+      freshness_due_at,next_retry_at,last_error_code
+    ) values($1,$2,3,'2024-01-01','2024-01-07',array['terminal_test'],'retry',now(),now(),'financial_inventory_not_confirmed')
+    on conflict(business_id,store_id,credential_generation,week_start) do update
+      set coverage_status='retry',next_retry_at=now(),last_error_code='financial_inventory_not_confirmed'`,[ids.business,ids.store]));
+  const queued=await enqueueJob(ids.user,{
+    storeId:ids.store,jobType:'financial_inventory_refresh',deduplicationKey:`terminal-inventory:${ids.store}`,
+    payload:{schemaVersion:1,credentialGeneration:3,window:{dateFrom:'2024-01-01',dateTo:'2024-01-07'}},maxAttempts:1
+  });
+  const claimed=(await claimJobs({workerId:'terminal-inventory-worker',jobTypes:['financial_inventory_refresh'],leaseSeconds:300,limit:100})).find(job=>job.id===queued.id);
+  assert.ok(claimed);
+  const failed=await failJob({jobId:claimed.id,leaseToken:claimed.lease_token,workerId:'terminal-inventory-worker',errorCode:'financial_inventory_not_confirmed',retryable:true,retryDelaySeconds:900});
+  assert.equal(failed.status,'failed');
+  const coverage=await inContext(async client=>(await client.query(`select coverage_status,next_retry_at,last_error_code
+    from mc.financial_week_coverage where store_id=$1 and credential_generation=3 and week_start='2024-01-01'`,[ids.store])).rows[0]);
+  assert.equal(coverage.coverage_status,'unavailable');
+  assert.equal(coverage.next_retry_at,null);
+  assert.equal(coverage.last_error_code,'financial_inventory_not_confirmed');
+  const state=await getFinancialSyncState(ids.user,ids.store);
+  assert.equal(state.run_status,'failed');
+  assert.equal(state.error_code,'financial_inventory_not_confirmed');
+  assert.ok(Number(state.failed_weeks)>=1);
+});
+
+test('expired final inventory lease also makes uncovered weeks terminal',async()=>{
+  await inContext(client=>client.query(`insert into mc.financial_week_coverage(
+      business_id,store_id,credential_generation,week_start,week_end,check_reasons,coverage_status,
+      freshness_due_at,next_retry_at,last_error_code
+    ) values($1,$2,3,'2024-01-08','2024-01-14',array['expired_lease_test'],'retry',now(),now(),'financial_inventory_not_confirmed')
+    on conflict(business_id,store_id,credential_generation,week_start) do update
+      set coverage_status='retry',next_retry_at=now(),last_error_code='financial_inventory_not_confirmed'`,[ids.business,ids.store]));
+  const queued=await enqueueJob(ids.user,{
+    storeId:ids.store,jobType:'financial_inventory_refresh',deduplicationKey:`expired-terminal-inventory:${ids.store}`,
+    payload:{schemaVersion:1,credentialGeneration:3,window:{dateFrom:'2024-01-08',dateTo:'2024-01-14'}},maxAttempts:1
+  });
+  const claimed=(await claimJobs({workerId:'expired-terminal-worker',jobTypes:['financial_inventory_refresh'],leaseSeconds:300,limit:100})).find(job=>job.id===queued.id);
+  assert.ok(claimed);
+  await inContext(async client=>{
+    await client.query(`update mc.jobs set lease_until=clock_timestamp()-interval '1 second' where id=$1`,[queued.id]);
+    await client.query(`update mc.job_dispatch set lease_until=clock_timestamp()-interval '1 second' where job_id=$1`,[queued.id]);
+  });
+  const reclaimed=await claimJobs({workerId:'expired-terminal-recovery',jobTypes:['financial_inventory_refresh'],leaseSeconds:300,limit:100});
+  assert.equal(reclaimed.some(job=>job.id===queued.id),false);
+  const result=await inContext(async client=>({
+    job:(await client.query(`select status,last_error_code from mc.jobs where id=$1`,[queued.id])).rows[0],
+    coverage:(await client.query(`select coverage_status,next_retry_at,last_error_code from mc.financial_week_coverage
+      where store_id=$1 and credential_generation=3 and week_start='2024-01-08'`,[ids.store])).rows[0]
+  }));
+  assert.deepEqual(result.job,{status:'failed',last_error_code:'max_attempts_exhausted'});
+  assert.equal(result.coverage.coverage_status,'unavailable');
+  assert.equal(result.coverage.next_retry_at,null);
+  assert.equal(result.coverage.last_error_code,'max_attempts_exhausted');
 });
 
 test.after(async()=>{await pool.end();});

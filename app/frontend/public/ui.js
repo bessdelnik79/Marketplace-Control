@@ -48,6 +48,13 @@
       import('/financial-poll.js').then(({startFinancialResultPolling})=>startFinancialResultPolling({element:financialCalculation,storage:financialPollStorage,statusUrl:financialCalculation.dataset.financialStatusUrl,publicationId:financialCalculation.dataset.financialPublicationId||null,fetchImpl:fetch,reload:()=>location.reload(),startedAt:started,isHidden:()=>document.hidden,addVisibilityListener:listener=>document.addEventListener('visibilitychange',listener)})).catch(()=>{$('[data-financial-poll-note]',financialCalculation).hidden=false});
     }
   }else financialPollStorage.remove();
+  const financialSync=$('[data-financial-sync-refresh]'),accountFormForSync=$('#account-form');
+  if(financialSync){
+    let accountFormDirty=false;
+    accountFormForSync?.addEventListener('input',()=>{accountFormDirty=true});
+    accountFormForSync?.addEventListener('change',()=>{accountFormDirty=true});
+    import('/financial-poll.js').then(({startFinancialSyncReload})=>startFinancialSyncReload({reload:()=>location.reload(),isDirty:()=>accountFormDirty,isHidden:()=>document.hidden,addVisibilityListener:listener=>document.addEventListener('visibilitychange',listener)})).catch(()=>{});
+  }
   all('[data-period]').forEach(button=>button.addEventListener('click',()=>{all('[data-period]').forEach(b=>b.classList.toggle('selected',b===button));$('[data-calendar="mobile-profit"]').click()}));
   $('[data-info]')?.addEventListener('click',()=>{$('.comparison-info').hidden=!$('.comparison-info').hidden});
   $('[data-info]')?.addEventListener('mouseenter',()=>{$('.comparison-info').hidden=false});

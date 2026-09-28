@@ -60,3 +60,21 @@ export function startFinancialResultPolling({
   schedule();
   return{checkNow,stop(){stopped=true;clearPollTimer();if(requestTimer!==null){clearTimer(requestTimer);requestTimer=null}}};
 }
+
+export function startFinancialSyncReload({
+  reload,
+  isDirty=()=>false,
+  isHidden=()=>false,
+  addVisibilityListener=()=>{},
+  setTimer=setTimeout,
+  clearTimer=clearTimeout,
+  intervalMs=5000
+}){
+  let timer=null,stopped=false;
+  const clear=()=>{if(timer!==null){clearTimer(timer);timer=null}};
+  const schedule=()=>{clear();if(!stopped)timer=setTimer(tick,intervalMs)};
+  const tick=()=>{timer=null;if(stopped)return;if(isHidden()||isDirty()){schedule();return}reload()};
+  addVisibilityListener(()=>{if(!isHidden())schedule()});
+  schedule();
+  return{stop(){stopped=true;clear()}};
+}

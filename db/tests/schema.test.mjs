@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,42);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,43);
   assert.deepEqual((await q("select table_name from information_schema.tables where table_schema='mc' and table_name in ('financial_input_events','financial_store_event_state') order by table_name")).map(row=>row.table_name),['financial_input_events','financial_store_event_state']);
   assert.equal((await one("select relforcerowsecurity as forced from pg_class join pg_namespace on pg_namespace.oid=pg_class.relnamespace where nspname='mc' and relname='financial_input_events'")).forced,true);
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.establish_financial_pipeline_context(uuid,bigint,uuid,text,text)'::regprocedure"));
@@ -745,8 +745,8 @@ try {
   assert.equal((await q(`select * from mc.schedule_financial_inventory($1,100)`,['2026-10-11T21:01:00Z'])).length,1);
   pass('credential and Monday scheduler seed closed-week coverage exactly once');
 
-  const schedulerPrivileges=await q("select p.proname,has_function_privilege('public',p.oid,'execute') as executable from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='mc' and p.proname in ('plan_financial_credential_refresh','schedule_financial_inventory','get_financial_inventory_context','apply_financial_inventory','apply_financial_period_fallback','list_financial_credential_backfill','defer_financial_credential_backfill','request_financial_inventory_refresh') order by p.proname");
-  assert.equal(schedulerPrivileges.length,8);
+  const schedulerPrivileges=await q("select p.proname,has_function_privilege('public',p.oid,'execute') as executable from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname='mc' and p.proname in ('plan_financial_credential_refresh','schedule_financial_inventory','get_financial_inventory_context','apply_financial_inventory','apply_financial_period_fallback','list_financial_credential_backfill','defer_financial_credential_backfill','request_financial_inventory_refresh','mark_financial_inventory_coverage_terminal') order by p.proname");
+  assert.equal(schedulerPrivileges.length,9);
   assert.ok(schedulerPrivileges.every(row=>row.executable===false));
   assert.equal((await one("select has_table_privilege('public','mc.financial_schedule_targets','select') as allowed")).allowed,false);
   assert.equal((await one("select has_table_privilege('public','mc.financial_credential_backfill_targets','select') as allowed")).allowed,false);

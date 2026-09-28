@@ -370,22 +370,27 @@ export async function getFinancialSyncState(userId,storeId){
                 and coverage.coverage_status='retry') as next_run_at,
             case when active_job.id is not null then 'running'
                  when coverage_state.terminal then 'failed'
-                 when coverage_state.waiting then 'running'
+                 when coverage_state.waiting then 'failed'
                  when failed_job.id is not null and (pipeline.last_success_at is null or failed_job.finished_at>pipeline.last_success_at) then 'failed'
                  when pipeline.last_success_at is not null then 'succeeded' end as run_status,
             case when active_job.id is null
                    and (coverage_state.terminal
-                     or (not coverage_state.waiting and (pipeline.last_success_at is null or failed_job.finished_at>pipeline.last_success_at)))
-                 then coalesce(coverage_state.terminal_error,failed_job.last_error_code) end as error_code,
+                     or coverage_state.waiting
+                     or (pipeline.last_success_at is null or failed_job.finished_at>pipeline.last_success_at))
+                 then coalesce(coverage_state.terminal_error,coverage_state.waiting_error,failed_job.last_error_code) end as error_code,
             coalesce(active_job.created_at,failed_job.created_at) as started_at,
-            case when active_job.id is null and not coverage_state.waiting then failed_job.finished_at end as finished_at,
+            case when active_job.id is null then failed_job.finished_at end as finished_at,
             coalesce(active_job.payload,failed_job.payload)->'window'->>'dateFrom' as requested_from,
             coalesce(active_job.payload,failed_job.payload)->'window'->>'dateTo' as requested_to,
             jsonb_build_object('stage',case coalesce(active_job.job_type,failed_job.job_type)
               when 'financial_inventory_refresh' then 'inventory'
               when 'financial_report_fetch' then 'loading'
               when 'financial_report_normalize' then 'saving'
-              else case when coverage_state.waiting then 'inventory' else 'idle' end end) as progress,
+              else 'idle' end) as progress,
+            coverage_state.total_weeks,
+            coverage_state.complete_weeks,
+            coverage_state.pending_weeks,
+            coverage_state.failed_weeks,
             (select max(coverage.week_end) from mc.financial_week_coverage coverage
               where coverage.business_id=store.business_id and coverage.store_id=store.id
                 and coverage.credential_generation=connection.credential_generation
@@ -432,10 +437,16 @@ export async function getFinancialSyncState(userId,storeId){
           order by job.finished_at desc nulls last,job.id desc limit 1
        ) failed_job on true
        left join lateral (
-         select coalesce(bool_or(coverage.coverage_status in ('pending','retry')),false) as waiting,
+         select coalesce(bool_or(coverage.coverage_status in ('pending','inventory_confirmed','fetching','retry')),false) as waiting,
                 coalesce(bool_or(coverage.coverage_status in ('partial','unavailable')),false) as terminal,
+                count(*)::int as total_weeks,
+                count(*) filter(where coverage.coverage_status='complete')::int as complete_weeks,
+                count(*) filter(where coverage.coverage_status in ('pending','inventory_confirmed','fetching','retry'))::int as pending_weeks,
+                count(*) filter(where coverage.coverage_status in ('partial','unavailable'))::int as failed_weeks,
                 (array_agg(coverage.last_error_code order by coverage.updated_at desc)
-                  filter(where coverage.coverage_status in ('partial','unavailable') and coverage.last_error_code is not null))[1] as terminal_error
+                  filter(where coverage.coverage_status in ('partial','unavailable') and coverage.last_error_code is not null))[1] as terminal_error,
+                (array_agg(coverage.last_error_code order by coverage.updated_at desc)
+                  filter(where coverage.coverage_status in ('pending','inventory_confirmed','fetching','retry') and coverage.last_error_code is not null))[1] as waiting_error
            from mc.financial_week_coverage coverage
           where coverage.business_id=store.business_id and coverage.store_id=store.id
             and coverage.credential_generation=connection.credential_generation
