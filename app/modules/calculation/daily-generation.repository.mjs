@@ -12,6 +12,16 @@ import {
 const groupBy=(rows,key)=>rows.reduce((map,row)=>{const value=key(row),group=map.get(value)??[];group.push(row);map.set(value,group);return map;},new Map());
 const periodKey=row=>`${row.period_start}/${row.period_end}`;
 
+export function financialDailyDateOnly(value){
+  if(value instanceof Date&&!Number.isNaN(value.getTime())){
+    const year=value.getFullYear(),month=String(value.getMonth()+1).padStart(2,'0'),day=String(value.getDate()).padStart(2,'0');
+    return`${year}-${month}-${day}`;
+  }
+  const text=String(value??'');
+  if(/^\d{4}-\d{2}-\d{2}$/.test(text))return text;
+  throw new Error('financial_daily_invalid_job');
+}
+
 function fillCoverageGaps(daily,periodStart,periodEnd){
   const byDate=new Map(daily.days.map(day=>[day.accountingDate,day]));
   for(let cursor=new Date(`${periodStart}T00:00:00Z`),end=new Date(`${periodEnd}T00:00:00Z`);cursor<=end;cursor.setUTCDate(cursor.getUTCDate()+1)){
@@ -38,7 +48,9 @@ async function transaction(pool,action){
 }
 
 async function establish(client,jobId,leaseToken,workerId){
-  return(await client.query('select * from mc.establish_financial_daily_context($1,$2,$3)',[jobId,leaseToken,workerId])).rows[0]??null;
+  const context=(await client.query('select * from mc.establish_financial_daily_context($1,$2,$3)',[jobId,leaseToken,workerId])).rows[0]??null;
+  if(context){context.affected_from=financialDailyDateOnly(context.affected_from);context.affected_to=financialDailyDateOnly(context.affected_to);}
+  return context;
 }
 
 async function loadSnapshot(client,context){

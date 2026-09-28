@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {createFinancialDailyGenerationRepository} from './daily-generation.repository.mjs';
+import {createFinancialDailyGenerationRepository,financialDailyDateOnly} from './daily-generation.repository.mjs';
+
+test('repository preserves PostgreSQL date-only calendar components',()=>{
+  assert.equal(financialDailyDateOnly(new Date(2026,8,21)),'2026-09-21');
+  assert.equal(financialDailyDateOnly('2026-09-27'),'2026-09-27');
+  assert.throws(()=>financialDailyDateOnly('invalid'),/financial_daily_invalid_job/);
+});
 
 test('repository supersedes an older event before loading financial inputs',async()=>{
   const calls=[];
