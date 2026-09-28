@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,47);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,48);
   assert.deepEqual((await q("select table_name from information_schema.tables where table_schema='mc' and table_name in ('financial_input_events','financial_store_event_state') order by table_name")).map(row=>row.table_name),['financial_input_events','financial_store_event_state']);
   assert.equal((await one("select relforcerowsecurity as forced from pg_class join pg_namespace on pg_namespace.oid=pg_class.relnamespace where nspname='mc' and relname='financial_input_events'")).forced,true);
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.establish_financial_pipeline_context(uuid,bigint,uuid,text,text)'::regprocedure"));
@@ -91,7 +91,9 @@ try {
   assert.match(publicationFunction,/current_watermark IS DISTINCT FROM generation.watermark_generation/);
   assert.match(publicationFunction,/financial_daily_shadow_day_compatible/);
   assert.match(shadowDayFunction,/comparison.status='matched'/);
-  assert.match(shadowDayFunction,/legacy_method.version_no=20/);
+  assert.match(shadowDayFunction,/legacy_method.code='financial_result'/);
+  assert.match(shadowDayFunction,/legacy_method.version_no BETWEEN 9 AND 20/);
+  assert.match(shadowDayFunction,/legacy_method.implementation_version='financial-result-v'\|\|legacy_method.version_no/);
   assert.match(shadowDayFunction,/p_accounting_date BETWEEN comparison.period_start AND comparison.period_end/);
   assert.match(shadowDayFunction,/day\.quality IN \('complete','partial'\)/);
   assert.match(shadowDayFunction,/financial_empty_week_evidence_valid/);
@@ -1377,6 +1379,32 @@ try {
     await eq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[emptyUser.id,emptyBusiness.id]);
     assert.equal((await eone(`select max(version)::int version from mc.schema_migrations`)).version,47);
     pass('migration 47 validates empty evidence and backfills only current active finance coverage');
+
+    const v20Method=await eone(`select id from mc.method_versions
+      where code='financial_result' and version_no=20`);
+    await eone(`select * from mc.emit_financial_input_event(
+      $1::uuid,'daily-publication-cutover:v1:store:'||($1::uuid)::text,'shadow_backfill','2026-09-07','2026-09-13',
+      p_source_result_method_version_id=>$2
+    )`,[emptyStore.id,v20Method.id]);
+    await eq(`select set_config('app.user_id','',false),set_config('app.business_id','',false)`);
+    await emptyCoverageUpgradeDb.exec(await readFile(path.join(root,'db/migrations/048_financial_legacy_shadow_recovery.sql'),'utf8'));
+    await eq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[emptyUser.id,emptyBusiness.id]);
+    assert.deepEqual(await eone(`select event_type,affected_from::text affected_from,affected_to::text affected_to,
+        source_result_method_version_id
+      from mc.financial_input_events
+      where event_key='daily-publication-legacy-shadow-recovery:v1:store:'||$1`,[emptyStore.id]),{
+      event_type:'shadow_backfill',affected_from:'2026-09-07',affected_to:'2026-09-13',
+      source_result_method_version_id:v20Method.id
+    });
+    assert.equal((await eone(`select count(*)::int n from mc.financial_input_events
+      where event_key='daily-publication-legacy-shadow-recovery:v1:store:'||$1`,[emptyStore.id])).n,1);
+    assert.equal((await eone(`select payload->>'allowsWbApi' allows_wb_api from mc.jobs
+      where id=(select dispatch_job_id from mc.financial_input_events
+        where event_key='daily-publication-legacy-shadow-recovery:v1:store:'||$1)`,[emptyStore.id])).allows_wb_api,'false');
+    assert.equal((await eone(`select count(*)::int n from mc.financial_input_events
+      where event_key='daily-publication-legacy-shadow-recovery:v1:store:'||$1`,[inactiveStore.id])).n,0);
+    assert.equal((await eone(`select max(version)::int version from mc.schema_migrations`)).version,48);
+    pass('migration 48 replays a no-pointer cutover without WB API and skips archived stores');
   }finally{await emptyCoverageUpgradeDb.close();}
 
   // Produce a machine-derived field/constraint inventory for review.
