@@ -1,6 +1,7 @@
 import { pool, withOwnedBusinessContext } from '../../infrastructure/database/client.mjs';
 import { financialParserVersion } from '../reports/finance.mjs';
 import { calculateFinancialResult, calculateStoreTaxReference, createInputFingerprint, isVerifiedWbResultComponent } from './calculation.mjs';
+import { aggregateDailyFinancialGeneration } from './daily-generation.mjs';
 
 export const compatibleFinancialParserVersions=Object.freeze([
   financialParserVersion,'wb-finance-v10','wb-finance-v9','wb-finance-v8','wb-finance-v7','wb-finance-v6','wb-finance-v5','wb-finance-v4','wb-finance-v3','wb-finance-v2'
@@ -29,6 +30,78 @@ function formatFixed4(value){
   const sign=value<0n?'-':'';
   const absolute=value<0n?-value:value;
   return `${sign}${absolute/10000n}.${String(absolute%10000n).padStart(4,'0')}`;
+}
+
+function fixed12(value){
+  const match=String(value).match(/^(-?)(\d+)(?:\.(\d{1,12}))?$/);
+  if(!match)throw new Error('calculation_invalid_persisted_total');
+  const amount=BigInt(match[2])*1000000000000n+BigInt((match[3]??'').padEnd(12,'0'));
+  return match[1]?-amount:amount;
+}
+
+function roundFixed12To4(value){
+  const negative=value<0n,absolute=negative?-value:value,divisor=100000000n;
+  const rounded=(absolute+divisor/2n)/divisor;
+  return negative?-rounded:rounded;
+}
+
+function dateSpan(periodStart,periodEnd){
+  const start=new Date(`${periodStart}T00:00:00Z`),end=new Date(`${periodEnd}T00:00:00Z`);
+  if(Number.isNaN(start.getTime())||Number.isNaN(end.getTime())||end<start)return 0;
+  return Math.round((end-start)/86400000)+1;
+}
+
+export function aggregateDailyPublicationPeriod(periodStart,periodEnd,{days=[],lines=[],reasons=[],taxFacts=[],sourceFreshness=null,crossBorderReportCount=null}={}){
+  const reasonsByDay=groupBy(reasons,row=>row.accounting_date);
+  const generation={
+    periodStart,periodEnd,
+    days:days.map(row=>({
+      accountingDate:row.accounting_date,coverageComplete:row.coverage_complete===true,quality:row.quality,
+      taxUsable:row.tax_usable===true,storeLevelResultBeforeTax:row.store_profit_before_tax,
+      selectedProductsResultBeforeTax:row.selected_profit_before_tax,availableResultBeforeTax:row.available_profit_before_tax,
+      missingReasons:(reasonsByDay.get(row.accounting_date)??[]).map(reason=>reason.reason_code)
+    })),
+    lines:lines.map(row=>({accountingDate:row.accounting_date,scopeCode:row.scope==='store'?'store':'selected_product',
+      productId:row.product_id,variantId:row.variant_id,categoryCode:row.category_code,amountSigned:row.amount_signed})),
+    taxFacts:taxFacts.map(row=>({accountingDate:row.accounting_date,productId:row.product_id,
+      taxableBase:row.tax_base_unrounded,numerator:row.tax_numerator_unrounded}))
+  };
+  const aggregate=aggregateDailyFinancialGeneration(generation,{periodStart,periodEnd});
+  const covered=days.length===dateSpan(periodStart,periodEnd)&&days[0]?.accounting_date===periodStart&&days.at(-1)?.accounting_date===periodEnd;
+  if(!covered||aggregate.quality==='unavailable'||aggregate.totals===null)return{
+    period_result_id:null,daily_read_complete:covered,period_start:periodStart,period_end:periodEnd,quality:'unavailable',
+    missing_reasons:[...new Set([...aggregate.missingReasons,'report_coverage_incomplete'])].sort(),totals:null,
+    source_freshness:sourceFreshness,covered_period:days.length?{start:days[0].accounting_date,end:days.at(-1).accounting_date}:null,
+    cross_border_buyout:{present:null,reportCount:null},lines:[],taxReference:{scope:'selected_products',
+      method:'seller_defined_usn_income_selected_line1_estimate',quality:'partial',missingReasons:aggregate.missingReasons,
+      usable:false,includedInResult:false,taxableBase:null,estimatedTax:null,products:[],segments:[]}
+  };
+  const productTax=new Map();
+  for(const fact of taxFacts){
+    const current=productTax.get(fact.product_id)??{base:0n,numerator:0n};
+    current.base+=fixed12(fact.tax_base_unrounded);current.numerator+=fixed12(fact.tax_numerator_unrounded);
+    productTax.set(fact.product_id,current);
+  }
+  const usable=aggregate.totals.estimatedUsnTax!==null;
+  const taxProducts=usable?[...productTax].sort(([left],[right])=>left.localeCompare(right)).map(([productId,value])=>({
+    productId,taxableBase:formatFixed4(roundFixed12To4(value.base)),estimatedTax:formatFixed4(roundFixed12To4(value.numerator))
+  })):[];
+  const resultLines=generation.lines.map(row=>({result_scope:row.scopeCode,product_id:row.productId,variant_id:row.variantId,
+    accounting_date:row.accountingDate,category_code:row.categoryCode,amount_signed:row.amountSigned,quality:aggregate.quality}));
+  if(usable)for(const product of taxProducts)resultLines.push({result_scope:'selected_product',product_id:product.productId,variant_id:null,
+    accounting_date:periodEnd,category_code:'estimated_usn_tax',amount_signed:formatFixed4(-fixed4(product.estimatedTax)),quality:aggregate.quality});
+  return{
+    period_result_id:null,daily_read_complete:true,period_start:periodStart,period_end:periodEnd,quality:aggregate.quality,
+    missing_reasons:aggregate.missingReasons,totals:aggregate.totals,source_freshness:sourceFreshness,
+    covered_period:{start:periodStart,end:periodEnd},cross_border_buyout:crossBorderReportCount===null
+      ?{present:null,reportCount:null}:{present:Number(crossBorderReportCount)>0,reportCount:Number(crossBorderReportCount)},lines:resultLines,
+    taxReference:{scope:'selected_products',method:'seller_defined_usn_income_selected_line1_estimate',
+      quality:aggregate.missingReasons.some(reason=>reason.startsWith('tax_'))?'partial':'complete',
+      missingReasons:aggregate.missingReasons.filter(reason=>reason.startsWith('tax_')||reason==='vat_method_unsupported'||reason==='report_coverage_incomplete'),
+      usable,includedInResult:usable,
+      taxableBase:usable?formatFixed4(taxProducts.reduce((sum,row)=>sum+fixed4(row.taxableBase),0n)):null,
+      estimatedTax:usable?aggregate.totals.estimatedUsnTax:null,products:taxProducts,segments:[]}
+  };
 }
 
 function aggregatePeriodResults(results){
@@ -515,41 +588,192 @@ async function getPeriodEnvelope(client,runId,periodStart,periodEnd){
   return aggregatePublishedPeriodEnvelopes(periodStart,periodEnd,envelopes);
 }
 
+async function getCurrentDailyPublicationContext(client,businessId,storeId){
+  const publication=(await client.query(
+    `select publication.id as publication_id,publication.created_at as published_at,
+            publication.watermark_generation,method.code as method_code,
+            method.implementation_version as method_version,business.timezone
+       from mc.financial_daily_current_publications current_publication
+       join mc.financial_daily_publications publication on publication.id=current_publication.publication_id
+       join mc.financial_daily_generations generation on generation.id=publication.generation_id
+       join mc.method_versions method on method.id=generation.result_method_version_id
+       join mc.businesses business on business.id=publication.business_id
+      where current_publication.business_id=$1 and current_publication.store_id=$2`,[businessId,storeId]
+  )).rows[0];
+  if(!publication)return null;
+  const productIds=(await client.query(
+    `select distinct product.product_id
+       from mc.financial_daily_publication_days mapped_day
+       join mc.financial_daily_generation_products product on product.generation_id=mapped_day.generation_id and product.selected
+      where mapped_day.publication_id=$1 order by product.product_id`,[publication.publication_id]
+  )).rows.map(row=>row.product_id);
+  return{...publication,publication_source:'daily',scope:{type:'selected_products',productIds}};
+}
+
+async function latestDailyPeriod(client,publicationId){
+  const latest=(await client.query(
+    `select max(accounting_date)::text as period_end from mc.financial_daily_publication_days where publication_id=$1`,[publicationId]
+  )).rows[0]?.period_end;
+  if(!latest)return null;
+  const day=new Date(`${latest}T00:00:00Z`),weekday=(day.getUTCDay()+6)%7;
+  return{period_start:shiftCalendarDate(latest,-weekday),period_end:shiftCalendarDate(latest,6-weekday)};
+}
+
+async function getDailyPeriodEnvelope(client,publication,periodStart,periodEnd){
+  const mapped=(await client.query(
+    `select mapped_day.accounting_date::text,mapped_day.generation_id,day.coverage_complete,day.quality,day.tax_usable,
+            day.store_profit_before_tax::text,day.selected_profit_before_tax::text,day.available_profit_before_tax::text
+       from mc.financial_daily_publication_days mapped_day
+       join mc.financial_daily_days day on day.generation_id=mapped_day.generation_id and day.accounting_date=mapped_day.accounting_date
+      where mapped_day.publication_id=$1 and mapped_day.accounting_date between $2 and $3
+      order by mapped_day.accounting_date`,[publication.publication_id,periodStart,periodEnd]
+  )).rows;
+  if(!mapped.length)return null;
+  const lines=(await client.query(
+    `select result.accounting_date::text,result.scope,result.product_id,result.variant_id,result.category_code,result.amount_signed::text
+       from mc.financial_daily_publication_days mapped_day
+       join mc.financial_daily_results result on result.generation_id=mapped_day.generation_id and result.accounting_date=mapped_day.accounting_date
+      where mapped_day.publication_id=$1 and mapped_day.accounting_date between $2 and $3
+      order by result.accounting_date,result.scope,result.product_id nulls last,result.variant_id nulls last,result.category_code,result.id`,
+    [publication.publication_id,periodStart,periodEnd]
+  )).rows;
+  const reasons=(await client.query(
+    `select reason.accounting_date::text,reason.reason_code
+       from mc.financial_daily_publication_days mapped_day
+       join mc.financial_daily_reasons reason on reason.generation_id=mapped_day.generation_id and reason.accounting_date=mapped_day.accounting_date
+      where mapped_day.publication_id=$1 and mapped_day.accounting_date between $2 and $3
+      order by reason.accounting_date,reason.reason_code`,[publication.publication_id,periodStart,periodEnd]
+  )).rows;
+  const taxFacts=(await client.query(
+    `select fact.accounting_date::text,fact.product_id,fact.tax_base_unrounded::text,fact.tax_numerator_unrounded::text
+       from mc.financial_daily_publication_days mapped_day
+       join mc.financial_daily_tax_facts fact on fact.generation_id=mapped_day.generation_id and fact.accounting_date=mapped_day.accounting_date
+      where mapped_day.publication_id=$1 and mapped_day.accounting_date between $2 and $3
+      order by fact.accounting_date,fact.product_id,fact.tax_setting_version_id`,[publication.publication_id,periodStart,periodEnd]
+  )).rows;
+  const metadata=(await client.query(
+    `select max(document.received_at) as source_freshness,
+            count(distinct report.external_report_id) filter(where summary.raw_data->>'reportType'='2'
+              and nullif(btrim(summary.raw_data->>'country'),'') is not null
+              and lower(btrim(summary.raw_data->>'country')) not in ('россия','российская федерация','russia','russian federation','ru'))::int as cross_border_report_count
+       from (select distinct generation_id from mc.financial_daily_publication_days
+              where publication_id=$1 and accounting_date between $2 and $3) mapped_generation
+       join mc.financial_daily_generation_inputs input on input.generation_id=mapped_generation.generation_id and input.source_kind='report'
+       join mc.report_versions report_version on report_version.id=input.report_version_id
+       join mc.reports report on report.id=report_version.report_id and report.period_start<=$3::date and report.period_end>=$2::date
+       join mc.source_documents document on document.id=report_version.document_id
+       left join lateral(select candidate.raw_data from mc.financial_report_summary_versions candidate
+         where candidate.report_version_id=report_version.id order by candidate.created_at desc,candidate.id desc limit 1) summary on true`,
+    [publication.publication_id,periodStart,periodEnd]
+  )).rows[0]??{};
+  return aggregateDailyPublicationPeriod(periodStart,periodEnd,{days:mapped,lines,reasons,taxFacts,
+    sourceFreshness:metadata.source_freshness??null,crossBorderReportCount:metadata.cross_border_report_count??0});
+}
+
+async function getDailyUpdateStatus(client,businessId,storeId,periodStart=null,periodEnd=null,publication=null,canRetry=false){
+  const params=[businessId,storeId];
+  let range='';
+  if(periodStart&&periodEnd){params.push(periodStart,periodEnd);range=`and (job.payload->>'affectedFrom')::date<=$4::date and (job.payload->>'affectedTo')::date>=$3::date`;}
+  const job=(await client.query(
+    `select job.id,job.status,job.last_error_code,job.updated_at,job.finished_at,
+            job.payload->>'affectedFrom' as affected_from,job.payload->>'affectedTo' as affected_to,
+            (job.payload->>'eventGeneration')::bigint as event_generation
+       from mc.jobs job
+      where job.business_id=$1 and job.store_id=$2 and job.job_type='financial_dates_recalculate' ${range}
+      order by job.created_at desc,job.id desc limit 1`,params
+  )).rows[0];
+  const publicationId=publication?.publication_id??null;
+  if(!job||publication&&BigInt(job.event_generation)<=BigInt(publication.watermark_generation))return{
+    status:'current',publicationId,updatedAt:publication?.published_at??null,lastErrorCode:null,affectedPeriod:null,canRetry
+  };
+  return{status:job.status==='succeeded'?'current':job.status,publicationId,updatedAt:job.updated_at??job.finished_at,
+    lastErrorCode:job.last_error_code??null,affectedPeriod:{start:job.affected_from,end:job.affected_to},canRetry};
+}
+
+async function getLegacyPair(client,businessId,storeId,{periodStart,periodEnd,previousPeriodStart,previousPeriodEnd},canRetry=false){
+  let publication=await getCurrentPublicationContext(client,businessId,storeId);
+  if(!publication)return null;
+  if(!periodStart||!periodEnd){
+    const latest=(await client.query(
+      `select period_start::text,period_end::text from mc.financial_period_results
+        where run_id=$1 order by period_end desc,period_start desc limit 1`,[publication.run_id]
+    )).rows[0];
+    if(!latest)return{...publication,publication_source:'legacy',current:null,previous:null};
+    periodStart=latest.period_start;periodEnd=latest.period_end;
+    previousPeriodStart=shiftCalendarDate(periodStart,-7);previousPeriodEnd=shiftCalendarDate(periodEnd,-7);
+  }
+  let current=await getPeriodEnvelope(client,publication.run_id,periodStart,periodEnd);
+  if(current?.quality==='unavailable'&&!current.period_result_id){
+    const historical=await getHistoricalPublishedPeriod(client,businessId,storeId,periodStart,periodEnd);
+    if(historical){publication=historical.publication;current=historical.period;}
+  }
+  const previous=current?.quality!=='unavailable'&&previousPeriodStart&&previousPeriodEnd
+    ?await getPeriodEnvelope(client,publication.run_id,previousPeriodStart,previousPeriodEnd):null;
+  const update_status=await getDailyUpdateStatus(client,businessId,storeId,periodStart,periodEnd,null,canRetry);
+  return{...publication,publication_source:'legacy',update_status,current,previous};
+}
+
 export async function getPublishedFinancialPeriod(userId,storeId,periodStart,periodEnd){
-  return withOwnedBusinessContext(userId,async(client,businessId)=>{
-    let publication=await getCurrentPublicationContext(client,businessId,storeId);
-    if(!publication)return null;
-    let period=await getPeriodEnvelope(client,publication.run_id,periodStart,periodEnd);
-    if(period?.quality==='unavailable'&&!period.period_result_id){
-      const historical=await getHistoricalPublishedPeriod(client,businessId,storeId,periodStart,periodEnd);
-      if(historical){publication=historical.publication;period=historical.period;}
+  return withOwnedBusinessContext(userId,async(client,businessId,role)=>{
+    const canRetry=['owner','editor'].includes(role);
+    const daily=await getCurrentDailyPublicationContext(client,businessId,storeId);
+    if(daily){
+      const period=await getDailyPeriodEnvelope(client,daily,periodStart,periodEnd);
+      if(period)return{...daily,update_status:await getDailyUpdateStatus(client,businessId,storeId,periodStart,periodEnd,daily,canRetry),...period};
     }
-    return period?{...publication,...period}:null;
+    const legacy=await getLegacyPair(client,businessId,storeId,{periodStart,periodEnd,previousPeriodStart:null,previousPeriodEnd:null},canRetry);
+    return legacy?.current?{...legacy,...legacy.current,current:undefined,previous:undefined}:null;
   });
 }
 
 export async function getPublishedFinancialPeriodPair(userId,storeId,{periodStart=null,periodEnd=null,previousPeriodStart=null,previousPeriodEnd=null}={}){
+  return withOwnedBusinessContext(userId,async(client,businessId,role)=>{
+    const canRetry=['owner','editor'].includes(role);
+    const requested={periodStart,periodEnd,previousPeriodStart,previousPeriodEnd};
+    const daily=await getCurrentDailyPublicationContext(client,businessId,storeId);
+    if(daily){
+      if(!periodStart||!periodEnd){
+        const latest=await latestDailyPeriod(client,daily.publication_id);
+        if(latest){
+          periodStart=latest.period_start;periodEnd=latest.period_end;
+          previousPeriodStart=shiftCalendarDate(periodStart,-7);previousPeriodEnd=shiftCalendarDate(periodEnd,-7);
+        }
+      }
+      if(periodStart&&periodEnd){
+        const current=await getDailyPeriodEnvelope(client,daily,periodStart,periodEnd);
+        if(current){
+          const previous=previousPeriodStart&&previousPeriodEnd
+            ?await getDailyPeriodEnvelope(client,daily,previousPeriodStart,previousPeriodEnd):null;
+          return{...daily,update_status:await getDailyUpdateStatus(client,businessId,storeId,periodStart,periodEnd,daily,canRetry),current,previous};
+        }
+      }
+    }
+    return getLegacyPair(client,businessId,storeId,requested,canRetry);
+  });
+}
+
+export async function getFinancialDailyPublicationStatus(userId,storeId,periodStart=null,periodEnd=null){
+  const target=periodStart||periodEnd?normalizeTargetPeriod({periodStart,periodEnd}):null;
+  return withOwnedBusinessContext(userId,async(client,businessId,role)=>{
+    const canRetry=['owner','editor'].includes(role);
+    const store=(await client.query(`select id from mc.stores where business_id=$1 and id=$2 and status='active'`,[businessId,storeId])).rows[0];
+    if(!store)return null;
+    const daily=await getCurrentDailyPublicationContext(client,businessId,storeId);
+    if(daily)return{...await getDailyUpdateStatus(client,businessId,storeId,target?.periodStart,target?.periodEnd,daily,canRetry),publicationSource:'daily'};
+    const legacy=await getCurrentPublicationContext(client,businessId,storeId);
+    const status=await getDailyUpdateStatus(client,businessId,storeId,target?.periodStart,target?.periodEnd,null,canRetry);
+    return{...status,publicationId:legacy?.publication_id??null,publicationSource:legacy?'legacy':null};
+  });
+}
+
+export async function retryFinancialDailyPublication(userId,storeId,periodStart,periodEnd){
+  const target=normalizeTargetPeriod({periodStart,periodEnd});
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
-    let publication=await getCurrentPublicationContext(client,businessId,storeId);
-    if(!publication)return null;
-    if(!periodStart||!periodEnd){
-      const latest=(await client.query(
-        `select period_start::text,period_end::text from mc.financial_period_results
-          where run_id=$1 order by period_end desc,period_start desc limit 1`,[publication.run_id]
-      )).rows[0];
-      if(!latest)return{...publication,current:null,previous:null};
-      periodStart=latest.period_start;periodEnd=latest.period_end;
-      previousPeriodStart=shiftCalendarDate(periodStart,-7);
-      previousPeriodEnd=shiftCalendarDate(periodEnd,-7);
-    }
-    let current=await getPeriodEnvelope(client,publication.run_id,periodStart,periodEnd);
-    if(current?.quality==='unavailable'&&!current.period_result_id){
-      const historical=await getHistoricalPublishedPeriod(client,businessId,storeId,periodStart,periodEnd);
-      if(historical){publication=historical.publication;current=historical.period;}
-    }
-    const previous=current?.quality!=='unavailable'&&previousPeriodStart&&previousPeriodEnd
-      ?await getPeriodEnvelope(client,publication.run_id,previousPeriodStart,previousPeriodEnd):null;
-    return{...publication,current,previous};
+    const retried=(await client.query(
+      `select * from mc.retry_financial_daily_job($1,$2,$3)`,[storeId,target.periodStart,target.periodEnd]
+    )).rows[0]??null;
+    if(!retried)throw new Error('financial_daily_retry_unavailable');
+    return retried;
   });
 }
 

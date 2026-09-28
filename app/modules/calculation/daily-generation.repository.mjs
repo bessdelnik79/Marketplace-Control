@@ -8,6 +8,7 @@ import {
 import {
   buildDailyFinancialGeneration,combineDailyFinancialGenerations,compareDailyGenerationToLegacy
 } from './daily-generation.mjs';
+import {createFinancialDailyPublicationRepository} from './daily-publication.repository.mjs';
 
 const groupBy=(rows,key)=>rows.reduce((map,row)=>{const value=key(row),group=map.get(value)??[];group.push(row);map.set(value,group);return map;},new Map());
 const periodKey=row=>`${row.period_start}/${row.period_end}`;
@@ -213,8 +214,9 @@ async function compareLegacy(client,context,generation,daily){
   }
 }
 
-export function createFinancialDailyGenerationRepository({pool}){
+export function createFinancialDailyGenerationRepository({pool,publicationRepository=createFinancialDailyPublicationRepository()}){
   if(!pool?.connect)throw new TypeError('pool is required');
+  if(!publicationRepository?.publish)throw new TypeError('daily publication repository is required');
   async function build(jobId,leaseToken,workerId){
     return transaction(pool,async client=>{
       const context=await establish(client,jobId,leaseToken,workerId);
@@ -224,12 +226,18 @@ export function createFinancialDailyGenerationRepository({pool}){
       const daily=fillCoverageGaps(combineDailyFinancialGenerations(calculatePeriods(snapshot)),context.affected_from,context.affected_to);
       const generation=(await client.query(`select * from mc.start_financial_daily_generation($1,$2,$3,$4,$5,$6,$7)`,
         [jobId,leaseToken,workerId,context.event_generation,snapshot.fingerprint,snapshot.parserMethod.method_version_id,snapshot.method.id])).rows[0];
-      if(generation.status!=='building')return{superseded:generation.status==='superseded',generationId:generation.id};
+      if(generation.status!=='building'){
+        if(generation.status!=='succeeded')return{superseded:generation.status==='superseded',generationId:generation.id};
+        const publication=await publicationRepository.publish(client,{jobId,leaseToken,workerId,generationId:generation.id,eventGeneration:context.event_generation});
+        return{superseded:false,generationId:generation.id,publicationId:publication.id,quality:generation.quality};
+      }
       await persistGeneration(client,context,snapshot,generation,daily);
       await compareLegacy(client,context,generation,daily);
       const final=(await client.query(`select * from mc.finalize_financial_daily_generation($1,$2,$3,$4,$5,'succeeded',$6,null)`,
         [jobId,leaseToken,workerId,generation.id,context.event_generation,daily.quality])).rows[0];
-      return{superseded:final.status==='superseded',generationId:final.id,quality:final.quality};
+      if(final.status!=='succeeded')return{superseded:final.status==='superseded',generationId:final.id,quality:final.quality};
+      const publication=await publicationRepository.publish(client,{jobId,leaseToken,workerId,generationId:final.id,eventGeneration:context.event_generation});
+      return{superseded:false,generationId:final.id,publicationId:publication.id,quality:final.quality};
     });
   }
   return{build};

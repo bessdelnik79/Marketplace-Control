@@ -72,10 +72,12 @@ test('new, repeated and changed WB credentials advance generation and enqueue ex
     connection:(await client.query(`select credential_generation,scopes from mc.connections where store_id=$1`,[ids.store])).rows[0],
     secret:(await client.query(`select ciphertext,credential_fingerprint from mc.connection_secrets where connection_id=$1`,[first.id])).rows[0],
     jobs:(await client.query(`select id,deduplication_key,payload,priority,max_attempts from mc.jobs where store_id=$1 order by created_at,id`,[ids.store])).rows,
+    eventState:(await client.query(`select next_generation from mc.financial_store_event_state where store_id=$1`,[ids.store])).rows[0],
     coverage:(await client.query(`select credential_generation,week_start::text as week_start,week_end::text as week_end,check_reasons from mc.financial_week_coverage where store_id=$1 order by credential_generation,week_start`,[ids.store])).rows,
     audits:(await client.query(`select action,safe_details from mc.audit_events where store_id=$1 order by created_at,id`,[ids.store])).rows
   }));
   assert.equal(Number(state.connection.credential_generation),3);
+  assert.equal(Number(state.eventState.next_generation),4);
   assert.deepEqual(state.connection.scopes,['finance','analytics']);
   assert.equal(state.jobs.length,3);
   assert.deepEqual(state.jobs.map(job=>job.deduplication_key),[

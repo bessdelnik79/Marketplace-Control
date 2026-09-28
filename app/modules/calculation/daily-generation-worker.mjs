@@ -1,7 +1,9 @@
 const terminalErrors=new Set([
   'financial_daily_invalid_job','financial_daily_selection_missing','financial_daily_inputs_missing',
   'financial_daily_coverage_incomplete','financial_daily_method_missing','daily_generation_invalid_result',
-  'daily_generation_invalid_period','daily_tax_evidence_missing','financial_daily_evidence_invalid'
+  'daily_generation_invalid_period','daily_tax_evidence_missing','financial_daily_evidence_invalid',
+  'financial_daily_publication_generation_not_succeeded','financial_daily_publication_watermark_stale',
+  'financial_daily_publication_scope_incompatible','financial_daily_publication_missing'
 ]);
 
 export function financialDailyErrorCode(error){

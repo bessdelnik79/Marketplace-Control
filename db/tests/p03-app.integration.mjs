@@ -8,7 +8,7 @@ const databaseName=new URL(integrationUrl).pathname.slice(1);
 if(!databaseName.toLowerCase().includes('test'))throw new Error('Refusing to run P0.3 integration tests outside a database whose name contains "test".');
 process.env.DATABASE_URL=integrationUrl;
 
-const {migrate,pool,runFinancialCalculation,beginFinancialSync,completeFinancialSync,failFinancialSync,getFinancialBankReconciliationState,getPublishedFinancialPeriod,getPublishedFinancialPeriodPair,getFinancialSellerOffsetReference,getFinancialSyncState,getFinancialCalculationInvalidation,acknowledgeFinancialCalculationInvalidation,jobsRepository,financialDailyGenerationRepository}=await import('../../app/db.mjs');
+const {migrate,pool,runFinancialCalculation,beginFinancialSync,completeFinancialSync,failFinancialSync,getFinancialBankReconciliationState,getPublishedFinancialPeriod,getPublishedFinancialPeriodPair,getFinancialSellerOffsetReference,getFinancialSyncState,getFinancialCalculationInvalidation,acknowledgeFinancialCalculationInvalidation,retryFinancialDailyPublication,jobsRepository,financialDailyGenerationRepository}=await import('../../app/db.mjs');
 const ids={user:randomUUID(),business:randomUUID(),store:randomUUID()};
 
 await migrate();
@@ -109,6 +109,8 @@ test('daily shadow generation rebuilds saved inputs and matches the exact publis
     }
     assert.ok(processed<10,'daily queue must drain');
   };
+  const legacyV20=await runFinancialCalculation(ids.user,ids.store,{targetPeriod:{periodStart:'2026-07-13',periodEnd:'2026-07-19'}});
+  assert.equal(legacyV20.changed,true);
   await drainDaily();
   const firstEvent=await context(async client=>(await client.query(
     `select e.* from mc.publications p
@@ -147,6 +149,62 @@ test('daily shadow generation rebuilds saved inputs and matches the exact publis
       group by g.status,g.quality,c.status`,[ids.store,emitted.id]
   )).rows[0]);
   assert.deepEqual(saved,{status:'succeeded',quality:'complete',days:7,tax_facts:1,tax_evidence:1,comparison_status:'matched',fetch_jobs:0});
+
+  const firstPointer=await context(async client=>(await client.query(
+    `select p.id,p.publication_no,count(d.accounting_date)::int mapped_days
+       from mc.financial_daily_current_publications current
+       join mc.financial_daily_publications p on p.id=current.publication_id
+       join mc.financial_daily_publication_days d on d.publication_id=p.id
+      where current.store_id=$1 group by p.id,p.publication_no`,[ids.store]
+  )).rows[0]);
+  assert.equal(Number(firstPointer.publication_no),1);
+  assert.equal(firstPointer.mapped_days,7);
+  const published=await getPublishedFinancialPeriod(ids.user,ids.store,'2026-07-13','2026-07-19');
+  assert.equal(published.publication_source,'daily');
+  assert.equal(published.publication_id,firstPointer.id);
+  assert.equal(published.quality,'complete');
+  assert.deepEqual(published.covered_period,{start:'2026-07-13',end:'2026-07-19'});
+  assert.equal(published.totals.availableResultAfterTax,'-1404.3400');
+
+  const partialEvent=await context(async client=>(await client.query(
+    `select * from mc.emit_financial_input_event($1,$2,'expense','2026-07-15','2026-07-15')`,
+    [ids.store,`daily-partial:${randomUUID()}`]
+  )).rows[0]);
+  assert.ok(partialEvent.dispatch_job_id);
+  await drainDaily();
+  const secondPointer=await context(async client=>(await client.query(
+    `select p.id,p.publication_no,
+            count(*) filter(where d.generation_id=p.generation_id)::int replaced_days,
+            count(*) filter(where d.generation_id<>p.generation_id)::int carried_days
+       from mc.financial_daily_current_publications current
+       join mc.financial_daily_publications p on p.id=current.publication_id
+       join mc.financial_daily_publication_days d on d.publication_id=p.id
+      where current.store_id=$1 group by p.id,p.publication_no,p.generation_id`,[ids.store]
+  )).rows[0]);
+  assert.equal(Number(secondPointer.publication_no),2);
+  assert.deepEqual([secondPointer.replaced_days,secondPointer.carried_days],[1,6]);
+  const republished=await getPublishedFinancialPeriod(ids.user,ids.store,'2026-07-13','2026-07-19');
+  assert.equal(republished.publication_source,'daily');
+  assert.equal(republished.publication_id,secondPointer.id);
+  assert.equal(republished.totals.availableResultAfterTax,'-1404.3400');
+
+  const retryEvent=await context(async client=>(await client.query(
+    `select * from mc.emit_financial_input_event($1,$2,'tax','2026-07-16','2026-07-16')`,
+    [ids.store,`daily-retry:${randomUUID()}`]
+  )).rows[0]);
+  await context(async client=>{
+    await client.query(`delete from mc.job_dispatch where job_id=$1`,[retryEvent.dispatch_job_id]);
+    await client.query(`update mc.jobs set status='failed',attempt_count=max_attempts,finished_at=now(),last_error_code='forced_test_failure'
+      where id=$1`,[retryEvent.dispatch_job_id]);
+  });
+  const retried=await retryFinancialDailyPublication(ids.user,ids.store,'2026-07-16','2026-07-16');
+  assert.equal(retried.id,retryEvent.dispatch_job_id);
+  assert.equal(Number(retried.attempt_count),0);
+  const[retryJob]=await jobsRepository.claimJobs({workerId,jobTypes:['financial_dates_recalculate'],leaseSeconds:300,limit:1});
+  assert.equal(retryJob.id,retryEvent.dispatch_job_id);
+  const retryResult=await financialDailyGenerationRepository.build(retryJob.id,retryJob.lease_token,workerId);
+  assert.equal(retryResult.superseded,false);
+  await jobsRepository.completeJob({jobId:retryJob.id,leaseToken:retryJob.lease_token,workerId,outcome:'completed'});
 });
 
 test('verified 07-13 store sources do not create product-link issues and no-sale SKU persists zero tax',async()=>{

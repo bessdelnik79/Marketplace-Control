@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { aggregatePublishedPeriodEnvelopes,classifyNormalizationRecovery,compatibleFinancialParserVersions,loadPublishedPeriodEnvelopes,missingNormalizationRanges,reportPeriodsCoverRange,selectFullyNormalizedReportPeriods } from './calculation.repository.mjs';
+import { aggregateDailyPublicationPeriod,aggregatePublishedPeriodEnvelopes,classifyNormalizationRecovery,compatibleFinancialParserVersions,loadPublishedPeriodEnvelopes,missingNormalizationRanges,reportPeriodsCoverRange,selectFullyNormalizedReportPeriods } from './calculation.repository.mjs';
 import { buildFinancialPeriodOverview } from '../overview/financial-overview.mjs';
 
 function envelope(start,end,{quality='complete',missingReasons=[],amount='10.0000',freshness=`${end}T10:00:00Z`,crossBorder=0}={}){
@@ -151,6 +151,49 @@ test('mixed tax availability removes tax lines and keeps the aggregate before ta
   assert.equal(result.lines.some(line=>line.category_code==='estimated_usn_tax'),false);
   const overview=buildFinancialPeriodOverview({...result,publication_id:'publication-1',method_version:'financial-result-v6',scope:'selected_products'});
   assert.deepEqual(overview.displayResult,{amount:'20.0000',basis:'before_tax'});
+});
+
+test('daily publication aggregation uses mapped days and rounds tax once per SKU',()=>{
+  const result=aggregateDailyPublicationPeriod('2026-09-01','2026-09-02',{
+    days:[
+      {accounting_date:'2026-09-01',coverage_complete:true,quality:'complete',tax_usable:true,store_profit_before_tax:'2.0000',selected_profit_before_tax:'10.0000',available_profit_before_tax:'12.0000'},
+      {accounting_date:'2026-09-02',coverage_complete:true,quality:'complete',tax_usable:true,store_profit_before_tax:'3.0000',selected_profit_before_tax:'20.0000',available_profit_before_tax:'23.0000'}
+    ],
+    lines:[
+      {accounting_date:'2026-09-01',scope:'selected_products',product_id:'product-a',variant_id:null,category_code:'revenue',amount_signed:'10.0000'},
+      {accounting_date:'2026-09-01',scope:'store',product_id:null,variant_id:null,category_code:'storage',amount_signed:'2.0000'},
+      {accounting_date:'2026-09-02',scope:'selected_products',product_id:'product-a',variant_id:null,category_code:'revenue',amount_signed:'20.0000'},
+      {accounting_date:'2026-09-02',scope:'store',product_id:null,variant_id:null,category_code:'storage',amount_signed:'3.0000'}
+    ],reasons:[],taxFacts:[
+      {accounting_date:'2026-09-01',product_id:'product-a',tax_base_unrounded:'10.000000000000',tax_numerator_unrounded:'0.333330000000'},
+      {accounting_date:'2026-09-02',product_id:'product-a',tax_base_unrounded:'20.000000000000',tax_numerator_unrounded:'0.333330000000'}
+    ]
+  });
+  assert.equal(result.period_result_id,null);
+  assert.equal(result.totals.availableResultBeforeTax,'35.0000');
+  assert.equal(result.totals.estimatedUsnTax,'0.6667');
+  assert.equal(result.taxReference.products[0].estimatedTax,'0.6667');
+  assert.equal(result.lines.at(-1).amount_signed,'-0.6667');
+});
+
+test('daily publication aggregation fails closed when one requested date is unmapped',()=>{
+  const result=aggregateDailyPublicationPeriod('2026-09-01','2026-09-02',{
+    days:[{accounting_date:'2026-09-01',coverage_complete:true,quality:'complete',tax_usable:false,store_profit_before_tax:'0.0000',selected_profit_before_tax:'1.0000',available_profit_before_tax:'1.0000'}]
+  });
+  assert.equal(result.quality,'unavailable');
+  assert.equal(result.daily_read_complete,false);
+  assert.equal(result.totals,null);
+  assert.ok(result.missing_reasons.includes('report_coverage_incomplete'));
+});
+
+test('daily publication keeps a fully mapped unavailable period authoritative',()=>{
+  const result=aggregateDailyPublicationPeriod('2026-09-01','2026-09-01',{
+    days:[{accounting_date:'2026-09-01',coverage_complete:true,quality:'unavailable',tax_usable:false,store_profit_before_tax:null,selected_profit_before_tax:null,available_profit_before_tax:null}],
+    reasons:[{accounting_date:'2026-09-01',reason_code:'operation_unclassified'}]
+  });
+  assert.equal(result.daily_read_complete,true);
+  assert.equal(result.quality,'unavailable');
+  assert.equal(result.totals,null);
 });
 
 test('loads a long published range in a constant five SQL queries',async()=>{

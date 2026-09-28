@@ -88,9 +88,17 @@ export async function getFinancialOverview(userId, storeId, selectedDate, select
   const scope = normalizeScope(pair.scope);
   const provenance = {
     publicationId: requiredId(pair.publication_id),
+    publicationSource: pair.publication_source === 'daily' ? 'daily' : 'legacy',
     publishedAt: timestamp(pair.published_at),
     sourceFreshness: timestamp(pair.current?.source_freshness),
     methodVersion: requiredId(pair.method_version),
+    updateStatus: pair.update_status ? {
+      status: requiredId(pair.update_status.status),
+      updatedAt: timestamp(pair.update_status.updatedAt),
+      lastErrorCode: pair.update_status.lastErrorCode ?? null,
+      affectedPeriod: pair.update_status.affectedPeriod ?? null,
+      canRetry: pair.update_status.canRetry === true
+    } : { status: 'current', updatedAt: timestamp(pair.published_at), lastErrorCode: null, affectedPeriod: null, canRetry:false },
     timezone,
     scope
   };
@@ -133,7 +141,7 @@ export async function getFinancialOverview(userId, storeId, selectedDate, select
     },
     requestedPeriod: overview.period,
     coveredPeriod: pair.current.covered_period ?? null,
-    publishedExact:Boolean(pair.current.period_result_id)
+    publishedExact:pair.publication_source==='daily'||Boolean(pair.current.period_result_id)
   };
 }
 
@@ -151,7 +159,8 @@ export async function getOverviewState(userId,{storeId,financialPeriodStart,fina
       :calendarWeekForDate(financialPeriodStart,{timezone:'Europe/Moscow'})
     :null;
   const financialState=financial??{
-    status:'unavailable',publicationId:null,methodVersion:null,publishedAt:null,sourceFreshness:null,scope:null,
+    status:'unavailable',publicationId:null,publicationSource:null,methodVersion:null,publishedAt:null,sourceFreshness:null,scope:null,
+    updateStatus:{status:'current',updatedAt:null,lastErrorCode:null,affectedPeriod:null,canRetry:false},
     quality:'unavailable',missingReasons:['published_financial_result_missing'],totals:null,displayResult:null,situationEvidence:null,
     crossBorderBuyout:{present:null,reportCount:null},requestedPeriod:requestedFinancialPeriod,coveredPeriod:null,
     comparison:{period:requestedFinancialPeriod?previousCalendarPeriod(requestedFinancialPeriod):null,quality:'unavailable',amount:null,changeAmount:null,changePercent:null,comparable:false,reason:'current_period_unavailable'}

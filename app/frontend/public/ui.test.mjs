@@ -3,15 +3,15 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { startFinancialResultPolling } from './financial-poll.js';
 
-function response(body,{ok=true}={}){return{ok,async text(){return body}}}
+function response(body,{ok=true}={}){return{ok,async json(){return body}}}
 
-function harness({fetchImpl=async()=>response('calculating'),hidden=false,now=()=>0,startedAt=0}={}){
+function harness({fetchImpl=async()=>response({status:'running',publicationId:'publication-1'}),hidden=false,now=()=>0,startedAt=0}={}){
   let timerId=0,reloads=0,removals=0,noteShown=false,visibilityListener;
   const timers=new Map();
   const controller=startFinancialResultPolling({
     element:{querySelector(){return{removeAttribute(name){if(name==='hidden')noteShown=true}}}},
-    storage:{remove(){removals++}},url:'/overview',fetchImpl,
-    parsePage:html=>({querySelector(){return html==='calculating'?{}:null}}),reload(){reloads++},now,startedAt,
+    storage:{remove(){removals++}},statusUrl:'/overview/financial-status',publicationId:'publication-1',fetchImpl,
+    reload(){reloads++},now,startedAt,
     setTimer(fn,delay){const id=++timerId;timers.set(id,{fn,delay});return id},clearTimer(id){timers.delete(id)},
     isHidden:()=>hidden,addVisibilityListener(listener){visibilityListener=listener}
   });
@@ -32,13 +32,22 @@ test('calculating response schedules another background check without reloading'
   assert.deepEqual(delays(h),[4000]);
 });
 
-test('completed response clears polling state and reloads exactly once',async()=>{
-  const h=harness({fetchImpl:async()=>response('completed')});
+test('new publication clears polling state and reloads exactly once',async()=>{
+  const h=harness({fetchImpl:async()=>response({status:'current',publicationId:'publication-2'})});
   await h.controller.checkNow();
   await h.controller.checkNow();
   assert.equal(h.removals,1);
   assert.equal(h.reloads,1);
   assert.equal(h.timers.size,0);
+});
+
+test('current unchanged publication stops quietly and terminal failure reloads its badge',async()=>{
+  const current=harness({fetchImpl:async()=>response({status:'current',publicationId:'publication-1'})});
+  await current.controller.checkNow();
+  assert.equal(current.reloads,0);assert.equal(current.removals,1);assert.equal(current.timers.size,0);
+  const failed=harness({fetchImpl:async()=>response({status:'failed',publicationId:'publication-1'})});
+  await failed.controller.checkNow();
+  assert.equal(failed.reloads,1);assert.equal(failed.removals,1);
 });
 
 test('network and non-ok responses keep background polling alive',async()=>{
@@ -52,7 +61,7 @@ test('network and non-ok responses keep background polling alive',async()=>{
 
 test('deadline shows the manual refresh note without making a request',async()=>{
   let requests=0;
-  const h=harness({fetchImpl:async()=>{requests++;return response('calculating')},now:()=>600000});
+  const h=harness({fetchImpl:async()=>{requests++;return response({status:'running',publicationId:'publication-1'})},now:()=>600000});
   await h.controller.checkNow();
   assert.equal(requests,0);
   assert.equal(h.noteShown,true);

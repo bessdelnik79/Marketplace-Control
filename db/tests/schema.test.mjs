@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,39);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,40);
   assert.deepEqual((await q("select table_name from information_schema.tables where table_schema='mc' and table_name in ('financial_input_events','financial_store_event_state') order by table_name")).map(row=>row.table_name),['financial_input_events','financial_store_event_state']);
   assert.equal((await one("select relforcerowsecurity as forced from pg_class join pg_namespace on pg_namespace.oid=pg_class.relnamespace where nspname='mc' and relname='financial_input_events'")).forced,true);
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.establish_financial_pipeline_context(uuid,bigint,uuid,text,text)'::regprocedure"));
@@ -55,7 +55,9 @@ try {
     'mc.emit_financial_input_event(uuid,text,text,date,date,uuid,uuid,uuid,uuid,uuid,uuid,uuid,uuid)',
     'mc.establish_financial_daily_context(uuid,uuid,text)',
     'mc.start_financial_daily_generation(uuid,uuid,text,bigint,text,uuid,uuid)',
-    'mc.finalize_financial_daily_generation(uuid,uuid,text,uuid,bigint,text,text,text)'
+    'mc.finalize_financial_daily_generation(uuid,uuid,text,uuid,bigint,text,text,text)',
+    'mc.publish_financial_daily_generation(uuid,uuid,text,uuid,bigint)',
+    'mc.retry_financial_daily_job(uuid,date,date)'
   ]) {
     assert.equal((await one(`select has_function_privilege('public',$1::regprocedure,'execute') as allowed`,[signature])).allowed,false);
   }
@@ -69,6 +71,23 @@ try {
   const selectionTrigger=await one(`select pg_get_triggerdef(oid) as definition from pg_trigger where tgrelid='mc.product_selection_items'::regclass and tgname='financial_selection_event'`);
   assert.match(selectionTrigger.definition,/FOR EACH STATEMENT/);
   pass('daily shadow schema has exact tax facts, immutable tenant rows and private worker CAS helpers');
+  assert.deepEqual((await q(`select table_name from information_schema.tables where table_schema='mc' and table_name in (
+    'financial_daily_publications','financial_daily_publication_days','financial_daily_current_publications') order by table_name`)).map(row=>row.table_name),[
+    'financial_daily_current_publications','financial_daily_publication_days','financial_daily_publications'
+  ]);
+  for(const table of ['financial_daily_publications','financial_daily_publication_days','financial_daily_current_publications']){
+    assert.equal((await one(`select relforcerowsecurity as forced from pg_class join pg_namespace on pg_namespace.oid=pg_class.relnamespace where nspname='mc' and relname=$1`,[table])).forced,true);
+  }
+  const publicationFunction=(await one(`select pg_get_functiondef('mc.publish_financial_daily_generation(uuid,uuid,text,uuid,bigint)'::regprocedure) definition`)).definition;
+  assert.match(publicationFunction,/status<>'succeeded'/);
+  assert.match(publicationFunction,/current_watermark IS DISTINCT FROM generation.watermark_generation/);
+  assert.match(publicationFunction,/comparison.status='matched'/);
+  assert.match(publicationFunction,/legacy_method.version_no=20/);
+  assert.match(publicationFunction,/source_day.accounting_date BETWEEN comparison.period_start AND comparison.period_end/);
+  assert.match(publicationFunction,/financial_daily_publication_scope_incompatible/);
+  assert.match(publicationFunction,/EXCEPT/);
+  assert.match(publicationFunction,/ON CONFLICT\(business_id,store_id\) DO UPDATE/);
+  pass('daily publication schema atomically gates first cutover and maps one current store history');
   for (const signature of [
     'mc.get_financial_inventory_context(uuid,bigint,uuid,text)',
     'mc.apply_financial_inventory(uuid,bigint,uuid,text,jsonb)',
@@ -680,6 +699,10 @@ try {
     dailyClaim.id,dailyClaim.lease_token,'daily-schema-worker',dailyGeneration.id,widenedDailyEvent.event_generation,'schema_test_failure'
   ]);
   assert.equal(failedDailyGeneration.status,'failed');
+  await rejects(`select * from mc.publish_financial_daily_generation($1,$2,$3,$4,$5)`,[
+    dailyClaim.id,dailyClaim.lease_token,'daily-schema-worker',failedDailyGeneration.id,widenedDailyEvent.event_generation
+  ],/financial_daily_publication_generation_not_succeeded/,'failed daily generation cannot be published');
+  assert.equal((await one(`select count(*)::int n from mc.financial_daily_current_publications where store_id=$1`,[store.id])).n,0);
   await rejects(`update mc.financial_daily_generations set failure_code='changed' where id=$1`,[dailyGeneration.id],/transition is invalid/,
     'daily generation lifecycle is immutable after terminal state');
   await one(`select * from mc.complete_job($1,$2,$3,'completed')`,[dailyClaim.id,dailyClaim.lease_token,'daily-schema-worker']);

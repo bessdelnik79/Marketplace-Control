@@ -27,7 +27,7 @@ test('daily worker completes an obsolete event as superseded',async()=>{
 
 test('daily worker retries transient errors and terminates invalid inputs',async()=>{
   const decisions=[];
-  for(const error of [Object.assign(new Error('connection lost'),{code:'08006'}),new Error('financial_daily_coverage_incomplete'),new Error('daily_generation_invalid_tax_rate'),Object.assign(new Error('constraint'),{code:'23514'})]){
+  for(const error of [Object.assign(new Error('connection lost'),{code:'08006'}),new Error('financial_daily_coverage_incomplete'),new Error('daily_generation_invalid_tax_rate'),Object.assign(new Error('constraint'),{code:'23514'}),new Error('financial_daily_publication_shadow_incompatible')]){
     const jobs={claimJobs:async()=>[job],heartbeatJob:async()=>true,completeJob:async()=>assert.fail('must not complete'),failJob:async input=>decisions.push(input)};
     await createFinancialDailyGenerationWorker({jobs,repository:{build:async()=>{throw error;}},random:()=>0,workerId:'daily-worker'}).runOnce();
   }
@@ -39,6 +39,8 @@ test('daily worker retries transient errors and terminates invalid inputs',async
   assert.equal(decisions[2].retryable,false);
   assert.equal(decisions[3].errorCode,'financial_daily_db_23514');
   assert.equal(decisions[3].retryable,false);
+  assert.equal(decisions[4].errorCode,'financial_daily_publication_shadow_incompatible');
+  assert.equal(decisions[4].retryable,true);
   assert.equal(financialDailyErrorCode(new Error('secret path')), 'financial_daily_internal_error');
 });
 

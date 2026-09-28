@@ -1,7 +1,5 @@
 import { calendarWeekForDate, validateCalendarPeriod } from './financial-overview.mjs';
 
-const CURRENT_FINANCIAL_METHODS = new Set(['financial-result-v19', 'financial-result-v20']);
-
 function requestedWeek(url) {
   const value = url.searchParams.get('week');
   if (value === null || value === '') return null;
@@ -36,32 +34,59 @@ export function createOverviewRoutes({
   overviewPage,
   send,
   redirect,
-  scheduleOperationalSync,
-  getFinancialPeriodRecoveryState = async () => ({ status: 'uncovered' }),
-  scheduleFinancialCalculation = () => false,
-  scheduleFinancialSync = () => false,
+  getFinancialDailyPublicationStatus = async () => ({ status: 'current', publicationId: null }),
+  retryFinancialDailyPublication = async () => null,
+  sameOrigin = () => true,
+  form = async () => ({}),
 }) {
   return async function handleOverview(req, res, url, current) {
-    if (req.method !== 'GET' || !['/', '/overview'].includes(url.pathname)) return false;
+    const isPage=req.method==='GET'&&['/','/overview'].includes(url.pathname);
+    const isStatus=req.method==='GET'&&url.pathname==='/overview/financial-status';
+    const isRetry=req.method==='POST'&&url.pathname==='/overview/financial-retry';
+    if(!isPage&&!isStatus&&!isRetry)return false;
     if (!current) {
-      redirect(res, '/login');
+      if(isStatus)send(res,401,JSON.stringify({error:'authentication_required'}),{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
+      else redirect(res, '/login');
+      return true;
+    }
+    if(isRetry&&!sameOrigin(req)){
+      send(res,403,'Запрос отклонён.',{'cache-control':'no-store'});
       return true;
     }
     const stores = await listStores(current.user_id);
     if (!stores.length) {
-      if (url.pathname === '/') redirect(res, '/onboarding/store');
+      if(isStatus)send(res,404,JSON.stringify({error:'store_not_found'}),{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
+      else if (url.pathname === '/') redirect(res, '/onboarding/store');
       else send(res, 200, overviewPage(current, stores));
       return true;
     }
-    const requestedStoreId = url.searchParams.get('storeId');
+    const body=isRetry?await form(req):null;
+    const requestedStoreId = isRetry?body.storeId:url.searchParams.get('storeId');
     const store = requestedStoreId ? stores.find(item => item.id === requestedStoreId) : stores[0];
     if (!store) {
-      send(res, 404, 'Магазин не найден.');
+      send(res,404,isStatus?JSON.stringify({error:'store_not_found'}):'Магазин не найден.',isStatus?{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}:{});
       return true;
     }
-    const period = requestedPeriod(url);
+    const periodUrl=isRetry?new URL(`/overview?periodStart=${encodeURIComponent(body.periodStart??'')}&periodEnd=${encodeURIComponent(body.periodEnd??'')}`,'http://localhost'):url;
+    const period = requestedPeriod(periodUrl);
     if (period === undefined) {
-      send(res, 400, 'Период должен содержать корректные даты, не более 366 дней.');
+      send(res,400,isStatus?JSON.stringify({error:'invalid_period'}):'Период должен содержать корректные даты, не более 366 дней.',isStatus?{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}:{'cache-control':'no-store'});
+      return true;
+    }
+    if(isStatus){
+      const status=await getFinancialDailyPublicationStatus(current.user_id,store.id,period?.start??null,period?.end??null);
+      send(res,status?200:404,JSON.stringify(status??{error:'store_not_found'}),{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
+      return true;
+    }
+    if(isRetry){
+      if(!period){send(res,400,'Период обязателен.',{'cache-control':'no-store'});return true;}
+      try{await retryFinancialDailyPublication(current.user_id,store.id,period.start,period.end);}
+      catch(error){
+        if(error.message==='financial_daily_retry_unavailable'){send(res,409,'Повтор недоступен.',{'cache-control':'no-store'});return true;}
+        if(error.message==='owned business context is required'){send(res,403,'Недостаточно прав для повтора.',{'cache-control':'no-store'});return true;}
+        throw error;
+      }
+      redirect(res,`/overview?storeId=${encodeURIComponent(store.id)}&periodStart=${period.start}&periodEnd=${period.end}`);
       return true;
     }
     const week = url.searchParams.get('week') || null;
@@ -79,7 +104,6 @@ export function createOverviewRoutes({
       send(res, 200, overviewPage(current, stores, null, pageOptions));
       return true;
     }
-    scheduleOperationalSync(current.user_id, store.id);
     const state = await getOverviewState(current.user_id, {
       storeId: store.id,
       financialPeriodStart: period?.start ?? null,
@@ -89,32 +113,7 @@ export function createOverviewRoutes({
       send(res, 404, 'Магазин не найден.');
       return true;
     }
-    const missingPublishedPeriod=period&&state.financial?.status==='unavailable'&&state.financial.publishedExact!==true
-      &&(state.financial.missingReasons??[]).some(reason=>['published_period_missing','published_financial_result_missing','report_coverage_incomplete'].includes(reason));
-    const stalePublishedPeriod=period&&Boolean(state.financial?.methodVersion)
-      &&!CURRENT_FINANCIAL_METHODS.has(state.financial.methodVersion);
-    if(missingPublishedPeriod||stalePublishedPeriod){
-      const recovery=await getFinancialPeriodRecoveryState(current.user_id,store.id,period.start,period.end);
-      const retryRequested=url.searchParams.get('retryCalculation')==='1';
-      const retryFailed=recovery.status==='failed'&&retryRequested;
-      const retryNormalization=recovery.status==='normalization_failed'&&retryRequested;
-      if(['ready','queued'].includes(recovery.status)||retryFailed)scheduleFinancialCalculation(current.user_id,store.id,{targetPeriod:{periodStart:period.start,periodEnd:period.end}});
-      if(recovery.status==='normalization_required'||retryNormalization)scheduleFinancialSync(current.user_id,store.id,{
-        targetPeriod:{periodStart:period.start,periodEnd:period.end},targetRanges:recovery.ranges
-      });
-      if(retryRequested){
-        const cleanUrl=new URL(url);
-        cleanUrl.searchParams.delete('retryCalculation');
-        redirect(res,`${cleanUrl.pathname}${cleanUrl.search}`);
-        return true;
-      }
-      if(['ready','queued','running','busy','normalization_required','normalization_running'].includes(recovery.status))state.financial={
-        ...state.financial,status:'calculating',calculationStage:['normalization_required','normalization_running','normalization_failed'].includes(recovery.status)?'sources':recovery.status==='running'?'running':'queued',refresh:true
-      };
-      else if(['failed','normalization_failed'].includes(recovery.status))state.financial={...state.financial,status:'failed',calculationFailure:recovery.reason};
-      else if(recovery.status==='uncovered')state.financial={...state.financial,missingReasons:[recovery.reason??'calculation_period_coverage_incomplete']};
-    }
-    send(res, 200, overviewPage(current, stores, state, pageOptions));
+    send(res, 200, overviewPage(current, stores, state, pageOptions),{'cache-control':'no-store'});
     return true;
   };
 }

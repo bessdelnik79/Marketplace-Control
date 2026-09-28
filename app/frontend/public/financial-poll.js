@@ -1,9 +1,9 @@
 export function startFinancialResultPolling({
   element,
   storage,
-  url,
+  statusUrl,
+  publicationId=null,
   fetchImpl,
-  parsePage,
   reload,
   now=Date.now,
   setTimer=setTimeout,
@@ -36,13 +36,17 @@ export function startFinancialResultPolling({
     const controller=new AbortControllerImpl(),remaining=Math.max(0,deadline-now());
     requestTimer=setTimer(()=>controller.abort(),Math.min(requestTimeoutMs,remaining));
     try{
-      const response=await fetchImpl(url,{headers:{accept:'text/html'},cache:'no-store',signal:controller.signal});
+      const response=await fetchImpl(statusUrl,{headers:{accept:'application/json'},cache:'no-store',signal:controller.signal,credentials:'same-origin'});
       if(response.ok){
-        const page=parsePage(await response.text());
-        if(!page.querySelector('[data-financial-calculating]')){
+        const status=await response.json();
+        if(status.publicationId&&status.publicationId!==publicationId||status.status==='failed'){
           stopped=true;
           storage.remove();
           reload();
+        }else if(status.status==='current'){
+          stopped=true;
+          storage.remove();
+          clearPollTimer();
         }
       }
     }catch{}

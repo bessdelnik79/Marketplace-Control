@@ -674,6 +674,22 @@
 - `CHECK ((attempt_count >= 0))`
 - `PRIMARY KEY (connection_id)`
 
+## financial_daily_current_publications
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| publication_id | uuid | нет | — |
+| updated_at | timestamp with time zone | нет | clock_timestamp() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id, publication_id) REFERENCES mc.financial_daily_publications(business_id, store_id, id)`
+- `UNIQUE (business_id, store_id, publication_id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `PRIMARY KEY (business_id, store_id)`
+
 ## financial_daily_days
 
 | Поле | Тип | NULL | По умолчанию |
@@ -700,6 +716,7 @@
 - `UNIQUE (generation_id, accounting_date)`
 - `PRIMARY KEY (id)`
 - `CHECK ((quality = ANY (ARRAY['complete'::text, 'partial'::text, 'unavailable'::text])))`
+- `UNIQUE (business_id, store_id, generation_id, accounting_date)`
 
 ## financial_daily_evidence
 
@@ -835,6 +852,60 @@
 - `FOREIGN KEY (result_method_version_id) REFERENCES mc.method_versions(id)`
 - `CHECK ((source_event_generation > 0))`
 - `CHECK ((status = ANY (ARRAY['building'::text, 'succeeded'::text, 'failed'::text, 'superseded'::text])))`
+
+## financial_daily_publication_days
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| publication_id | uuid | нет | — |
+| accounting_date | date | нет | — |
+| generation_id | uuid | нет | — |
+| created_at | timestamp with time zone | нет | clock_timestamp() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id, generation_id, accounting_date) REFERENCES mc.financial_daily_days(business_id, store_id, generation_id, accounting_date)`
+- `FOREIGN KEY (business_id, store_id, publication_id) REFERENCES mc.financial_daily_publications(business_id, store_id, id)`
+- `UNIQUE (publication_id, accounting_date)`
+- `CHECK (isfinite(accounting_date))`
+- `UNIQUE (business_id, store_id, id)`
+- `PRIMARY KEY (id)`
+
+## financial_daily_publications
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| publication_no | bigint | нет | — |
+| generation_id | uuid | нет | — |
+| prior_publication_id | uuid | да | — |
+| affected_from | date | нет | — |
+| affected_to | date | нет | — |
+| source_event_generation | bigint | нет | — |
+| watermark_generation | bigint | нет | — |
+| created_at | timestamp with time zone | нет | clock_timestamp() |
+
+Ограничения и связи:
+
+- `CHECK (isfinite(affected_from))`
+- `CHECK (isfinite(affected_to))`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id)`
+- `UNIQUE (business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, prior_publication_id) REFERENCES mc.financial_daily_publications(business_id, store_id, id)`
+- `UNIQUE (business_id, store_id, publication_no)`
+- `CHECK ((watermark_generation >= source_event_generation))`
+- `CHECK ((affected_to >= affected_from))`
+- `CHECK ((((publication_no = 1) AND (prior_publication_id IS NULL)) OR ((publication_no > 1) AND (prior_publication_id IS NOT NULL))))`
+- `UNIQUE (generation_id)`
+- `PRIMARY KEY (id)`
+- `CHECK ((publication_no > 0))`
+- `CHECK ((source_event_generation > 0))`
 
 ## financial_daily_reasons
 

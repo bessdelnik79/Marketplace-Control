@@ -4,7 +4,7 @@
 
 Этот документ фиксирует следующий архитектурный этап после P0.3/P0.4: устойчивую загрузку финансовых отчётов WB, локальный событийный пересчёт и дневную read-модель. Текущее поведение описано в [«Финансовых отчётах Wildberries»](financial-reports.md), финансовая методика — в [«Формулах финансового расчёта»](financial-formulas.md), проверенные контракты — в [планах P0.3](p0.3-plan.md) и [P0.4](p0.4-plan.md).
 
-Статус выполнения: этапы 1–4 реализованы. Durable queue, credential generation, недельный ledger, list-first inventory, понедельничное расписание, адресный raw/version pipeline и локальная дневная shadow-generation работают; действующий read path и publication pointer пока остаются на проверенном P0.3/P0.4. Их переключение относится к этапу 5.
+Статус выполнения: этапы 1–5 реализованы. Durable queue, credential generation, недельный ledger, list-first inventory, понедельничное расписание, адресный raw/version pipeline и локальная дневная generation работают. После обязательной shadow-сверки `financial-result-v20` атомарный pointer переключает period read на дневную модель; пока publication строится, обзор сохраняет предыдущие суммы и показывает статус обновления.
 
 ## Цель
 
@@ -244,9 +244,11 @@ append-only события и `financial_dates_recalculate` происходит
 причины при этом остаются в журнале. Worker строит
 неизменяемую generation только по сохранённым версиям, хранит непрерывное
 дневное coverage, evidence и точные неокруглённые налоговые numerators, а
-налог округляет один раз на SKU при агрегации периода. Результат остаётся
-shadow: сравнение записывается для точной legacy publication, но не меняет
-`mc.publications`, `getPublishedFinancialPeriod` или WB queue.
+налог округляет один раз на SKU при агрегации периода. До первого переключения
+результат остаётся shadow: сравнение записывается для точной legacy publication
+и не меняет `mc.publications` или WB queue. После успешного gate этапа 5 дневная
+publication становится отдельным авторитетным read-источником, не изменяя
+legacy history.
 Первичный backfill охватывает union всех опубликованных period results
 магазина, а не только текущую публикацию. Новая parser/result method получает
 события лишь после явного compatibility gate: неизвестная версия не может
@@ -254,10 +256,23 @@ shadow: сравнение записывается для точной legacy p
 
 ### Этап 5. Переключение публикации и UI
 
-- Включить атомарный daily publication pointer.
-- Перевести period read на дневную агрегацию с legacy fallback на время rollout.
-- Реализовать stale-while-revalidate UI и polling до новой publication либо terminal job.
-- Удалить process-local `Map` и route-triggered расчёты только после проверки durable worker.
+- [x] Включить атомарный daily publication pointer.
+- [x] Перевести period read на дневную агрегацию с legacy fallback на время rollout.
+- [x] Реализовать stale-while-revalidate UI и polling до новой publication либо terminal job.
+- [x] Удалить расчёты и постановку заданий из overview GET; compatibility `Map` удалить после итоговой VM-приёмки durable worker на этапе 6.
+
+Первая публикация допускается только для generation `financial-result-v20`,
+когда каждый публикуемый день покрыт matched shadow-сравнением с точной legacy
+publication и идентичным набором выбранных товаров. Последующая частичная
+публикация копирует неизменённые дни предыдущего pointer и заменяет только
+affected range; смешивание parser/result method или product scope запрещено.
+Если текущий daily pointer пересекает запрошенный диапазон, он авторитетен даже
+при `unavailable`: legacy fallback не может скрыть пробел daily coverage.
+Fallback используется только пока у магазина вообще нет пересечения с daily
+publication. Owner/editor может повторить terminal job; повтор использует тот
+же связанный job после сброса lease/attempt state. Обзор показывает старую
+publication во время pending/running, опрашивает JSON status и перезагружается
+при новом pointer или terminal failure.
 
 ### Этап 6. Приёмка и развёртывание
 

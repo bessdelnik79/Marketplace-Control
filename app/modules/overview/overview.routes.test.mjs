@@ -15,9 +15,10 @@ function setup(overrides = {}) {
     listStores: async id => { calls.push(['stores', id]); return stores; },
     getOverviewState: async (id, options) => { calls.push(['overview', id, options]); return { store: { id: options.storeId } }; },
     overviewPage: (user, list, state, options) => ({ user, list, state, options }),
-    send: (res, status, body) => Object.assign(res, { status, body }),
+    send: (res, status, body, headers={}) => Object.assign(res, { status, body, headers }),
     redirect: (res, location) => Object.assign(res, { status: 303, location }),
-    scheduleOperationalSync: (...args) => calls.push(['sync', ...args]),
+    sameOrigin:()=>true,
+    form:async()=>({storeId:'store-1',periodStart:'2026-09-10',periodEnd:'2026-09-19'}),
     ...overrides
   });
   return { calls, response, run: (route = '/overview', user = current, method = 'GET') => handler({ method }, response, new URL(route, 'http://localhost'), user) };
@@ -37,7 +38,6 @@ test('overview reads the owned requested store and selected week', async () => {
   assert.equal(await state.run('/overview?storeId=store-2&week=2026-09-14'), true);
   assert.deepEqual(state.calls, [
     ['stores', 'user-1'],
-    ['sync', 'user-1', 'store-2'],
     ['overview', 'user-1', { storeId: 'store-2', financialPeriodStart: '2026-09-14', financialPeriodEnd: '2026-09-20' }]
   ]);
   assert.equal(state.response.status, 200);
@@ -55,169 +55,42 @@ test('overview passes an exact arbitrary period to the service and page', async 
   assert.equal(state.response.body.options.selectedPeriodEnd, '2026-09-25');
 });
 
-test('overview starts one background calculation for a covered unpublished period',async()=>{
-  const calls=[];
+test('overview GET is read-only and leaves durable update state to the service',async()=>{
+  let mutation=false;
   const state=setup({
-    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'unavailable',missingReasons:['report_coverage_incomplete']}}),
-    getFinancialPeriodRecoveryState:async(...args)=>{calls.push(['recovery',...args]);return{status:'ready'};},
-    scheduleFinancialCalculation:(...args)=>calls.push(['calculation',...args])
+    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'available',updateStatus:{status:'pending'}}}),
+    scheduleOperationalSync:()=>{mutation=true;},scheduleFinancialCalculation:()=>{mutation=true;},scheduleFinancialSync:()=>{mutation=true;}
   });
   await state.run('/overview?storeId=store-1&periodStart=2026-09-10&periodEnd=2026-09-19');
-  assert.deepEqual(calls,[
-    ['recovery','user-1','store-1','2026-09-10','2026-09-19'],
-    ['calculation','user-1','store-1',{targetPeriod:{periodStart:'2026-09-10',periodEnd:'2026-09-19'}}]
-  ]);
-  assert.equal(state.response.body.state.financial.status,'calculating');
-  assert.equal(state.response.body.state.financial.calculationStage,'queued');
-  assert.equal(state.response.body.state.financial.refresh,true);
+  assert.equal(mutation,false);
+  assert.equal(state.response.body.state.financial.updateStatus.status,'pending');
+  assert.equal(state.response.headers['cache-control'],'no-store');
 });
 
-test('overview replaces a stale partial publication with a current background calculation',async()=>{
-  const calls=[];
-  const state=setup({
-    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'partial',methodVersion:'financial-result-v14',publishedExact:true,missingReasons:['operation_unclassified']}}),
-    getFinancialPeriodRecoveryState:async(...args)=>{calls.push(['recovery',...args]);return{status:'ready'};},
-    scheduleFinancialCalculation:(...args)=>calls.push(['calculation',...args])
-  });
-  await state.run('/overview?storeId=store-1&periodStart=2026-08-17&periodEnd=2026-08-23');
-  assert.deepEqual(calls,[
-    ['recovery','user-1','store-1','2026-08-17','2026-08-23'],
-    ['calculation','user-1','store-1',{targetPeriod:{periodStart:'2026-08-17',periodEnd:'2026-08-23'}}]
-  ]);
-  assert.equal(state.response.body.state.financial.status,'calculating');
-  assert.equal(state.response.body.state.financial.calculationStage,'queued');
-  assert.equal(state.response.body.state.financial.refresh,true);
-});
-
-test('overview keeps a current published period without scheduling another calculation',async()=>{
-  let recovered=false;
-  let scheduled=false;
-  const state=setup({
-    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'complete',methodVersion:'financial-result-v20',publishedExact:true,missingReasons:[]}}),
-    getFinancialPeriodRecoveryState:async()=>{recovered=true;return{status:'ready'};},
-    scheduleFinancialCalculation:()=>{scheduled=true;}
-  });
-  await state.run('/overview?storeId=store-1&periodStart=2026-08-17&periodEnd=2026-08-23');
-  assert.equal(recovered,false);
-  assert.equal(scheduled,false);
-  assert.equal(state.response.body.state.financial.status,'complete');
-});
-
-test('overview refreshes a stale exact publication even when its result is unavailable',async()=>{
-  let scheduled=false;
-  const state=setup({
-    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'unavailable',methodVersion:'financial-result-v14',publishedExact:true,missingReasons:['cost_missing']}}),
-    getFinancialPeriodRecoveryState:async()=>({status:'ready'}),
-    scheduleFinancialCalculation:()=>{scheduled=true;}
-  });
-  await state.run('/overview?storeId=store-1&periodStart=2026-08-17&periodEnd=2026-08-23');
-  assert.equal(scheduled,true);
-  assert.equal(state.response.body.state.financial.status,'calculating');
-});
-
-test('overview automatically updates legacy report normalizations before calculating',async()=>{
-  const calls=[];
-  const ranges=[{periodStart:'2026-08-10',periodEnd:'2026-08-16'}];
-  const state=setup({
-    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'unavailable',missingReasons:['report_coverage_incomplete']}}),
-    getFinancialPeriodRecoveryState:async()=>({status:'normalization_required',ranges}),
-    scheduleFinancialSync:(...args)=>calls.push(args)
-  });
-  await state.run('/overview?storeId=store-1&periodStart=2026-08-10&periodEnd=2026-08-16');
-  assert.deepEqual(calls,[['user-1','store-1',{
-    targetPeriod:{periodStart:'2026-08-10',periodEnd:'2026-08-16'},targetRanges:ranges
-  }]]);
-  assert.equal(state.response.body.state.financial.status,'calculating');
-  assert.equal(state.response.body.state.financial.calculationStage,'sources');
-});
-
-test('overview polls an existing target calculation without scheduling a duplicate',async()=>{
-  let scheduled=false;
-  const state=setup({
-    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'unavailable',missingReasons:['published_period_missing']}}),
-    getFinancialPeriodRecoveryState:async()=>({status:'running'}),
-    scheduleFinancialCalculation:()=>{scheduled=true;}
-  });
-  await state.run('/overview?periodStart=2026-09-10&periodEnd=2026-09-19');
-  assert.equal(scheduled,false);
-  assert.equal(state.response.body.state.financial.status,'calculating');
-  assert.equal(state.response.body.state.financial.calculationStage,'running');
-});
-
-test('overview resumes a durable queued target calculation after a process restart',async()=>{
-  const scheduled=[];
-  const state=setup({
-    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'unavailable',missingReasons:['published_period_missing']}}),
-    getFinancialPeriodRecoveryState:async()=>({status:'queued'}),
-    scheduleFinancialCalculation:(...args)=>scheduled.push(args)
-  });
-  await state.run('/overview?periodStart=2026-09-10&periodEnd=2026-09-19');
-  assert.equal(scheduled.length,1);
-  assert.equal(state.response.body.state.financial.status,'calculating');
-});
-
-test('failed target normalization stops automatic retries and retries only on request',async()=>{
-  const scheduled=[];
-  const ranges=[{periodStart:'2026-08-10',periodEnd:'2026-08-16'}];
-  const state=setup({
-    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'unavailable',missingReasons:['report_coverage_incomplete']}}),
-    getFinancialPeriodRecoveryState:async()=>({status:'normalization_failed',reason:'financial_unauthorized',ranges}),
-    scheduleFinancialSync:(...args)=>scheduled.push(args)
-  });
-  await state.run('/overview?periodStart=2026-08-10&periodEnd=2026-08-16');
-  assert.equal(state.response.body.state.financial.status,'failed');
-  assert.deepEqual(scheduled,[]);
-  await state.run('/overview?periodStart=2026-08-10&periodEnd=2026-08-16&retryCalculation=1');
-  assert.equal(state.response.status,303);
-  assert.equal(state.response.location,'/overview?periodStart=2026-08-10&periodEnd=2026-08-16');
-  assert.equal(scheduled.length,1);
-  await state.run('/overview?periodStart=2026-08-10&periodEnd=2026-08-16');
+test('tenant-scoped status endpoint returns no-store JSON',async()=>{
+  const state=setup({getFinancialDailyPublicationStatus:async(...args)=>({status:'running',publicationId:'daily-1',args})});
+  await state.run('/overview/financial-status?storeId=store-2&periodStart=2026-09-10&periodEnd=2026-09-19');
   assert.equal(state.response.status,200);
-  assert.equal(state.response.body.state.financial.status,'failed');
-  assert.equal(scheduled.length,1);
+  assert.equal(state.response.headers['cache-control'],'no-store');
+  assert.match(state.response.headers['content-type'],/application\/json/);
+  assert.equal(JSON.parse(state.response.body).publicationId,'daily-1');
 });
 
-test('stale retry parameter is always removed without duplicating an active job',async()=>{
-  let scheduled=0;
-  const state=setup({
-    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'unavailable',missingReasons:['report_coverage_incomplete']}}),
-    getFinancialPeriodRecoveryState:async()=>({status:'normalization_running'}),
-    scheduleFinancialSync:()=>{scheduled++;},
-    scheduleFinancialCalculation:()=>{scheduled++;}
-  });
-  await state.run('/overview?periodStart=2026-08-10&periodEnd=2026-08-16&retryCalculation=1');
+test('manual retry is same-origin POST and enqueues only the durable daily retry dependency',async()=>{
+  const retried=[];
+  const state=setup({retryFinancialDailyPublication:async(...args)=>retried.push(args)});
+  await state.run('/overview/financial-retry',current,'POST');
+  assert.deepEqual(retried,[['user-1','store-1','2026-09-10','2026-09-19']]);
   assert.equal(state.response.status,303);
-  assert.equal(state.response.location,'/overview?periodStart=2026-08-10&periodEnd=2026-08-16');
-  assert.equal(scheduled,0);
+  const rejected=setup({sameOrigin:()=>false,retryFinancialDailyPublication:async()=>assert.fail('must not retry')});
+  await rejected.run('/overview/financial-retry',current,'POST');
+  assert.equal(rejected.response.status,403);
 });
 
-test('failed target calculation stops automatic retries and only retries after an explicit action',async()=>{
-  const scheduled=[];
-  const state=setup({
-    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'unavailable',missingReasons:['report_coverage_incomplete']}}),
-    getFinancialPeriodRecoveryState:async()=>({status:'failed',reason:'calculation_failed'}),
-    scheduleFinancialCalculation:(...args)=>scheduled.push(args)
-  });
-  await state.run('/overview?periodStart=2026-09-10&periodEnd=2026-09-19');
-  assert.equal(state.response.body.state.financial.status,'failed');
-  assert.deepEqual(scheduled,[]);
-  await state.run('/overview?periodStart=2026-09-10&periodEnd=2026-09-19&retryCalculation=1');
-  assert.equal(state.response.status,303);
-  assert.equal(state.response.location,'/overview?periodStart=2026-09-10&periodEnd=2026-09-19');
-  assert.equal(scheduled.length,1);
-  await state.run('/overview?periodStart=2026-09-10&periodEnd=2026-09-19');
-  assert.equal(state.response.status,200);
-  assert.equal(state.response.body.state.financial.status,'failed');
-  assert.equal(scheduled.length,1);
-});
-
-test('overview replaces a generic missing-publication reason with the actual source coverage gap',async()=>{
-  const state=setup({
-    getOverviewState:async()=>({store:{id:'store-1'},financial:{status:'unavailable',missingReasons:['published_period_missing']}}),
-    getFinancialPeriodRecoveryState:async()=>({status:'uncovered',reason:'calculation_period_coverage_incomplete'})
-  });
-  await state.run('/overview?periodStart=2026-09-10&periodEnd=2026-09-19');
-  assert.deepEqual(state.response.body.state.financial.missingReasons,['calculation_period_coverage_incomplete']);
+test('manual retry maps a viewer authorization failure to 403',async()=>{
+  const state=setup({retryFinancialDailyPublication:async()=>{throw new Error('owned business context is required');}});
+  await state.run('/overview/financial-retry',current,'POST');
+  assert.equal(state.response.status,403);
 });
 
 test('overview asks the service for the latest published week when none is selected', async () => {

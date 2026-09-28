@@ -29,7 +29,9 @@ function period(start, end, { quality = 'complete', missingReasons = [] } = {}) 
 function pair(overrides = {}) {
   return {
     publication_id: 'publication-1',
+    publication_source: 'daily',
     published_at: new Date('2026-09-21T10:00:00Z'),
+    update_status:{status:'pending',updatedAt:new Date('2026-09-21T11:00:00Z'),lastErrorCode:null,affectedPeriod:{start:'2026-09-14',end:'2026-09-20'}},
     method_version: 'financial-result-v5',
     scope: { type: 'selected_products', productIds: ['product-b', 'product-a'] },
     current: period('2026-09-14', '2026-09-20'),
@@ -49,12 +51,15 @@ test('service reads adjacent weeks atomically and exposes publication provenance
   }]);
   assert.equal(overview.status, 'available');
   assert.equal(overview.publicationId, 'publication-1');
+  assert.equal(overview.publicationSource,'daily');
+  assert.equal(overview.updateStatus.status,'pending');
   assert.equal(overview.publishedAt, '2026-09-21T10:00:00.000Z');
   assert.equal(overview.sourceFreshness, '2026-09-20T23:00:00.000Z');
   assert.deepEqual(overview.requestedPeriod, { start: '2026-09-14', end: '2026-09-20', timezone: 'Europe/Moscow' });
   assert.deepEqual(overview.coveredPeriod, { start: '2026-09-14', end: '2026-09-20' });
   assert.deepEqual(overview.scope, { type: 'selected_products', productIds: ['product-a', 'product-b'] });
   assert.equal(overview.comparison.comparable, true);
+  assert.equal(overview.publishedExact,true);
   assert.deepEqual(overview.crossBorderBuyout,{present:false,reportCount:0});
 });
 

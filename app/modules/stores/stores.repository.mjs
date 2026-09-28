@@ -96,6 +96,13 @@ export async function saveWbConnection(userId, {storeId,sellerId,scopes,encrypte
     );
     let jobId=null;
     if(credentialChanged){
+      await client.query(
+        `insert into mc.financial_store_event_state(business_id,store_id,next_generation)
+         values($1,$2,2)
+         on conflict(business_id,store_id) do update
+           set next_generation=mc.financial_store_event_state.next_generation+1,updated_at=clock_timestamp()`,
+        [businessId,storeId]
+      );
       const planned=(await client.query(
         `select week_count,job_id from mc.plan_financial_credential_refresh($1,$2,$3)`,
         [storeId,generation,now]

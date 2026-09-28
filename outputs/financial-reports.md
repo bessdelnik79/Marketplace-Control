@@ -4,7 +4,9 @@
 
 Документ описывает бизнес-логику и технический контракт первой загрузки финансовых данных. Формулы показателей находятся отдельно в [financial-formulas.md](financial-formulas.md).
 
-Первые четыре этапа [плана событийной загрузки и пересчёта финансов](event-driven-financial-recalculation-plan.md) реализованы: durable PostgreSQL-очередь, версия учётных данных, недельный ledger, годовой list-first inventory, глобальное понедельничное расписание, адресный конвейер fetch/normalize/acceptance и локальная дневная shadow-generation. Изменения отчётов, себестоимости, расходов, налогов, selection и методик создают локальные события без обращения к WB; новый слой пока только сверяется с точными P0.3 publication/run/period result и не переключает действующий read path.
+Первые пять этапов [плана событийной загрузки и пересчёта финансов](event-driven-financial-recalculation-plan.md) реализованы: durable PostgreSQL-очередь, версия учётных данных, недельный ledger, годовой list-first inventory, глобальное понедельничное расписание, адресный конвейер fetch/normalize/acceptance, локальная дневная generation и атомарный publication pointer. Изменения отчётов, себестоимости, расходов, налогов, selection и методик создают локальные события без обращения к WB. Первый daily pointer требует полной matched shadow-сверки `financial-result-v20` с тем же product scope; после него period read использует дневную агрегацию, а legacy остаётся fallback только для диапазонов без daily-покрытия.
+
+Во время пересчёта обзор сохраняет последнюю опубликованную сумму, показывает состояние обновления и опрашивает отдельный status endpoint до нового pointer или terminal failure. Если daily publication пересекает выбранный диапазон, её `unavailable`/partial quality авторитетна и не маскируется старым legacy-результатом. Ручной повтор доступен owner/editor и повторно запускает тот же durable job без нового обращения к WB.
 
 ## Цель этапа
 
