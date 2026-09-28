@@ -457,9 +457,6 @@ function isTransportReimbursementComponent(component){
     ||(component?.sourceField==='rebillLogisticCost'&&component?.categoryCode==='rebill_logistic_compensation');
   const rawValue=String(component?.rawValue??'').trim().replace(',', '.');
   return fieldMatches
-    &&component?.operationType==='service_charge'
-    &&String(component?.docTypeName??'').trim()===''
-    &&String(component?.sellerOperName??'').trim()==='Возмещение издержек по перевозке/по складским операциям с товаром'
     &&/^-?\d+(?:\.\d+)?$/.test(rawValue)
     &&/[1-9]/.test(rawValue);
 }
@@ -477,7 +474,8 @@ function verifiedTransportReimbursementReferenceIds(components){
   const verified=new Set();
   for(const group of groups.values()){
     const fields=new Set(group.map(component=>component.sourceField));
-    if(!fields.has('rebillLogisticCost')||(!fields.has('vw')&&!fields.has('vwNds')))continue;
+    if(group.length!==3||fields.size!==3
+      ||!fields.has('rebillLogisticCost')||!fields.has('vw')||!fields.has('vwNds'))continue;
     const net=group.reduce((sum,component)=>sum+money(component.amountSigned),0n);
     if(net!==0n)continue;
     for(const component of group){

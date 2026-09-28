@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,49);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,50);
   assert.deepEqual((await q("select table_name from information_schema.tables where table_schema='mc' and table_name in ('financial_input_events','financial_store_event_state') order by table_name")).map(row=>row.table_name),['financial_input_events','financial_store_event_state']);
   assert.equal((await one("select relforcerowsecurity as forced from pg_class join pg_namespace on pg_namespace.oid=pg_class.relnamespace where nspname='mc' and relname='financial_input_events'")).forced,true);
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.establish_financial_pipeline_context(uuid,bigint,uuid,text,text)'::regprocedure"));
@@ -1480,6 +1480,102 @@ try {
     assert.equal((await eone(`select max(version)::int version from mc.schema_migrations`)).version,48);
     pass('migration 48 replays a no-pointer cutover without WB API and skips archived stores');
   }finally{await emptyCoverageUpgradeDb.close();}
+
+  const transportUpgradeDb=new PGlite();
+  try{
+    for(const migration of migrations.filter(name=>Number(name.split('_')[0])<=49))await transportUpgradeDb.exec(await readFile(path.join(root,'db/migrations',migration),'utf8'));
+    const tq=async(sql,params=[])=>(await transportUpgradeDb.query(sql,params)).rows;
+    const tone=async(sql,params=[])=>(await tq(sql,params))[0];
+    const owner=await tone(`insert into mc.users(display_name) values('Transport upgrade owner') returning id`);
+    const business=await tone(`insert into mc.businesses(name) values('Transport upgrade business') returning id`);
+    await tq(`insert into mc.memberships(business_id,user_id,role) values($1,$2,'owner')`,[business.id,owner.id]);
+    await tq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[owner.id,business.id]);
+    const fixturePlan=await tone(`insert into mc.billing_plans(code,name) values('transport_fixture','Transport fixture') returning id`);
+    const fixturePlanVersion=await tone(`insert into mc.billing_plan_versions(
+        plan_id,version_no,product_limit,store_limit,price,billing_period
+      ) values($1,1,100,3,0,'none') returning id`,[fixturePlan.id]);
+    await tq(`update mc.subscriptions set plan_version_id=$1 where business_id=$2`,[fixturePlanVersion.id,business.id]);
+    const parser=await tone(`select id from mc.method_versions where code='wb_finance_import' and version_no=11`);
+    const resultMethod=await tone(`select id from mc.method_versions where code='financial_result' and version_no=20`);
+    const createTransportStore=async(suffix,{pointer=false,archived=false}={})=>{
+      const store=await tone(`insert into mc.stores(business_id,external_account_id,name,status)
+        values($1,$2,$3,'active') returning id`,[business.id,`transport-${suffix}`,`Transport ${suffix}`]);
+      const document=await tone(`insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness)
+        values($1,$2,'wb_api','weekly_realization',$3,'complete') returning id`,[business.id,store.id,`transport-document-${suffix}`]);
+      const report=await tone(`insert into mc.reports(business_id,store_id,external_report_id,period_start,period_end)
+        values($1,$2,$3,'2026-09-21','2026-09-27') returning id`,[business.id,store.id,`transport-report-${suffix}`]);
+      const version=await tone(`insert into mc.report_versions(business_id,store_id,report_id,document_id,version_no,checksum,parser_version)
+        values($1,$2,$3,$4,1,$5,'wb-finance-v11') returning id`,[business.id,store.id,report.id,document.id,`transport-version-${suffix}`]);
+      const raw={rrdId:0,docTypeName:'',sellerOperName:'Изменяемое название WB',rrDate:'2026-09-24',rebillLogisticCost:'18.97501',vw:'-15.547',vwNds:'-3.42801'};
+      const row=await tone(`insert into mc.report_rows(business_id,store_id,report_version_id,external_row_key,row_number,raw_data,row_checksum)
+        values($1,$2,$3,$4,1,$5::jsonb,$6) returning id`,[business.id,store.id,version.id,`transport-row-${suffix}`,JSON.stringify(raw),`transport-row-checksum-${suffix}`]);
+      const normalization=await tone(`insert into mc.report_normalizations(business_id,store_id,report_version_id,method_version_id,normalization_key,status)
+        values($1,$2,$3,$4,$5,'succeeded') returning id`,[business.id,store.id,version.id,parser.id,`transport-normalization-${suffix}`]);
+      const operation=await tone(`insert into mc.operations(business_id,store_id,source_code,source_operation_key)
+        values($1,$2,'wb',$3) returning id`,[business.id,store.id,`transport-operation-${suffix}`]);
+      const operationVersion=await tone(`insert into mc.operation_versions(
+          business_id,store_id,operation_id,report_row_id,version_no,operation_type,accounting_date,report_normalization_id
+        ) values($1,$2,$3,$4,1,'other','2026-09-24',$5) returning id`,[business.id,store.id,operation.id,row.id,normalization.id]);
+      for(const [field,category,amount,scope] of [
+        ['rebillLogisticCost','rebill_logistic_compensation','-18.9800','reconciliation'],
+        ['vw','wb_reward_without_vat','15.5500','selected_product'],
+        ['vwNds','wb_reward_vat','3.4300','selected_product']
+      ])await tq(`insert into mc.financial_components(
+          business_id,store_id,operation_version_id,component_key,category_code,amount_signed,method_version_id,source_field,result_scope_classification
+        ) values($1,$2,$3,$4,$5,$6,$7,$4,$8)`,[business.id,store.id,operationVersion.id,field,category,amount,parser.id,scope]);
+      await tq(`update mc.report_versions set status='validated' where id=$1`,[version.id]);
+      await tq(`update mc.report_versions set status='accepted',accepted_at=clock_timestamp() where id=$1`,[version.id]);
+      await tq(`update mc.reports set current_version_id=$1 where id=$2`,[version.id,report.id]);
+      if(pointer){
+        const job=await tone(`select * from mc.enqueue_job($1,'financial_dates_recalculate',$2,
+          '{"schemaVersion":1,"eventGeneration":1,"affectedFrom":"2026-09-21","affectedTo":"2026-09-27","allowsWbApi":false}'::jsonb,
+          clock_timestamp(),200,20)`,[store.id,`transport-generation-${suffix}`]);
+        const generation=await tone(`insert into mc.financial_daily_generations(
+            business_id,store_id,generation_no,source_event_generation,watermark_generation,job_id,affected_from,affected_to,
+            parser_method_version_id,result_method_version_id,frozen_input_fingerprint,status,quality,finished_at
+          ) values($1,$2,1,1,1,$3,'2026-09-21','2026-09-27',$4,$5,$6,'succeeded','partial',clock_timestamp()) returning id`,
+          [business.id,store.id,job.id,parser.id,resultMethod.id,`transport-fingerprint-${suffix}`]);
+        const publication=await tone(`insert into mc.financial_daily_publications(
+            business_id,store_id,publication_no,generation_id,affected_from,affected_to,source_event_generation,watermark_generation
+          ) values($1,$2,1,$3,'2026-09-21','2026-09-27',1,1) returning id`,[business.id,store.id,generation.id]);
+        await tq(`alter table mc.financial_daily_current_publications disable trigger user`);
+        await tq(`insert into mc.financial_daily_current_publications(business_id,store_id,publication_id) values($1,$2,$3)`,[business.id,store.id,publication.id]);
+        await tq(`alter table mc.financial_daily_current_publications enable trigger user`);
+      }
+      if(archived)await tq(`update mc.stores set status='archived' where id=$1`,[store.id]);
+      return store;
+    };
+    const affectedStore=await createTransportStore('affected',{pointer:true});
+    const noPointerStore=await createTransportStore('no-pointer');
+    const archivedStore=await createTransportStore('archived',{pointer:true,archived:true});
+    await tq(`select set_config('app.user_id','',false),set_config('app.business_id','',false)`);
+    await transportUpgradeDb.exec(await readFile(path.join(root,'db/migrations/050_transport_reimbursement_source_row.sql'),'utf8'));
+    await tq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[owner.id,business.id]);
+    assert.deepEqual(await tone(`select event_type,affected_from::text affected_from,affected_to::text affected_to,
+        source_result_method_version_id,allows_wb_api
+      from mc.financial_input_events where event_key='transport-zero-bundle-v20-fix:v1:store:'||$1`,[affectedStore.id]),{
+      event_type:'shadow_backfill',affected_from:'2026-09-21',affected_to:'2026-09-27',
+      source_result_method_version_id:resultMethod.id,allows_wb_api:false
+    });
+    assert.equal((await tone(`select count(*)::int n from mc.financial_input_events
+      where event_key='transport-zero-bundle-v20-fix:v1:store:'||$1`,[noPointerStore.id])).n,0);
+    assert.equal((await tone(`select count(*)::int n from mc.financial_input_events
+      where event_key='transport-zero-bundle-v20-fix:v1:store:'||$1`,[archivedStore.id])).n,0);
+    assert.equal((await tone(`select payload->>'allowsWbApi' allows_wb_api from mc.jobs
+      where id=(select dispatch_job_id from mc.financial_input_events
+        where event_key='transport-zero-bundle-v20-fix:v1:store:'||$1)`,[affectedStore.id])).allows_wb_api,'false');
+    await tone(`select mc.emit_financial_input_event($1::uuid,'transport-zero-bundle-v20-fix:v1:store:'||($1::uuid)::text,
+      'shadow_backfill','2026-09-21','2026-09-27',p_source_result_method_version_id=>$2)`,[affectedStore.id,resultMethod.id]);
+    assert.equal((await tone(`select count(*)::int n from mc.financial_input_events
+      where event_key='transport-zero-bundle-v20-fix:v1:store:'||$1`,[affectedStore.id])).n,1);
+    assert.deepEqual(await tq(`select relname,relforcerowsecurity from pg_class c join pg_namespace n on n.oid=c.relnamespace
+      where n.nspname='mc' and relname in('stores','memberships','financial_daily_current_publications') order by relname`),[
+      {relname:'financial_daily_current_publications',relforcerowsecurity:true},
+      {relname:'memberships',relforcerowsecurity:true},{relname:'stores',relforcerowsecurity:true}
+    ]);
+    assert.equal((await tone(`select max(version)::int version from mc.schema_migrations`)).version,50);
+    pass('migration 50 backfills only active published transport bundles without WB API');
+  }finally{await transportUpgradeDb.close();}
 
   // Produce a machine-derived field/constraint inventory for review.
   const cols = await q("select table_name,column_name,data_type,udt_name,is_nullable,column_default,numeric_precision,numeric_scale from information_schema.columns where table_schema='mc' order by table_name,ordinal_position");
