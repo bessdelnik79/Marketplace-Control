@@ -311,7 +311,7 @@ export function createFinancialPipelineRepository({pool}){
       }
       return{superseded:false,insertedRows,issues,normalizationId:normalization.id};
     });}catch(error){
-      if(/^financial_[a-z0-9_]{1,99}$/.test(String(error?.message??''))||error?.code)throw error;
+      if(/^financial_[a-z0-9_]{1,99}$/.test(String(error?.message??''))||(error?.code&&error.code!=='P0001'))throw error;
       const wrapped=new Error(`financial_normalize_${stage}_failed`);
       wrapped.cause=error;
       throw wrapped;
