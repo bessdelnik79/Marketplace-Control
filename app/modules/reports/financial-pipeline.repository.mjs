@@ -187,7 +187,8 @@ export function createFinancialPipelineRepository({pool}){
   }
 
   async function normalize(jobId,leaseToken,workerId){
-    return transaction(pool,async client=>{
+    let stage='context';
+    try{return await transaction(pool,async client=>{
       const context=await establish(client,jobId,null,leaseToken,workerId,'financial_report_normalize');
       if(!context)return{superseded:true};
       const payload=context.payload??{},versionId=String(payload.reportVersionId??''),coverageId=String(payload.coverageId??'');
@@ -195,6 +196,7 @@ export function createFinancialPipelineRepository({pool}){
       // lease had already expired, the heartbeat fails and every normalization
       // write is rolled back before acceptance.
       await client.query('select (mc.heartbeat_job($1,$2,$3,300)).id',[jobId,leaseToken,workerId]);
+      stage='source';
       const source=(await client.query(
         `select rv.id,rv.status,rv.document_id,rv.supersedes_version_id,r.id as report_id,r.external_report_id,
                 r.period_start::text,r.period_end::text,r.current_version_id
@@ -217,6 +219,7 @@ export function createFinancialPipelineRepository({pool}){
         [versionId,method.id])).rows[0];
       let insertedRows=0,issues=0;
       if(!normalization){
+        stage='operations';
         normalization=(await client.query(
           `insert into mc.report_normalizations(business_id,store_id,report_version_id,method_version_id,normalization_key,status)
            values($1,$2,$3,$4,$5,'succeeded') returning id`,
@@ -260,6 +263,7 @@ export function createFinancialPipelineRepository({pool}){
           insertedRows++;
         }
       }
+      stage='acceptance';
       if(source.status==='received'){
         await client.query(`update mc.report_versions set status='validated' where id=$1`,[versionId]);
         await client.query(`update mc.report_versions set status='accepted',accepted_at=clock_timestamp() where id=$1`,[versionId]);
@@ -279,6 +283,7 @@ export function createFinancialPipelineRepository({pool}){
         `select summary_raw_data from mc.financial_week_inventory where coverage_id=$1 and report_version_id=$2 limit 1`,
         [coverageId,versionId])).rows[0]?.summary_raw_data??null;
       const reportRows=(await client.query('select raw_data from mc.report_rows where report_version_id=$1 order by row_number,id',[versionId])).rows;
+      stage='reconciliation';
       const reconciliation=reconcileBankPayment({externalReportId:source.external_report_id,periodStart:source.period_start,periodEnd:source.period_end,rows:reportRows.map(row=>({rawData:row.raw_data}))},summary);
       await client.query(
         `insert into mc.reconciliation_checks(business_id,store_id,report_version_id,check_code,expected_amount,actual_amount,status,details)
@@ -286,6 +291,7 @@ export function createFinancialPipelineRepository({pool}){
         [context.business_id,context.store_id,versionId,reconciliation.expectedAmount,reconciliation.actualAmount,reconciliation.status,JSON.stringify({reason:reconciliation.reason,source:'durable_pipeline'})]);
 
       const eventKey=`report-normalize-job:${jobId}`;
+      stage='event';
       const existing=(await client.query('select id from mc.financial_input_events where business_id=$1 and event_key=$2',
         [context.business_id,eventKey])).rows[0];
       if(!existing){
@@ -304,7 +310,12 @@ export function createFinancialPipelineRepository({pool}){
         await client.query(`update mc.financial_store_event_state set next_generation=next_generation+1 where business_id=$1 and store_id=$2`,[context.business_id,context.store_id]);
       }
       return{superseded:false,insertedRows,issues,normalizationId:normalization.id};
-    });
+    });}catch(error){
+      if(/^financial_[a-z0-9_]{1,99}$/.test(String(error?.message??''))||error?.code)throw error;
+      const wrapped=new Error(`financial_normalize_${stage}_failed`);
+      wrapped.cause=error;
+      throw wrapped;
+    }
   }
 
   async function recordFailure(jobId,generation,leaseToken,workerId,jobType,errorCode,terminal=false){
