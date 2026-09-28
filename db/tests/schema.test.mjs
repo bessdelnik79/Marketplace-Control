@@ -1109,6 +1109,7 @@ try {
     await dq(`select set_config('app.user_id','',false),set_config('app.business_id','',false)`);
     await dailyUpgradeDb.exec(await readFile(path.join(root,'db/migrations/039_financial_daily_generations.sql'),'utf8'));
     assert.equal((await done(`select actor_user_id from mc.financial_input_events where id=$1`,[legacyEvent.id])).actor_user_id,dailyUser.id);
+    assert.equal((await done(`select relforcerowsecurity forced from pg_class where oid='mc.report_normalizations'::regclass`)).forced,true);
     await assert.rejects(()=>dq(`update mc.financial_input_events set event_key='changed' where id=$1`,[legacyEvent.id]),/immutable record/);
     assert.equal((await done(`select max(version)::int version from mc.schema_migrations`)).version,39);
     pass('migration 39 upgrades populated immutable financial events and restores their mutation guard');

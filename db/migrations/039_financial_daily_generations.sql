@@ -5,6 +5,7 @@ ALTER TABLE mc.financial_input_events NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE mc.financial_input_events DISABLE TRIGGER financial_input_events_no_update;
 ALTER TABLE mc.audit_events NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE mc.memberships NO FORCE ROW LEVEL SECURITY;
+ALTER TABLE mc.report_normalizations NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE mc.financial_input_events
   DROP CONSTRAINT financial_input_events_event_type_check,
   ALTER COLUMN source_report_version_id DROP NOT NULL,
@@ -90,6 +91,7 @@ ALTER TABLE mc.financial_input_events
         source_parser_method_version_id)=0)
   );
 ALTER TABLE mc.financial_input_events FORCE ROW LEVEL SECURITY;
+ALTER TABLE mc.report_normalizations FORCE ROW LEVEL SECURITY;
 
 CREATE FUNCTION mc.emit_financial_input_event(
   p_store_id uuid,p_event_key text,p_event_type text,p_affected_from date,p_affected_to date,
