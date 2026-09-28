@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,43);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,45);
   assert.deepEqual((await q("select table_name from information_schema.tables where table_schema='mc' and table_name in ('financial_input_events','financial_store_event_state') order by table_name")).map(row=>row.table_name),['financial_input_events','financial_store_event_state']);
   assert.equal((await one("select relforcerowsecurity as forced from pg_class join pg_namespace on pg_namespace.oid=pg_class.relnamespace where nspname='mc' and relname='financial_input_events'")).forced,true);
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.establish_financial_pipeline_context(uuid,bigint,uuid,text,text)'::regprocedure"));
@@ -737,6 +737,69 @@ try {
   assert.deepEqual(manualRefresh.payload.window,{dateFrom:'2026-08-31',dateTo:'2026-10-04'});
   assert.equal((await one(`select count(*)::int as n from mc.financial_week_coverage
     where store_id=$1 and credential_generation=1 and 'manual_refresh'=any(check_reasons)`,[store.id])).n,5);
+  await q(`update mc.financial_week_coverage set coverage_status='unavailable',last_error_code='financial_inventory_not_confirmed'
+    where store_id=$1 and credential_generation=1 and week_start in ('2025-09-22','2026-09-28')`,[store.id]);
+  const recoveryRefresh=await one(`select * from mc.request_financial_inventory_refresh($1,$2)`,[store.id,'2026-10-12T09:00:00Z']);
+  const duplicateRecovery=await one(`select * from mc.request_financial_inventory_refresh($1,$2)`,[store.id,'2026-10-12T09:01:00Z']);
+  assert.equal(duplicateRecovery.id,recoveryRefresh.id);
+  assert.equal(recoveryRefresh.payload.reason,'manual_recovery');
+  assert.equal(recoveryRefresh.payload.recoveryWeeks,2);
+  assert.deepEqual(recoveryRefresh.payload.window,{dateFrom:'2025-09-22',dateTo:'2026-10-04'});
+  assert.deepEqual(await q(`select coverage_status,last_error_code from mc.financial_week_coverage
+    where store_id=$1 and credential_generation=1 and week_start in ('2025-09-22','2026-09-28') order by week_start`,[store.id]),[
+    {coverage_status:'pending',last_error_code:null},{coverage_status:'pending',last_error_code:null}
+  ]);
+  await q(`update mc.financial_week_coverage set coverage_status='unavailable',last_error_code='financial_inventory_not_confirmed'
+    where store_id=$1 and credential_generation=1 and week_start='2026-09-21'`,[store.id]);
+  const coveringRecovery=await one(`select * from mc.request_financial_inventory_refresh($1,$2)`,[store.id,'2026-10-12T09:02:00Z']);
+  assert.equal(coveringRecovery.id,recoveryRefresh.id);
+  assert.equal((await one(`select coverage_status from mc.financial_week_coverage
+    where store_id=$1 and credential_generation=1 and week_start='2026-09-21'`,[store.id])).coverage_status,'pending');
+  await q(`update mc.jobs set status='running',attempt_count=attempt_count+1,worker_id='manual-running-race',
+    lease_token='99999999-9999-4999-8999-999999999999',lease_until=clock_timestamp()+interval '5 minutes',
+    heartbeat_at=clock_timestamp(),updated_at=clock_timestamp() where id=$1`,[recoveryRefresh.id]);
+  await q(`update mc.job_dispatch set status='running',attempt_count=attempt_count+1,
+    lease_until=clock_timestamp()+interval '5 minutes' where job_id=$1`,[recoveryRefresh.id]);
+  await q(`update mc.financial_week_coverage set coverage_status='unavailable',last_error_code='financial_inventory_not_confirmed'
+    where store_id=$1 and credential_generation=1 and week_start='2026-09-14'`,[store.id]);
+  const runningFollowup=await one(`select * from mc.request_financial_inventory_refresh($1,$2)`,[store.id,'2026-10-12T09:03:00Z']);
+  assert.notEqual(runningFollowup.id,recoveryRefresh.id);
+  assert.deepEqual(runningFollowup.payload.window,{dateFrom:'2026-09-14',dateTo:'2026-09-20'});
+  await q(`update mc.jobs set status='succeeded',outcome='completed',finished_at=clock_timestamp(),
+    worker_id=null,lease_token=null,lease_until=null,heartbeat_at=null where id in ($1,$2)`,[recoveryRefresh.id,runningFollowup.id]);
+  await q(`delete from mc.job_dispatch where job_id in ($1,$2)`,[recoveryRefresh.id,runningFollowup.id]);
+  await q(`update mc.financial_week_coverage set coverage_status='complete'
+    where store_id=$1 and credential_generation=1 and week_start in ('2025-09-22','2026-09-14','2026-09-21','2026-09-28')`,[store.id]);
+  await q(`update mc.financial_week_coverage set coverage_status='unavailable',last_error_code='financial_inventory_not_confirmed'
+    where store_id=$1 and credential_generation=1 and week_start='2026-09-28'`,[store.id]);
+  const narrowRecovery=await one(`select * from mc.request_financial_inventory_refresh($1,$2)`,[store.id,'2026-10-19T09:00:00Z']);
+  await q(`insert into mc.financial_week_inventory(
+      business_id,store_id,coverage_id,external_report_id,inventory_checksum,fetch_status,period_start,period_end
+    ) select business_id,store_id,id,'1234567890',$2,'failed',week_start,week_end
+      from mc.financial_week_coverage where store_id=$1 and credential_generation=1 and week_start='2025-09-22'`,[store.id,'e'.repeat(64)]);
+  await q(`update mc.financial_week_coverage set coverage_status='unavailable',
+    inventory_confirmed_at='2026-10-19T08:00:00Z',last_error_code='financial_inventory_not_confirmed'
+    where store_id=$1 and credential_generation=1 and week_start='2025-09-22'`,[store.id]);
+  const widenedRecovery=await one(`select * from mc.request_financial_inventory_refresh($1,$2)`,[store.id,'2026-10-19T09:01:00Z']);
+  assert.notEqual(widenedRecovery.id,narrowRecovery.id);
+  assert.deepEqual(widenedRecovery.payload.window,{dateFrom:'2025-09-22',dateTo:'2025-09-28'});
+  assert.equal((await one(`select inventory_confirmed_at from mc.financial_week_coverage
+    where store_id=$1 and credential_generation=1 and week_start='2025-09-22'`,[store.id])).inventory_confirmed_at,null);
+  await q(`update mc.jobs set status='running',attempt_count=attempt_count+1,worker_id='manual-empty-list',
+    lease_token='88888888-8888-4888-8888-888888888888',lease_until=clock_timestamp()+interval '5 minutes',
+    heartbeat_at=clock_timestamp(),updated_at=clock_timestamp() where id=$1`,[widenedRecovery.id]);
+  await q(`update mc.job_dispatch set status='running',attempt_count=attempt_count+1,
+    lease_until=clock_timestamp()+interval '5 minutes' where job_id=$1`,[widenedRecovery.id]);
+  const emptyRecovery=await one(`select * from mc.apply_financial_inventory($1,1,$2,$3,'[]'::jsonb)`,[
+    widenedRecovery.id,'88888888-8888-4888-8888-888888888888','manual-empty-list'
+  ]);
+  assert.equal(emptyRecovery.uncovered_weeks,1);
+  assert.deepEqual(await one(`select coverage_status,last_error_code from mc.financial_week_coverage
+    where store_id=$1 and credential_generation=1 and week_start='2025-09-22'`,[store.id]),
+    {coverage_status:'retry',last_error_code:'financial_inventory_not_confirmed'});
+  await one(`select * from mc.complete_job($1,$2,$3,'completed')`,[
+    widenedRecovery.id,'88888888-8888-4888-8888-888888888888','manual-empty-list'
+  ]);
   await context(b.id,queueOutsider.id);
   await rejects(`select * from mc.request_financial_inventory_refresh($1,$2)`,[store.id,'2026-10-05T09:02:00Z'],/owned business context/,
     'manual financial refresh denies a user outside the owned business context');

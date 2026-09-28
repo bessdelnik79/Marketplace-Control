@@ -228,6 +228,42 @@ test('manual refresh is durable and mixed pipeline state remains running',async(
   assert.equal(terminal.error_code,'financial_terminal_fixture');
 });
 
+test('manual refresh recovers every terminal week in the current credential generation',async()=>{
+  const terminalWeeks=await inContext(async client=>(await client.query(`select week_start::text,week_end::text
+    from mc.financial_week_coverage where store_id=$1 and credential_generation=3
+    order by week_start limit 2`,[ids.store])).rows);
+  assert.equal(terminalWeeks.length,2);
+  const staleWeek=await inContext(async client=>{
+    await client.query(`update mc.financial_week_coverage
+      set coverage_status='unavailable',last_error_code='stale_generation_fixture',next_retry_at=null
+      where id=(select id from mc.financial_week_coverage where store_id=$1 and credential_generation=1 order by week_start limit 1)`,[ids.store]);
+    await client.query(`update mc.financial_week_coverage
+      set coverage_status='unavailable',last_error_code='financial_inventory_not_confirmed',next_retry_at=null
+      where store_id=$1 and credential_generation=3 and week_start=any($2::date[])`,[ids.store,terminalWeeks.map(week=>week.week_start)]);
+    return (await client.query(`select id from mc.financial_week_coverage
+      where store_id=$1 and credential_generation=1 order by week_start limit 1`,[ids.store])).rows[0];
+  });
+  const recovery=await requestFinancialInventoryRefresh(ids.user,ids.store,{now:new Date('2025-10-13T09:00:00Z')});
+  const duplicate=await requestFinancialInventoryRefresh(ids.user,ids.store,{now:new Date('2025-10-13T09:01:00Z')});
+  assert.equal(duplicate.id,recovery.id);
+  assert.equal(recovery.payload.reason,'manual_recovery');
+  assert.equal(recovery.payload.recoveryWeeks,2);
+  assert.deepEqual(recovery.payload.window,{dateFrom:terminalWeeks[0].week_start,dateTo:terminalWeeks[1].week_end});
+  const recovered=await inContext(async client=>(await client.query(`select coverage_status,last_error_code,next_retry_at
+    from mc.financial_week_coverage where store_id=$1 and credential_generation=3 and week_start=any($2::date[])
+    order by week_start`,[ids.store,terminalWeeks.map(week=>week.week_start)])).rows);
+  assert.deepEqual(recovered.map(row=>row.coverage_status),['pending','pending']);
+  assert.ok(recovered.every(row=>row.last_error_code===null&&row.next_retry_at===null));
+  assert.deepEqual(await inContext(async client=>(await client.query(`select coverage_status,last_error_code
+    from mc.financial_week_coverage where id=$1`,[staleWeek.id])).rows[0]),
+    {coverage_status:'unavailable',last_error_code:'stale_generation_fixture'});
+  const claimed=(await claimJobs({workerId:'manual-recovery-cleanup',jobTypes:['financial_inventory_refresh'],leaseSeconds:300,limit:100})).find(job=>job.id===recovery.id);
+  assert.ok(claimed);
+  await completeJob({jobId:claimed.id,leaseToken:claimed.lease_token,workerId:'manual-recovery-cleanup',outcome:'completed'});
+  await inContext(client=>client.query(`update mc.financial_week_coverage set coverage_status='complete'
+    where store_id=$1 and credential_generation=3 and week_start=any($2::date[])`,[ids.store,terminalWeeks.map(week=>week.week_start)]));
+});
+
 test('exhausted inventory job makes its uncovered weeks terminal and visible as incomplete',async()=>{
   await inContext(client=>client.query(`insert into mc.financial_week_coverage(
       business_id,store_id,credential_generation,week_start,week_end,check_reasons,coverage_status,
