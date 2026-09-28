@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { startFinancialResultPolling, startFinancialSyncReload } from './financial-poll.js';
+import { startFinancialResultPolling, startFinancialSyncPolling } from './financial-poll.js';
 
-function response(body,{ok=true}={}){return{ok,async json(){return body}}}
+function response(body,{ok=true,status=ok?200:500}={}){return{ok,status,async json(){return body}}}
 
 function harness({fetchImpl=async()=>response({status:'running',publicationId:'publication-1'}),hidden=false,now=()=>0,startedAt=0}={}){
   let timerId=0,reloads=0,removals=0,noteShown=false,visibilityListener;
@@ -87,14 +87,56 @@ test('a hanging request is aborted and polling resumes',async()=>{
   assert.deepEqual(delays(h),[4000]);
 });
 
-test('financial sync reload waits while account settings have unsaved changes',()=>{
-  let dirty=true,reloads=0,nextId=0;
-  const timers=new Map();
-  startFinancialSyncReload({reload(){reloads++},isDirty:()=>dirty,setTimer(fn,delay){const id=++nextId;timers.set(id,{fn,delay});return id},clearTimer(id){timers.delete(id)}});
-  assert.deepEqual([...timers.values()].map(timer=>timer.delay),[5000]);
-  let current=[...timers.entries()][0];timers.delete(current[0]);current[1].fn();
-  assert.equal(reloads,0);
-  dirty=false;
-  current=[...timers.entries()][0];timers.delete(current[0]);current[1].fn();
-  assert.equal(reloads,1);
+function syncHarness({fetchImpl=async()=>response({running:true,title:'Загрузка',note:'44 из 53',buttonLabel:'Загрузка выполняется',buttonDisabled:true,busy:true}),hidden=false}={}){
+  let nextId=0,visibilityListener;const timers=new Map(),updates=[];
+  const controller=startFinancialSyncPolling({statusUrl:'/financial-reports/status?storeId=store-1',fetchImpl,update:value=>updates.push(value),isHidden:()=>hidden,
+    addVisibilityListener:listener=>{visibilityListener=listener},setTimer(fn,delay){const id=++nextId;timers.set(id,{fn,delay});return id},clearTimer(id){timers.delete(id)}});
+  return{controller,timers,updates,setHidden:value=>{hidden=value},show:()=>visibilityListener()};
+}
+
+test('financial sync polling updates only panel state and keeps polling while active',async()=>{
+  const h=syncHarness();
+  await h.controller.checkNow();
+  assert.equal(h.updates.length,1);assert.equal(h.updates[0].title,'Загрузка');
+  assert.deepEqual([...h.timers.values()].map(timer=>timer.delay),[5000]);
+});
+
+test('financial sync polling stops after terminal state without reloading the page',async()=>{
+  const h=syncHarness({fetchImpl:async()=>response({running:false,title:'Загружено не полностью',note:'44 из 53',buttonLabel:'Обновить отчёты',buttonDisabled:false,busy:false})});
+  await h.controller.checkNow();
+  assert.equal(h.updates.length,1);assert.equal(h.updates[0].running,false);assert.equal(h.timers.size,0);
+  const source=await readFile(new URL('./ui.js',import.meta.url),'utf8');
+  assert.doesNotMatch(source,/startFinancialSyncPolling\([^;]+location\.reload/);
+  assert.match(source,/title\.textContent=state\.title/);
+  assert.match(source,/note\.textContent=state\.note/);
+});
+
+test('financial sync network errors retry and hidden pages wait until visible',async()=>{
+  const failed=syncHarness({fetchImpl:async()=>{throw new Error('offline')}});await failed.controller.checkNow();
+  assert.equal(failed.updates.length,0);assert.deepEqual([...failed.timers.values()].map(timer=>timer.delay),[5000]);
+  const hidden=syncHarness({hidden:true});assert.equal(hidden.timers.size,0);hidden.setHidden(false);hidden.show();
+  assert.deepEqual([...hidden.timers.values()].map(timer=>timer.delay),[5000]);
+});
+
+test('financial sync reports persistent network failure and slows retries',async()=>{
+  const errors=[];let nextId=0;const timers=new Map();
+  const controller=startFinancialSyncPolling({statusUrl:'/status',fetchImpl:async()=>{throw new Error('offline')},update(){},onError:value=>errors.push(value),maxConsecutiveErrors:2,
+    setTimer(fn,delay){const id=++nextId;timers.set(id,{fn,delay});return id},clearTimer(id){timers.delete(id)}});
+  await controller.checkNow();assert.equal(errors.length,0);
+  await controller.checkNow();assert.deepEqual(errors,[{reason:'unavailable',terminal:false}]);
+  assert.ok([...timers.values()].some(timer=>timer.delay===30000));
+});
+
+test('financial sync stops on an expired session and exposes an auth error',async()=>{
+  const errors=[];let nextId=0;const timers=new Map();
+  const controller=startFinancialSyncPolling({statusUrl:'/status',fetchImpl:async()=>response(null,{ok:false,status:401}),update(){},onError:value=>errors.push(value),
+    setTimer(fn,delay){const id=++nextId;timers.set(id,{fn,delay});return id},clearTimer(id){timers.delete(id)}});
+  await controller.checkNow();assert.deepEqual(errors,[{reason:'auth',terminal:true}]);assert.equal(timers.size,0);
+});
+
+test('financial sync hanging status request is aborted and polling resumes',async()=>{
+  const h=syncHarness({fetchImpl:(_url,{signal})=>new Promise((resolve,reject)=>signal.addEventListener('abort',()=>reject(new Error('aborted'))))});
+  const checking=h.controller.checkNow(),timeout=[...h.timers.entries()].find(([,timer])=>timer.delay===12000);
+  assert.ok(timeout);h.timers.delete(timeout[0]);timeout[1].fn();await checking;
+  assert.deepEqual([...h.timers.values()].map(timer=>timer.delay),[5000]);
 });

@@ -48,12 +48,12 @@
       import('/financial-poll.js').then(({startFinancialResultPolling})=>startFinancialResultPolling({element:financialCalculation,storage:financialPollStorage,statusUrl:financialCalculation.dataset.financialStatusUrl,publicationId:financialCalculation.dataset.financialPublicationId||null,fetchImpl:fetch,reload:()=>location.reload(),startedAt:started,isHidden:()=>document.hidden,addVisibilityListener:listener=>document.addEventListener('visibilitychange',listener)})).catch(()=>{$('[data-financial-poll-note]',financialCalculation).hidden=false});
     }
   }else financialPollStorage.remove();
-  const financialSync=$('[data-financial-sync-refresh]'),accountFormForSync=$('#account-form');
+  const financialSync=$('[data-financial-sync-refresh]');
   if(financialSync){
-    let accountFormDirty=false;
-    accountFormForSync?.addEventListener('input',()=>{accountFormDirty=true});
-    accountFormForSync?.addEventListener('change',()=>{accountFormDirty=true});
-    import('/financial-poll.js').then(({startFinancialSyncReload})=>startFinancialSyncReload({reload:()=>location.reload(),isDirty:()=>accountFormDirty,isHidden:()=>document.hidden,addVisibilityListener:listener=>document.addEventListener('visibilitychange',listener)})).catch(()=>{});
+    const update=state=>{const title=$('[data-financial-sync-title]',financialSync),note=$('[data-financial-sync-note]',financialSync),button=$('[data-financial-sync-button]',financialSync);title.textContent=state.title;note.textContent=state.note;button.textContent=state.buttonLabel;button.disabled=state.buttonDisabled;financialSync.classList.toggle('has-error',state.failed||state.blocked);if(state.busy)financialSync.setAttribute('aria-busy','true');else financialSync.removeAttribute('aria-busy');if(!state.running)financialSync.removeAttribute('data-financial-sync-refresh')};
+    const showPollError=({reason})=>{const title=$('[data-financial-sync-title]',financialSync),note=$('[data-financial-sync-note]',financialSync),button=$('[data-financial-sync-button]',financialSync);financialSync.removeAttribute('aria-busy');financialSync.classList.add('has-error');if(reason==='auth'){title.textContent='Сеанс завершён';note.textContent='Войдите снова, чтобы проверить состояние загрузки. Сама загрузка на сервере не прерывается.';button.textContent='Войти снова';button.disabled=false;button.dataset.financialSyncLogin='true'}else{title.textContent='Не удалось проверить состояние загрузки';note.textContent='Загрузка на сервере продолжится. Повторим проверку автоматически.'}};
+    financialSync.addEventListener('click',event=>{if(event.target.closest('[data-financial-sync-login]')){event.preventDefault();location.assign('/login')}});
+    import('/financial-poll.js').then(({startFinancialSyncPolling})=>startFinancialSyncPolling({statusUrl:financialSync.dataset.financialSyncStatusUrl,fetchImpl:fetch,update,onError:showPollError,isHidden:()=>document.hidden,addVisibilityListener:listener=>document.addEventListener('visibilitychange',listener)})).catch(()=>{});
   }
   all('[data-period]').forEach(button=>button.addEventListener('click',()=>{all('[data-period]').forEach(b=>b.classList.toggle('selected',b===button));$('[data-calendar="mobile-profit"]').click()}));
   $('[data-info]')?.addEventListener('click',()=>{$('.comparison-info').hidden=!$('.comparison-info').hidden});

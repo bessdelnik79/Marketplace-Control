@@ -379,6 +379,9 @@ export async function getFinancialSyncState(userId,storeId){
                      or (pipeline.last_success_at is null or failed_job.finished_at>pipeline.last_success_at))
                  then coalesce(coverage_state.terminal_error,coverage_state.waiting_error,failed_job.last_error_code) end as error_code,
             coalesce(active_job.created_at,failed_job.created_at) as started_at,
+            active_job.job_type as active_job_type,
+            active_job.status as active_job_status,
+            active_job.available_at as active_job_available_at,
             case when active_job.id is null then failed_job.finished_at end as finished_at,
             coalesce(active_job.payload,failed_job.payload)->'window'->>'dateFrom' as requested_from,
             coalesce(active_job.payload,failed_job.payload)->'window'->>'dateTo' as requested_to,
@@ -420,7 +423,7 @@ export async function getFinancialSyncState(userId,storeId){
              and (job.payload->>'credentialGeneration')::bigint=connection.credential_generation
        ) pipeline on true
        left join lateral (
-         select job.id,job.job_type,job.created_at,job.payload
+         select job.id,job.job_type,job.status,job.available_at,job.created_at,job.payload
            from mc.jobs job where job.business_id=store.business_id and job.store_id=store.id
              and job.job_type in ('financial_inventory_refresh','financial_report_fetch','financial_report_normalize')
              and job.status in ('pending','running')
