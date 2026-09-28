@@ -57,6 +57,7 @@ try {
     'mc.start_financial_daily_generation(uuid,uuid,text,bigint,text,uuid,uuid)',
     'mc.finalize_financial_daily_generation(uuid,uuid,text,uuid,bigint,text,text,text)',
     'mc.publish_financial_daily_generation(uuid,uuid,text,uuid,bigint)',
+    'mc.financial_daily_shadow_day_compatible(uuid,date)',
     'mc.retry_financial_daily_job(uuid,date,date)'
   ]) {
     assert.equal((await one(`select has_function_privilege('public',$1::regprocedure,'execute') as allowed`,[signature])).allowed,false);
@@ -79,13 +80,19 @@ try {
     assert.equal((await one(`select relforcerowsecurity as forced from pg_class join pg_namespace on pg_namespace.oid=pg_class.relnamespace where nspname='mc' and relname=$1`,[table])).forced,true);
   }
   const publicationFunction=(await one(`select pg_get_functiondef('mc.publish_financial_daily_generation(uuid,uuid,text,uuid,bigint)'::regprocedure) definition`)).definition;
+  const shadowDayFunction=(await one(`select pg_get_functiondef('mc.financial_daily_shadow_day_compatible(uuid,date)'::regprocedure) definition`)).definition;
+  const pointerGuard=(await one(`select pg_get_functiondef('mc.guard_financial_daily_current_publication()'::regprocedure) definition`)).definition;
   assert.match(publicationFunction,/status<>'succeeded'/);
   assert.match(publicationFunction,/current_watermark IS DISTINCT FROM generation.watermark_generation/);
-  assert.match(publicationFunction,/comparison.status='matched'/);
-  assert.match(publicationFunction,/legacy_method.version_no=20/);
-  assert.match(publicationFunction,/source_day.accounting_date BETWEEN comparison.period_start AND comparison.period_end/);
+  assert.match(publicationFunction,/financial_daily_shadow_day_compatible/);
+  assert.match(shadowDayFunction,/comparison.status='matched'/);
+  assert.match(shadowDayFunction,/legacy_method.version_no=20/);
+  assert.match(shadowDayFunction,/p_accounting_date BETWEEN comparison.period_start AND comparison.period_end/);
   assert.match(publicationFunction,/financial_daily_publication_scope_incompatible/);
-  assert.match(publicationFunction,/EXCEPT/);
+  assert.match(shadowDayFunction,/EXCEPT/);
+  assert.match(pointerGuard,/mapped_day\.generation_id\s*<>\s*generation\.id/);
+  assert.match(pointerGuard,/prior_day\.accounting_date\s*=\s*mapped_day\.accounting_date/);
+  assert.match(pointerGuard,/prior_day\.generation_id\s*=\s*mapped_day\.generation_id/);
   assert.match(publicationFunction,/ON CONFLICT\(business_id,store_id\) DO UPDATE/);
   pass('daily publication schema atomically gates first cutover and maps one current store history');
   for (const signature of [

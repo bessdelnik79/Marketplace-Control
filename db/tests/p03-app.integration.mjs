@@ -112,6 +112,21 @@ test('daily shadow generation rebuilds saved inputs and matches the exact publis
   const legacyV20=await runFinancialCalculation(ids.user,ids.store,{targetPeriod:{periodStart:'2026-07-13',periodEnd:'2026-07-19'}});
   assert.equal(legacyV20.changed,true);
   await drainDaily();
+  const initialPointer=await context(async client=>(await client.query(
+    `select p.id,p.publication_no,count(d.accounting_date)::int mapped_days
+       from mc.financial_daily_current_publications current
+       join mc.financial_daily_publications p on p.id=current.publication_id
+       join mc.financial_daily_publication_days d on d.publication_id=p.id
+      where current.store_id=$1 group by p.id,p.publication_no`,[ids.store]
+  )).rows[0]);
+  assert.equal(Number(initialPointer.publication_no),1);
+  assert.equal(initialPointer.mapped_days,7);
+  const initialPublished=await getPublishedFinancialPeriod(ids.user,ids.store,'2026-07-13','2026-07-19');
+  assert.equal(initialPublished.publication_source,'daily');
+  assert.equal(initialPublished.publication_id,initialPointer.id);
+  assert.equal(initialPublished.quality,'complete');
+  assert.deepEqual(initialPublished.covered_period,{start:'2026-07-13',end:'2026-07-19'});
+  assert.equal(initialPublished.totals.availableResultAfterTax,'-1404.3400');
   const firstEvent=await context(async client=>(await client.query(
     `select e.* from mc.publications p
        join mc.calculation_runs r on r.id=p.run_id
@@ -157,7 +172,7 @@ test('daily shadow generation rebuilds saved inputs and matches the exact publis
        join mc.financial_daily_publication_days d on d.publication_id=p.id
       where current.store_id=$1 group by p.id,p.publication_no`,[ids.store]
   )).rows[0]);
-  assert.equal(Number(firstPointer.publication_no),1);
+  assert.equal(Number(firstPointer.publication_no),2);
   assert.equal(firstPointer.mapped_days,7);
   const published=await getPublishedFinancialPeriod(ids.user,ids.store,'2026-07-13','2026-07-19');
   assert.equal(published.publication_source,'daily');
@@ -167,7 +182,10 @@ test('daily shadow generation rebuilds saved inputs and matches the exact publis
   assert.equal(published.totals.availableResultAfterTax,'-1404.3400');
 
   const partialEvent=await context(async client=>(await client.query(
-    `select * from mc.emit_financial_input_event($1,$2,'expense','2026-07-15','2026-07-15')`,
+    `select event.* from mc.method_versions method
+       cross join lateral mc.emit_financial_input_event(
+         $1,$2,'shadow_backfill','2026-07-15','2026-07-15',p_source_result_method_version_id=>method.id
+       ) event where method.code='financial_result' and method.version_no=20`,
     [ids.store,`daily-partial:${randomUUID()}`]
   )).rows[0]);
   assert.ok(partialEvent.dispatch_job_id);
@@ -181,7 +199,7 @@ test('daily shadow generation rebuilds saved inputs and matches the exact publis
        join mc.financial_daily_publication_days d on d.publication_id=p.id
       where current.store_id=$1 group by p.id,p.publication_no,p.generation_id`,[ids.store]
   )).rows[0]);
-  assert.equal(Number(secondPointer.publication_no),2);
+  assert.equal(Number(secondPointer.publication_no),3);
   assert.deepEqual([secondPointer.replaced_days,secondPointer.carried_days],[1,6]);
   const republished=await getPublishedFinancialPeriod(ids.user,ids.store,'2026-07-13','2026-07-19');
   assert.equal(republished.publication_source,'daily');
@@ -189,7 +207,10 @@ test('daily shadow generation rebuilds saved inputs and matches the exact publis
   assert.equal(republished.totals.availableResultAfterTax,'-1404.3400');
 
   const retryEvent=await context(async client=>(await client.query(
-    `select * from mc.emit_financial_input_event($1,$2,'tax','2026-07-16','2026-07-16')`,
+    `select event.* from mc.method_versions method
+       cross join lateral mc.emit_financial_input_event(
+         $1,$2,'shadow_backfill','2026-07-16','2026-07-16',p_source_result_method_version_id=>method.id
+       ) event where method.code='financial_result' and method.version_no=20`,
     [ids.store,`daily-retry:${randomUUID()}`]
   )).rows[0]);
   await context(async client=>{

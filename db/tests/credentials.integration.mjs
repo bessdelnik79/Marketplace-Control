@@ -126,7 +126,33 @@ test('inventory context and writes require the current lease and latest credenti
   await completeJob({jobId:current.id,leaseToken:current.lease_token,workerId:'credential-integration-worker',outcome:'completed'});
   for(const old of claimed.filter(item=>item.id!==current.id))await completeJob({jobId:old.id,leaseToken:old.lease_token,workerId:'credential-integration-worker',outcome:'superseded'});
   const [fetchJob]=await claimJobs({workerId:'credential-fetch-worker',jobTypes:['financial_report_fetch'],leaseSeconds:300,limit:1});
-  await inContext(client=>client.query(`update mc.financial_week_inventory set fetch_status='accepted' where store_id=$1`,[ids.store]));
+  await inContext(async client=>{
+    const inventoryRow=(await client.query(`select id,inventory_checksum,period_start,period_end,external_report_id
+      from mc.financial_week_inventory where store_id=$1`,[ids.store])).rows[0];
+    const document=(await client.query(`insert into mc.source_documents(
+      business_id,store_id,origin,document_type,external_document_id,checksum,completeness
+    ) values($1,$2,'wb_api','weekly_realization',$3,$4,'complete') returning id`,
+    [ids.business,ids.store,inventoryRow.external_report_id,inventoryRow.inventory_checksum])).rows[0];
+    const report=(await client.query(`insert into mc.reports(
+      business_id,store_id,external_report_id,period_start,period_end
+    ) values($1,$2,$3,$4,$5) returning id`,
+    [ids.business,ids.store,inventoryRow.external_report_id,inventoryRow.period_start,inventoryRow.period_end])).rows[0];
+    const version=(await client.query(`insert into mc.report_versions(
+      business_id,store_id,report_id,document_id,version_no,checksum,parser_version
+    ) values($1,$2,$3,$4,1,$5,'wb-finance-v11') returning id`,
+    [ids.business,ids.store,report.id,document.id,inventoryRow.inventory_checksum])).rows[0];
+    await client.query(`update mc.report_versions set status='validated' where id=$1`,[version.id]);
+    await client.query(`update mc.report_versions set status='accepted',accepted_at=now() where id=$1`,[version.id]);
+    await client.query(`update mc.reports set current_version_id=$1 where id=$2`,[version.id,report.id]);
+    const method=(await client.query(`select id from mc.method_versions where code='wb_finance_import' and version_no=11`)).rows[0];
+    const normalization=(await client.query(`insert into mc.report_normalizations(
+      business_id,store_id,report_version_id,method_version_id,normalization_key,status
+    ) values($1,$2,$3,$4,$5,'succeeded') returning id`,
+    [ids.business,ids.store,version.id,method.id,`credential-integration:${version.id}`])).rows[0];
+    await client.query(`update mc.financial_week_inventory set fetch_status='accepted',report_version_id=$2,
+      accepted_normalization_id=$3,accepted_inventory_checksum=inventory_checksum,accepted_at=now() where id=$1`,
+    [inventoryRow.id,version.id,normalization.id]);
+  });
   await completeJob({jobId:fetchJob.id,leaseToken:fetchJob.lease_token,workerId:'credential-fetch-worker',outcome:'completed'});
   await enqueueJob(ids.user,{storeId:ids.store,jobType:'financial_inventory_refresh',deduplicationKey:`integration-refresh:${ids.store}`,
     payload:{schemaVersion:1,credentialGeneration:3,window:{dateFrom:'2026-09-21',dateTo:'2026-09-27'}},priority:500,maxAttempts:3});
@@ -134,10 +160,10 @@ test('inventory context and writes require the current lease and latest credenti
   const reapplied=(await pool.query(`select * from mc.apply_financial_inventory($1,$2,$3,$4,$5::jsonb)`,[
     refresh.id,3,refresh.lease_token,'credential-refresh-worker',JSON.stringify(inventory)
   ])).rows[0];
-  assert.equal(Number(reapplied.enqueued_fetches),0);
+  assert.equal(Number(reapplied.enqueued_fetches),1);
   assert.equal(await inContext(async client=>Number((await client.query(
     `select count(*) from mc.jobs where store_id=$1 and job_type='financial_report_fetch'`,[ids.store]
-  )).rows[0].count)),1);
+  )).rows[0].count)),2);
   await completeJob({jobId:refresh.id,leaseToken:refresh.lease_token,workerId:'credential-refresh-worker',outcome:'completed'});
 });
 

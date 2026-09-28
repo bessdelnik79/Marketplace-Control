@@ -100,7 +100,7 @@ export async function saveWbConnection(userId, {storeId,sellerId,scopes,encrypte
         `insert into mc.financial_store_event_state(business_id,store_id,next_generation)
          values($1,$2,2)
          on conflict(business_id,store_id) do update
-           set next_generation=mc.financial_store_event_state.next_generation+1,updated_at=clock_timestamp()`,
+           set next_generation=mc.financial_store_event_state.next_generation+1`,
         [businessId,storeId]
       );
       const planned=(await client.query(

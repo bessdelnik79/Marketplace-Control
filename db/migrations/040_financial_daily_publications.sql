@@ -82,6 +82,37 @@ CREATE TRIGGER immutable_history BEFORE UPDATE OR DELETE ON mc.financial_daily_p
 CREATE TRIGGER immutable_history BEFORE UPDATE OR DELETE ON mc.financial_daily_publication_days
   FOR EACH ROW EXECUTE FUNCTION mc.reject_mutation();
 
+CREATE FUNCTION mc.financial_daily_shadow_day_compatible(p_generation_id uuid,p_accounting_date date)
+RETURNS boolean LANGUAGE sql STABLE SET search_path=pg_catalog,mc AS $$
+  SELECT EXISTS(
+    SELECT 1 FROM mc.financial_daily_generations generation
+    JOIN mc.method_versions generation_method ON generation_method.id=generation.result_method_version_id
+    JOIN mc.financial_daily_shadow_comparisons comparison ON comparison.generation_id=generation.id
+    JOIN mc.calculation_runs legacy_run ON legacy_run.id=comparison.legacy_run_id
+    JOIN mc.method_versions legacy_method ON legacy_method.id=legacy_run.method_version_id
+    WHERE generation.id=p_generation_id
+      AND generation_method.code='financial_result' AND generation_method.version_no=20
+      AND generation_method.implementation_version='financial-result-v20'
+      AND comparison.status='matched' AND p_accounting_date BETWEEN comparison.period_start AND comparison.period_end
+      AND legacy_method.code='financial_result' AND legacy_method.version_no=20
+      AND legacy_method.implementation_version='financial-result-v20' AND legacy_run.request_id IS NOT NULL
+      AND NOT EXISTS(
+        (SELECT product.product_id FROM mc.financial_daily_generation_products product
+          WHERE product.generation_id=generation.id AND product.selected)
+        EXCEPT
+        (SELECT request_product.product_id FROM mc.calculation_request_products request_product
+          WHERE request_product.request_id=legacy_run.request_id)
+      ) AND NOT EXISTS(
+        (SELECT request_product.product_id FROM mc.calculation_request_products request_product
+          WHERE request_product.request_id=legacy_run.request_id)
+        EXCEPT
+        (SELECT product.product_id FROM mc.financial_daily_generation_products product
+          WHERE product.generation_id=generation.id AND product.selected)
+      )
+  )
+$$;
+REVOKE ALL ON FUNCTION mc.financial_daily_shadow_day_compatible(uuid,date) FROM PUBLIC;
+
 CREATE FUNCTION mc.guard_financial_daily_current_publication() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF NOT EXISTS(
@@ -96,14 +127,33 @@ BEGIN
       AND publication.publication_no=(SELECT max(candidate.publication_no)
         FROM mc.financial_daily_publications candidate
         WHERE candidate.business_id=publication.business_id AND candidate.store_id=publication.store_id)
-      AND NOT EXISTS(
+      AND (publication.prior_publication_id IS NULL OR NOT EXISTS(
         SELECT 1 FROM mc.financial_daily_days source_day
          WHERE source_day.generation_id=generation.id
            AND NOT EXISTS(SELECT 1 FROM mc.financial_daily_publication_days mapped_day
              WHERE mapped_day.publication_id=publication.id
                AND mapped_day.accounting_date=source_day.accounting_date
                AND mapped_day.generation_id=generation.id)
-      )
+      ))
+      AND (publication.prior_publication_id IS NOT NULL OR (
+        EXISTS(SELECT 1 FROM mc.financial_daily_publication_days mapped_day
+          WHERE mapped_day.publication_id=publication.id)
+        AND NOT EXISTS(
+          SELECT 1 FROM mc.financial_daily_publication_days mapped_day
+           WHERE mapped_day.publication_id=publication.id
+             AND (mapped_day.generation_id<>generation.id
+               OR NOT mc.financial_daily_shadow_day_compatible(mapped_day.generation_id,mapped_day.accounting_date))
+        )
+        AND NOT EXISTS(
+          SELECT 1 FROM mc.financial_daily_days source_day
+           WHERE source_day.generation_id=generation.id
+             AND mc.financial_daily_shadow_day_compatible(source_day.generation_id,source_day.accounting_date)
+             AND NOT EXISTS(SELECT 1 FROM mc.financial_daily_publication_days mapped_day
+               WHERE mapped_day.publication_id=publication.id
+                 AND mapped_day.accounting_date=source_day.accounting_date
+                 AND mapped_day.generation_id=generation.id)
+        )
+      ))
       AND NOT EXISTS(
         SELECT 1 FROM mc.financial_daily_publication_days mapped_day
          WHERE mapped_day.publication_id=publication.id
@@ -118,6 +168,15 @@ BEGIN
              WHERE mapped_day.publication_id=publication.id
                AND mapped_day.accounting_date=prior_day.accounting_date
                AND mapped_day.generation_id=prior_day.generation_id)
+      ))
+      AND (publication.prior_publication_id IS NULL OR NOT EXISTS(
+        SELECT 1 FROM mc.financial_daily_publication_days mapped_day
+         WHERE mapped_day.publication_id=publication.id
+           AND (mapped_day.accounting_date<generation.affected_from OR mapped_day.accounting_date>generation.affected_to)
+           AND NOT EXISTS(SELECT 1 FROM mc.financial_daily_publication_days prior_day
+             WHERE prior_day.publication_id=publication.prior_publication_id
+               AND prior_day.accounting_date=mapped_day.accounting_date
+               AND prior_day.generation_id=mapped_day.generation_id)
       ))
   ) THEN RAISE EXCEPTION 'financial daily current publication is incomplete' USING ERRCODE='23514'; END IF;
   RETURN NEW;
@@ -180,55 +239,10 @@ BEGIN
    WHERE pointer.business_id=context.business_id AND pointer.store_id=context.store_id FOR UPDATE OF pointer;
 
   IF prior.id IS NULL THEN
-    IF NOT EXISTS(SELECT 1 FROM mc.method_versions method
-      WHERE method.id=generation.result_method_version_id AND method.code='financial_result'
-        AND method.version_no=20 AND method.implementation_version='financial-result-v20')
-      OR NOT EXISTS(
-        SELECT 1 FROM mc.financial_daily_shadow_comparisons comparison
-        JOIN mc.calculation_runs legacy_run ON legacy_run.id=comparison.legacy_run_id
-        JOIN mc.method_versions legacy_method ON legacy_method.id=legacy_run.method_version_id
-        WHERE comparison.generation_id=generation.id AND comparison.status='matched'
-          AND legacy_method.code='financial_result' AND legacy_method.version_no=20
-          AND legacy_method.implementation_version='financial-result-v20' AND legacy_run.request_id IS NOT NULL
-          AND NOT EXISTS(
-              (SELECT product.product_id FROM mc.financial_daily_generation_products product
-                WHERE product.generation_id=generation.id AND product.selected)
-              EXCEPT
-              (SELECT request_product.product_id FROM mc.calculation_request_products request_product
-                WHERE request_product.request_id=legacy_run.request_id)
-            ) AND NOT EXISTS(
-              (SELECT request_product.product_id FROM mc.calculation_request_products request_product
-                WHERE request_product.request_id=legacy_run.request_id)
-              EXCEPT
-              (SELECT product.product_id FROM mc.financial_daily_generation_products product
-                WHERE product.generation_id=generation.id AND product.selected)
-            )
-      ) THEN RAISE EXCEPTION 'financial_daily_publication_shadow_incompatible'; END IF;
-    IF EXISTS(
+    IF NOT EXISTS(
       SELECT 1 FROM mc.financial_daily_days source_day
        WHERE source_day.generation_id=generation.id
-         AND NOT EXISTS(
-           SELECT 1 FROM mc.financial_daily_shadow_comparisons comparison
-           JOIN mc.calculation_runs legacy_run ON legacy_run.id=comparison.legacy_run_id
-           JOIN mc.method_versions legacy_method ON legacy_method.id=legacy_run.method_version_id
-           WHERE comparison.generation_id=generation.id AND comparison.status='matched'
-             AND source_day.accounting_date BETWEEN comparison.period_start AND comparison.period_end
-             AND legacy_method.code='financial_result' AND legacy_method.version_no=20
-             AND legacy_method.implementation_version='financial-result-v20' AND legacy_run.request_id IS NOT NULL
-             AND NOT EXISTS(
-               (SELECT product.product_id FROM mc.financial_daily_generation_products product
-                 WHERE product.generation_id=generation.id AND product.selected)
-               EXCEPT
-               (SELECT request_product.product_id FROM mc.calculation_request_products request_product
-                 WHERE request_product.request_id=legacy_run.request_id)
-             ) AND NOT EXISTS(
-               (SELECT request_product.product_id FROM mc.calculation_request_products request_product
-                 WHERE request_product.request_id=legacy_run.request_id)
-               EXCEPT
-               (SELECT product.product_id FROM mc.financial_daily_generation_products product
-                 WHERE product.generation_id=generation.id AND product.selected)
-             )
-         )
+         AND mc.financial_daily_shadow_day_compatible(source_day.generation_id,source_day.accounting_date)
     ) THEN RAISE EXCEPTION 'financial_daily_publication_shadow_incompatible'; END IF;
   ELSE
     IF EXISTS(
@@ -275,7 +289,9 @@ BEGIN
   INSERT INTO mc.financial_daily_publication_days(
     business_id,store_id,publication_id,accounting_date,generation_id
   ) SELECT day.business_id,day.store_id,published.id,day.accounting_date,day.generation_id
-      FROM mc.financial_daily_days day WHERE day.generation_id=generation.id ORDER BY day.accounting_date;
+      FROM mc.financial_daily_days day WHERE day.generation_id=generation.id
+        AND (prior.id IS NOT NULL OR mc.financial_daily_shadow_day_compatible(day.generation_id,day.accounting_date))
+      ORDER BY day.accounting_date;
 
   INSERT INTO mc.financial_daily_current_publications(business_id,store_id,publication_id)
   VALUES(generation.business_id,generation.store_id,published.id)
