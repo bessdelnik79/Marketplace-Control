@@ -17,7 +17,7 @@ function envelope(start,end,{quality='complete',missingReasons=[],amount='10.000
 }
 
 test('current financial parser keeps v10 as the first compatibility fallback after v11',()=>{
-  assert.deepEqual(compatibleFinancialParserVersions.slice(0,3),['wb-finance-v11','wb-finance-v10','wb-finance-v9']);
+  assert.deepEqual(compatibleFinancialParserVersions.slice(0,3),['wb-finance-v12','wb-finance-v11','wb-finance-v10']);
 });
 
 test('excludes an entire report period when one accepted report lacks current normalization',()=>{

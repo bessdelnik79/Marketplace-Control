@@ -291,12 +291,97 @@ export function createFinancialPipelineRepository({pool}){
          values($1,$2,$3,'wb_bank_payment_sum_v1',$4,$5,$6,$7::jsonb)`,
         [context.business_id,context.store_id,versionId,reconciliation.expectedAmount,reconciliation.actualAmount,reconciliation.status,JSON.stringify({reason:reconciliation.reason,source:'durable_pipeline'})]);
 
+      // A newer immutable normalization supersedes only issues that it no
+      // longer reproduces. Historical normalizations and their evidence stay
+      // intact and queryable.
+      await client.query(
+        `update mc.data_issues old_issue
+            set status='resolved',resolved_at=clock_timestamp(),resolved_by_normalization_id=$1
+           from mc.report_rows source_row
+          where old_issue.business_id=$2 and old_issue.store_id=$3
+            and old_issue.report_row_id=source_row.id
+            and source_row.report_version_id=$4 and old_issue.status='open'
+            and old_issue.report_normalization_id is distinct from $1
+            and not exists(
+              select 1 from mc.data_issues current_issue
+               where current_issue.report_normalization_id=$1
+                 and current_issue.report_row_id=old_issue.report_row_id
+                 and current_issue.code=old_issue.code and current_issue.status='open'
+            )`,
+        [normalization.id,context.business_id,context.store_id,versionId]);
+
       const eventKey=`report-normalize-job:${jobId}`;
       stage='event';
       await client.query(
         `select id from mc.emit_financial_input_event($1,$2,$3,$4,$5,
            p_source_report_version_id=>$6,p_source_normalization_id=>$7)`,
         [context.store_id,eventKey,pointerCurrent?'report_updated':'report_accepted',source.period_start,source.period_end,versionId,normalization.id]);
+
+      // Method v22 cannot publish a range that mixes v20 and v22 days. The
+      // migration queues every current report for local v12 normalization;
+      // the worker that completes the last one emits exactly one full-range
+      // cutover event. No WB call is involved.
+      if(financialParserVersion==='wb-finance-v12'){
+        // Serialize the final readiness check per store. Without this lock two
+        // concurrent last normalizations can each miss the other's commit and
+        // neither would emit the cutover.
+        await client.query(`select id from mc.stores where business_id=$1 and id=$2 for update`,
+          [context.business_id,context.store_id]);
+        const upgrade=(await client.query(
+          `with pointer_range as (
+             select min(day.accounting_date) affected_from,max(day.accounting_date) affected_to
+               from mc.financial_daily_current_publications pointer
+               join mc.financial_daily_publication_days day on day.publication_id=pointer.publication_id
+              where pointer.business_id=$1 and pointer.store_id=$2
+           ), report_range as (
+             select min(report.period_start) affected_from,max(report.period_end) affected_to
+               from mc.reports report join mc.report_versions version on version.id=report.current_version_id
+              where report.business_id=$1 and report.store_id=$2 and version.status='accepted'
+           )
+           select coalesce(pointer_range.affected_from,report_range.affected_from)::text affected_from,
+                  coalesce(pointer_range.affected_to,report_range.affected_to)::text affected_to,
+                  parser.id parser_method_id,result.id result_method_id
+             from pointer_range cross join report_range
+             join mc.method_versions parser on parser.code='wb_finance_import'
+               and parser.implementation_version='wb-finance-v12'
+             join mc.method_versions result on result.code='financial_result'
+               and result.implementation_version='financial-result-v22'
+            where coalesce(pointer_range.affected_from,report_range.affected_from) is not null
+              and exists(select 1 from mc.product_selections selection
+                where selection.business_id=$1 and selection.store_id=$2 and selection.status='confirmed')
+              and not exists(select 1 from mc.financial_input_events prior_upgrade
+                where prior_upgrade.business_id=$1 and prior_upgrade.store_id=$2
+                  and prior_upgrade.event_key='financial-result-upgrade:v22:store:'||$2)
+              and not exists(
+                select 1 from mc.reports pending_report
+                join mc.report_versions pending_version on pending_version.id=pending_report.current_version_id
+                where pending_report.business_id=$1 and pending_report.store_id=$2
+                  and pending_version.status='accepted' and not exists(
+                    select 1 from mc.report_normalizations ready
+                    join mc.method_versions ready_method on ready_method.id=ready.method_version_id
+                    where ready.report_version_id=pending_version.id and ready.status='succeeded'
+                      and ready_method.implementation_version='wb-finance-v12'
+                  )
+              )`,[context.business_id,context.store_id])).rows[0];
+        if(upgrade){
+          await client.query(
+            `insert into mc.calculation_invalidations(business_id,store_id,requested_by,reason,invalidated_at)
+             values($1,$2,$3,'delivery_service_reversal_v21',clock_timestamp())
+             on conflict(store_id) do update set requested_by=excluded.requested_by,reason=excluded.reason,
+               generation_token=gen_random_uuid(),invalidated_at=excluded.invalidated_at`,
+            [context.business_id,context.store_id,context.actor_user_id]);
+          await client.query(
+            `select id from mc.emit_financial_input_event($1,$2,'parser_method_updated',$3,$4,
+               p_source_parser_method_version_id=>$5)`,
+            [context.store_id,`financial-parser-upgrade:v12:store:${context.store_id}`,
+              upgrade.affected_from,upgrade.affected_to,upgrade.parser_method_id]);
+          await client.query(
+            `select id from mc.emit_financial_input_event($1,$2,'result_method_updated',$3,$4,
+               p_source_result_method_version_id=>$5)`,
+            [context.store_id,`financial-result-upgrade:v22:store:${context.store_id}`,
+              upgrade.affected_from,upgrade.affected_to,upgrade.result_method_id]);
+        }
+      }
       return{superseded:false,insertedRows,issues,normalizationId:normalization.id};
     });}catch(error){
       if(/^financial_[a-z0-9_]{1,99}$/.test(String(error?.message??''))||(error?.code&&error.code!=='P0001'))throw error;

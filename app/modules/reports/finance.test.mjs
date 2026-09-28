@@ -108,6 +108,16 @@ test('financial corrections preserve reversal direction and names containing ret
   assert.equal(compensation.quantity,'1');
 });
 
+test('negative delivery service is a verified global expense reversal without mutable WB labels',()=>{
+  const source=row({retailAmount:null,docTypeName:'Изменяемый текст',sellerOperName:'Новое название WB',deliveryService:'-14.64'});
+  const operation=normalizeFinancialOperation(source);
+  const component=operation.components.find(item=>item.sourceField==='deliveryService');
+  assert.equal(operation.operationType,'service_charge');
+  assert.equal(component.categoryCode,'logistics');
+  assert.equal(component.amountSigned,'14.64');
+  assert.deepEqual(unverifiedFinancialComponents(source,operation,true),[]);
+});
+
 test('verified WB expense fields use per-row kopeck rounding without floating point',()=>{
   const operation=normalizeFinancialOperation(row({vw:'12.5',vwNds:'2.5',ppvzReward:'3',rebillLogisticCost:'4',cashbackAmount:'5'}));
   assert.deepEqual(operation.components.filter(component=>['vw','vwNds','ppvzReward','rebillLogisticCost'].includes(component.componentKey)).map(({componentKey,categoryCode,amountSigned})=>({componentKey,categoryCode,amountSigned})),[
@@ -126,7 +136,7 @@ test('verified WB expense fields use per-row kopeck rounding without floating po
 });
 
 test('result components without a real item identifier use store scope regardless of operation name and sign', () => {
-  assert.equal(financialParserVersion, 'wb-finance-v11');
+  assert.equal(financialParserVersion, 'wb-finance-v12');
   const cases = [
     ['deliveryService', 'Логистика', 'logistics'],
     ['deliveryService', 'Доставка', 'logistics'],

@@ -4,11 +4,11 @@ import { calculateFinancialResult, calculateStoreTaxReference, createInputFinger
 import { aggregateDailyFinancialGeneration } from './daily-generation.mjs';
 
 export const compatibleFinancialParserVersions=Object.freeze([
-  financialParserVersion,'wb-finance-v10','wb-finance-v9','wb-finance-v8','wb-finance-v7','wb-finance-v6','wb-finance-v5','wb-finance-v4','wb-finance-v3','wb-finance-v2'
+  financialParserVersion,'wb-finance-v11','wb-finance-v10','wb-finance-v9','wb-finance-v8','wb-finance-v7','wb-finance-v6','wb-finance-v5','wb-finance-v4','wb-finance-v3','wb-finance-v2'
 ]);
 
 const qualityRank={complete:0,partial:1,unavailable:2};
-const targetResultVersions=new Set(['financial-result-v10','financial-result-v12','financial-result-v14','financial-result-v16','financial-result-v18','financial-result-v20']);
+const targetResultVersions=new Set(['financial-result-v10','financial-result-v12','financial-result-v14','financial-result-v16','financial-result-v18','financial-result-v20','financial-result-v22']);
 
 function shiftCalendarDate(value,days){
   const text=String(value??'');
@@ -275,7 +275,7 @@ export async function getFinancialCompatibilityBootstrapState(userId,storeId){
           and exists(select 1 from mc.report_normalizations normalization
             join mc.method_versions parser_method on parser_method.id=normalization.method_version_id
            where normalization.report_version_id=report.current_version_id and normalization.status='succeeded'
-             and parser_method.code='wb_finance_import' and parser_method.version_no=11)
+             and parser_method.code='wb_finance_import' and parser_method.version_no=12)
         order by "periodStart","periodEnd"`,[businessId,storeId])).rows;
     return{dailyPublished:false,selectionReady:true,waitingForPipeline:pipelineActive&&!targets.length,targets};
   });
@@ -312,7 +312,7 @@ export async function getCurrentFinancialResult(userId,storeId){
          from mc.result_lines where run_id=$1
         order by accounting_date,result_scope,product_id nulls last,variant_id nulls last,category_code,id`,[publication.run_id]
     )).rows;
-    if(['financial-result-v4','financial-result-v5','financial-result-v6','financial-result-v7','financial-result-v8','financial-result-v9','financial-result-v10','financial-result-v11','financial-result-v12','financial-result-v13','financial-result-v14','financial-result-v15','financial-result-v16','financial-result-v17','financial-result-v18','financial-result-v19','financial-result-v20'].includes(publication.method_version)){
+    if(['financial-result-v4','financial-result-v5','financial-result-v6','financial-result-v7','financial-result-v8','financial-result-v9','financial-result-v10','financial-result-v11','financial-result-v12','financial-result-v13','financial-result-v14','financial-result-v15','financial-result-v16','financial-result-v17','financial-result-v18','financial-result-v19','financial-result-v20','financial-result-v21','financial-result-v22'].includes(publication.method_version)){
       const computations=(await client.query(`select id,product_id,taxable_base::text,tax_amount::text from mc.tax_computations where run_id=$1 order by product_id`,[publication.run_id])).rows;
       const taxTotals=(await client.query(`select coalesce(sum(taxable_base),0)::text as taxable_base,coalesce(sum(tax_amount),0)::text as tax_amount from mc.tax_computations where run_id=$1`,[publication.run_id])).rows[0];
       const segments=(await client.query(`select s.tax_computation_id,c.product_id,s.tax_setting_version_id,s.segment_start::text,s.segment_end::text,s.taxable_base::text,s.rate_fraction::text
@@ -511,7 +511,7 @@ export async function getFinancialPeriodRecoveryState(userId,storeId,periodStart
          from mc.calculation_requests q join mc.method_versions m on m.id=q.method_version_id
         where q.business_id=$1 and q.store_id=$2 and q.is_latest`,[businessId,storeId]
     )).rows[0];
-    if(latest?.implementation_version==='financial-result-v20'
+    if(latest?.implementation_version==='financial-result-v22'
       &&latest.period_start===target.periodStart&&latest.period_end===target.periodEnd){
       if(latest.status==='pending')return{status:'queued'};
       if(latest.status==='running')return{status:'running'};
@@ -853,7 +853,7 @@ export async function prepareFinancialCalculation(userId,storeId,{targetPeriod=n
       `select v.id from mc.tax_settings s join mc.tax_setting_versions v on v.id=s.current_version_id
         where s.business_id=$1 and s.effective_from<=$2 order by s.effective_from,v.id`,[businessId,periodEnd]
     )).rows.map(row=>row.id);
-    const methodVersion=target?20:19;
+    const methodVersion=target?22:21;
     const method=(await client.query(`select id,implementation_version from mc.method_versions where code='financial_result' and version_no=$1`,[methodVersion])).rows[0];
     if(!method)throw new Error('calculation_method_missing');
     const operationLinks=await createConfirmedReturnLinks(client,businessId,storeId,normalized.map(row=>row.normalization_id),method.id);

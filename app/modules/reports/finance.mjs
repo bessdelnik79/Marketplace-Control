@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export const financialReportsEndpoint = 'https://finance-api.wildberries.ru/api/finance/v1/sales-reports/detailed';
-export const financialParserVersion = 'wb-finance-v11';
+export const financialParserVersion = 'wb-finance-v12';
 const unverifiedMoneyFields = [
   'sellerPromo','installmentCoFinancingAmount','cashbackAmount',
   'cashbackCommissionChange','sellerPromoDiscount','loyaltyDiscount','agencyVat'
@@ -368,6 +368,7 @@ const verifiedResultExpenseCategories = new Set([
 
 export function unverifiedFinancialComponents(row,operation,productMatched=false){
   return operation.components.filter(component=>{
+    const raw=decimal(row?.[component.sourceField]);
     if(component.sourceField==='rebillLogisticCost'&&component.categoryCode==='rebill_logistic_compensation')return false;
     if(component.sourceField==='forPay'&&component.categoryCode==='payout')return false;
     if(component.sourceField==='ppvzSalesCommission'&&component.categoryCode==='commission')return false;
@@ -378,7 +379,8 @@ export function unverifiedFinancialComponents(row,operation,productMatched=false
       return !(operation.operationType==='other'&&isVerifiedPvzComponent(row,component));
     }
     if(unverifiedResultCategories.has(component.categoryCode))return true;
-    const raw=decimal(row?.[component.sourceField]);
+    if(component.sourceField==='deliveryService'&&component.categoryCode==='logistics'
+      &&operation.operationType==='service_charge'&&raw?.startsWith('-'))return false;
     if(raw?.startsWith('-'))return true;
     return financialComponentScope(row,operation,component,productMatched)==='product_expected'&&!productMatched;
   }).map(component=>component.sourceField).sort();

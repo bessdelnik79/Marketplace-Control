@@ -40,7 +40,9 @@ test('only verified WB field, operation and document combinations enter the resu
     assert.equal(isVerifiedWbResultComponent({ sourceField, categoryCode, operationType, docTypeName, sellerOperName, rawValue: '10' }), false, sourceField);
   }
   assert.equal(isVerifiedWbResultComponent({sourceField:'acquiringFee',categoryCode:'acquiring',operationType:'sale',docTypeName:'Продажа',sellerOperName:'Продажа',rawValue:'-10'}),false);
-  assert.equal(isVerifiedWbResultComponent({sourceField:'deliveryService',categoryCode:'logistics',operationType:'service_charge',docTypeName:'',sellerOperName:'Логистика',rawValue:'-10'}),false);
+  assert.equal(isVerifiedWbResultComponent({sourceField:'deliveryService',categoryCode:'logistics',operationType:'service_charge',docTypeName:'Изменяемый текст',sellerOperName:'Новое название WB',rawValue:'-10'}),true);
+  assert.equal(isVerifiedWbResultComponent({sourceField:'deliveryService',categoryCode:'deduction',operationType:'service_charge',docTypeName:'',sellerOperName:'',rawValue:'-10'}),false);
+  assert.equal(isVerifiedWbResultComponent({sourceField:'deliveryService',categoryCode:'logistics',operationType:'sale',docTypeName:'Продажа',sellerOperName:'Продажа',rawValue:'-10'}),false);
   assert.equal(isVerifiedWbResultComponent({sourceField:'deduction',categoryCode:'promotion',operationType:'adjustment',docTypeName:'',sellerOperName:'Удержание',bonusTypeName:'Оказание услуг «WB Продвижение», документ №315213683',rawValue:'304'}),true);
   assert.equal(isVerifiedWbResultComponent({sourceField:'deduction',categoryCode:'promotion',operationType:'adjustment',docTypeName:'',sellerOperName:'Удержание',bonusTypeName:'Иная услуга',rawValue:'304'}),false);
   assert.equal(isVerifiedWbResultComponent({sourceField:'deduction',categoryCode:'promotion',operationType:'adjustment',docTypeName:'',sellerOperName:'Удержание',bonusTypeName:'Оказание услуг «WB Продвижение», иной документ',rawValue:'304'}),false);
@@ -122,6 +124,21 @@ test('transport reimbursement references remain fail-closed without an exact zer
       {id:'vat',operationVersionId:'row-3-b',rrdId:0,classificationStatus:'unclassified',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-08-19',categoryCode:'wb_reward_vat',sourceField:'vwNds',rawValue:'3',operationType:'service_charge',amountSigned:'3'}
     ]
   ])assert.ok(calculateFinancialResult({...base,financialComponents}).missingReasons.includes('operation_unclassified'));
+});
+
+test('negative delivery service reversals reduce WB expenses for every period without mutable labels',()=>{
+  const corrections=['delivery-1','delivery-2','delivery-3'].map((id,index)=>({
+    id,classificationStatus:'confirmed',scopeCode:'selected_product',productId:'product-1',
+    accountingDate:index===0?'2026-09-15':'2026-09-17',categoryCode:'logistics',sourceField:'deliveryService',
+    rawValue:'-14.64',operationType:'service_charge',docTypeName:'Изменяемый текст',sellerOperName:'Новое название WB',
+    amountSigned:'14.6400'
+  }));
+  const result=calculateFinancialResult({
+    periodStart:'2026-09-14',periodEnd:'2026-09-20',selectedProductIds:['product-1'],financialComponents:corrections
+  });
+  assert.equal(result.missingReasons.includes('operation_unclassified'),false);
+  assert.equal(result.totals.selectedProductsResultBeforeTax,'43.9200');
+  assert.equal(result.totals.availableResultBeforeTax,'43.9200');
 });
 
 test('an unclassified operation still fails closed for unknown reconciliation fields and invalid non-result scopes',()=>{

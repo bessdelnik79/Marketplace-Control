@@ -104,6 +104,8 @@ export function isVerifiedWbResultComponent({ categoryCode, sourceField, operati
       (operationType==='return'&&document==='Возврат'&&name==='Возврат')||
       (operationType==='other'&&document==='Продажа'&&name==='Возмещение за выдачу и возврат товаров на ПВЗ');
   }
+  if(sourceField==='deliveryService'&&categoryCode==='logistics'
+    &&operationType==='service_charge'&&value.startsWith('-'))return true;
   if(value.startsWith('-'))return false;
   if (sourceField === 'retailAmount') {
     return (categoryCode === 'revenue' && operationType === 'sale') ||
