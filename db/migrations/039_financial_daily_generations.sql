@@ -16,14 +16,18 @@ ALTER TABLE mc.financial_input_events
   ADD COLUMN source_result_method_version_id uuid REFERENCES mc.method_versions(id);
 
 UPDATE mc.financial_input_events event
-   SET actor_user_id=(
-    SELECT membership.user_id
-      FROM mc.memberships membership
-     WHERE membership.business_id=event.business_id
-       AND membership.role IN ('owner','editor')
-     ORDER BY CASE membership.role WHEN 'owner' THEN 0 ELSE 1 END,
-              membership.created_at,membership.user_id
-     LIMIT 1
+   SET actor_user_id=coalesce(
+    (SELECT audit.actor_user_id
+       FROM mc.audit_events audit
+      WHERE audit.business_id=event.business_id AND audit.entity_id=event.dispatch_job_id
+        AND audit.actor_user_id IS NOT NULL
+      ORDER BY audit.created_at,audit.id LIMIT 1),
+    (SELECT membership.user_id
+       FROM mc.memberships membership
+      WHERE membership.business_id=event.business_id
+      ORDER BY CASE membership.role WHEN 'owner' THEN 0 WHEN 'editor' THEN 1 ELSE 2 END,
+               membership.created_at,membership.user_id
+      LIMIT 1)
   );
 
 ALTER TABLE mc.financial_input_events ENABLE TRIGGER financial_input_events_no_update;

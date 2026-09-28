@@ -1105,6 +1105,7 @@ try {
     const dailyJob=await done(`select * from mc.enqueue_job($1,'financial_dates_recalculate','daily-upgrade-job','{"schemaVersion":1,"eventGeneration":1,"affectedFrom":"2026-09-07","affectedTo":"2026-09-13","allowsWbApi":false}'::jsonb,clock_timestamp(),200,20)`,[dailyStore.id]);
     await dq(`insert into mc.financial_store_event_state(business_id,store_id,next_generation) values($1,$2,2)`,[dailyBusiness.id,dailyStore.id]);
     const legacyEvent=await done(`insert into mc.financial_input_events(business_id,store_id,event_generation,event_key,event_type,affected_from,affected_to,source_report_version_id,source_normalization_id,dispatch_job_id) values($1,$2,1,'daily-upgrade-event','report_accepted','2026-09-07','2026-09-13',$3,$4,$5) returning id`,[dailyBusiness.id,dailyStore.id,dailyVersion.id,dailyNormalization.id,dailyJob.id]);
+    await dq(`delete from mc.memberships where business_id=$1 and user_id=$2`,[dailyBusiness.id,dailyUser.id]);
     await dailyUpgradeDb.exec(await readFile(path.join(root,'db/migrations/039_financial_daily_generations.sql'),'utf8'));
     assert.equal((await done(`select actor_user_id from mc.financial_input_events where id=$1`,[legacyEvent.id])).actor_user_id,dailyUser.id);
     await assert.rejects(()=>dq(`update mc.financial_input_events set event_key='changed' where id=$1`,[legacyEvent.id]),/immutable record/);
