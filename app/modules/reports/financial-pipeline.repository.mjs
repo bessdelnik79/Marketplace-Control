@@ -196,6 +196,7 @@ export function createFinancialPipelineRepository({pool}){
       // lease had already expired, the heartbeat fails and every normalization
       // write is rolled back before acceptance.
       await client.query('select (mc.heartbeat_job($1,$2,$3,300)).id',[jobId,leaseToken,workerId]);
+      await client.query("select set_config('app.user_id',$1,true)",[context.actor_user_id]);
       stage='source';
       const source=(await client.query(
         `select rv.id,rv.status,rv.document_id,rv.supersedes_version_id,r.id as report_id,r.external_report_id,
