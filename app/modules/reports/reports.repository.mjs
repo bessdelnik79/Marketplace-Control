@@ -392,12 +392,13 @@ export async function getFinancialSyncState(userId,storeId){
               else 'idle' end) as progress,
             coverage_state.total_weeks,
             coverage_state.complete_weeks,
+            coverage_state.empty_weeks,
             coverage_state.pending_weeks,
             coverage_state.failed_weeks,
             (select max(coverage.week_end) from mc.financial_week_coverage coverage
               where coverage.business_id=store.business_id and coverage.store_id=store.id
                 and coverage.credential_generation=connection.credential_generation
-                and coverage.coverage_status='complete') as coverage_to,
+                and coverage.coverage_status in ('complete','empty')) as coverage_to,
             (select count(*)::int from mc.reports rp where rp.business_id=store.business_id and rp.store_id=store.id and rp.current_version_id is not null) as report_count,
             (select count(*)::int
                from mc.data_issues di
@@ -442,9 +443,10 @@ export async function getFinancialSyncState(userId,storeId){
        left join lateral (
          select coalesce(bool_or(coverage.coverage_status in ('pending','inventory_confirmed','fetching','retry')),false) as waiting,
                 coalesce(bool_or(coverage.coverage_status in ('partial','unavailable')),false) as terminal,
-                count(*)::int as total_weeks,
-                count(*) filter(where coverage.coverage_status='complete')::int as complete_weeks,
-                count(*) filter(where coverage.coverage_status in ('pending','inventory_confirmed','fetching','retry'))::int as pending_weeks,
+             count(*)::int as total_weeks,
+             count(*) filter(where coverage.coverage_status='complete')::int as complete_weeks,
+             count(*) filter(where coverage.coverage_status='empty')::int as empty_weeks,
+             count(*) filter(where coverage.coverage_status in ('pending','inventory_confirmed','fetching','retry'))::int as pending_weeks,
                 count(*) filter(where coverage.coverage_status in ('partial','unavailable'))::int as failed_weeks,
                 (array_agg(coverage.last_error_code order by coverage.updated_at desc)
                   filter(where coverage.coverage_status in ('partial','unavailable') and coverage.last_error_code is not null))[1] as terminal_error,

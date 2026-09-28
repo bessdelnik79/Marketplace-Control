@@ -1231,6 +1231,7 @@
 | last_error_code | text | да | — |
 | created_at | timestamp with time zone | нет | now() |
 | updated_at | timestamp with time zone | нет | now() |
+| empty_confirmed_by_job_id | uuid | да | — |
 
 Ограничения и связи:
 
@@ -1238,8 +1239,10 @@
 - `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
 - `CHECK (((EXTRACT(isodow FROM week_start) = (1)::numeric) AND (week_end = (week_start + 6))))`
 - `CHECK ((cardinality(check_reasons) > 0))`
-- `CHECK ((coverage_status = ANY (ARRAY['pending'::text, 'inventory_confirmed'::text, 'fetching'::text, 'complete'::text, 'partial'::text, 'retry'::text, 'unavailable'::text])))`
+- `CHECK ((coverage_status = ANY (ARRAY['pending'::text, 'inventory_confirmed'::text, 'fetching'::text, 'complete'::text, 'empty'::text, 'partial'::text, 'retry'::text, 'unavailable'::text])))`
 - `CHECK ((credential_generation > 0))`
+- `FOREIGN KEY (empty_confirmed_by_job_id) REFERENCES mc.jobs(id) ON DELETE RESTRICT`
+- `CHECK (((coverage_status <> 'empty'::text) OR ((inventory_confirmed_at IS NOT NULL) AND (empty_confirmed_by_job_id IS NOT NULL))))`
 - `CHECK (((last_error_code IS NULL) OR (last_error_code ~ '^[a-z0-9][a-z0-9_.:-]{0,99}$'::text)))`
 - `PRIMARY KEY (id)`
 

@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,45);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,46);
   assert.deepEqual((await q("select table_name from information_schema.tables where table_schema='mc' and table_name in ('financial_input_events','financial_store_event_state') order by table_name")).map(row=>row.table_name),['financial_input_events','financial_store_event_state']);
   assert.equal((await one("select relforcerowsecurity as forced from pg_class join pg_namespace on pg_namespace.oid=pg_class.relnamespace where nspname='mc' and relname='financial_input_events'")).forced,true);
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.establish_financial_pipeline_context(uuid,bigint,uuid,text,text)'::regprocedure"));
@@ -794,9 +794,9 @@ try {
     widenedRecovery.id,'88888888-8888-4888-8888-888888888888','manual-empty-list'
   ]);
   assert.equal(emptyRecovery.uncovered_weeks,1);
-  assert.deepEqual(await one(`select coverage_status,last_error_code from mc.financial_week_coverage
+  assert.deepEqual(await one(`select coverage_status,last_error_code,empty_confirmed_by_job_id from mc.financial_week_coverage
     where store_id=$1 and credential_generation=1 and week_start='2025-09-22'`,[store.id]),
-    {coverage_status:'retry',last_error_code:'financial_inventory_not_confirmed'});
+    {coverage_status:'retry',last_error_code:'financial_inventory_not_confirmed',empty_confirmed_by_job_id:null});
   await one(`select * from mc.complete_job($1,$2,$3,'completed')`,[
     widenedRecovery.id,'88888888-8888-4888-8888-888888888888','manual-empty-list'
   ]);

@@ -160,8 +160,8 @@ export function financialSyncView(financial,store,{now=new Date()}={}){
   if(!store.connected)return lockedView('Сначала подключите Wildberries','Для отчётов нужен токен только для чтения с категорией «Финансы».');
   financial=financial??{};
   const progress=financial.progress??{},running=financial.run_status==='running',failed=financial.run_status==='failed',blocked=financial.stream_status==='blocked';
-  const totalWeeks=Number(financial.total_weeks??0),completeWeeks=Number(financial.complete_weeks??0),failedWeeks=Number(financial.failed_weeks??0);
-  const weekProgress=totalWeeks?`Загружено недель: ${completeWeeks} из ${totalWeeks}${failedWeeks?` · недоступно: ${failedWeeks}`:''}. `:'';
+  const totalWeeks=Number(financial.total_weeks??0),completeWeeks=Number(financial.complete_weeks??0),emptyWeeks=Number(financial.empty_weeks??0),failedWeeks=Number(financial.failed_weeks??0),checkedWeeks=completeWeeks+emptyWeeks;
+  const weekProgress=totalWeeks?`Проверено недель: ${checkedWeeks} из ${totalWeeks}. С отчётами: ${completeWeeks}${emptyWeeks?` · без отчётов WB: ${emptyWeeks}`:''}${failedWeeks?` · недоступно: ${failedWeeks}`:''}. `:'';
   const date=value=>value?new Date(value).toLocaleString('ru-RU',{timeZone:'Europe/Moscow',day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'}):'';
   const coverage=displayDate(financial.coverage_to,{day:'numeric',month:'long',year:'numeric'});
   const retryAt=financial.active_job_available_at?new Date(financial.active_job_available_at):null;
@@ -170,7 +170,7 @@ export function financialSyncView(financial,store,{now=new Date()}={}){
   if(waitingRetry){title='Повторно проверим финансовые отчёты';note=`${weekProgress}Wildberries пока не подтвердил отчёты. Следующая попытка — ${date(retryAt)}.`;}
   else if(running){title=progress.stage==='saving'?'Сохраняем финансовые отчёты':'Загружаем финансовые отчёты';note=`${weekProgress}Можно закрыть страницу — загрузка продолжится.`;}
   else if(failed||blocked){title=blocked?'Загрузка финансовых отчётов остановлена':'Финансовые отчёты загружены не полностью';note=`${weekProgress}${financialSyncErrors[financial.error_code]||'Повторите загрузку. Техническая причина сохранена в журнале службы.'}`;}
-  else if(financial.last_success_at){title='Финансовые отчёты загружены';note=`Покрытие по ${coverage||'последнюю доступную дату'} · отчётов: ${Number(financial.report_count??0)} · замечаний: ${Number(financial.issue_count??0)}. Обновлено ${date(financial.last_success_at)}.`;}
+  else if(financial.last_success_at){title=emptyWeeks?'Проверка финансовых отчётов завершена':'Финансовые отчёты загружены';note=`${weekProgress}Покрытие проверено по ${coverage||'последнюю доступную дату'} · отчётов: ${Number(financial.report_count??0)} · замечаний: ${Number(financial.issue_count??0)}. Обновлено ${date(financial.last_success_at)}.`;}
   return{locked:false,title,note,running,waitingRetry,failed,blocked,busy:running&&!waitingRetry,
     buttonLabel:waitingRetry?'Ожидаем повторной проверки':running?'Загрузка выполняется':financial.last_success_at?'Обновить отчёты':'Загрузить отчёты',
     buttonDisabled:running||blocked};

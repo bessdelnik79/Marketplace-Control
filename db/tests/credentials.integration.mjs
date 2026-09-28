@@ -121,7 +121,10 @@ test('inventory context and writes require the current lease and latest credenti
     current.id,3,current.lease_token,'credential-integration-worker',JSON.stringify(inventory)
   ])).rows[0];
   assert.equal(applied.superseded,false);
-  assert.ok(Number(applied.uncovered_weeks)>0);
+  assert.equal(Number(applied.uncovered_weeks),0);
+  assert.equal(await inContext(async client=>Number((await client.query(
+    `select count(*) from mc.financial_week_coverage where store_id=$1 and credential_generation=3 and coverage_status='empty'`,[ids.store]
+  )).rows[0].count)),52);
   assert.equal(await inContext(async client=>Number((await client.query(
     `select count(*) from mc.jobs where store_id=$1 and job_type='financial_report_fetch'`,[ids.store]
   )).rows[0].count)),1);
