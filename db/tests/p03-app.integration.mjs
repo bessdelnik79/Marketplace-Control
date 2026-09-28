@@ -114,7 +114,7 @@ test('daily shadow generation rebuilds saved inputs and matches the exact publis
     `select e.* from mc.publications p
        join mc.calculation_runs r on r.id=p.run_id
        cross join lateral mc.emit_financial_input_event(
-         p.store_id,$2,'shadow_backfill',p.period_start,'2026-07-15',
+         p.store_id,$2,'shadow_backfill',r.period_start,'2026-07-15',
          p_source_result_method_version_id=>r.method_version_id
        ) e
       where p.store_id=$1 and p.is_current`,[ids.store,`daily-shadow:${randomUUID()}`]
@@ -123,7 +123,7 @@ test('daily shadow generation rebuilds saved inputs and matches the exact publis
     `select e.* from mc.publications p
        join mc.calculation_runs r on r.id=p.run_id
        cross join lateral mc.emit_financial_input_event(
-         p.store_id,$2,'shadow_backfill','2026-07-16',p.period_end,
+         p.store_id,$2,'shadow_backfill','2026-07-16',r.period_end,
          p_source_result_method_version_id=>r.method_version_id
        ) e
       where p.store_id=$1 and p.is_current`,[ids.store,`daily-shadow:${randomUUID()}`]
