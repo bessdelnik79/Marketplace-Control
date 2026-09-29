@@ -5,6 +5,7 @@ const RESULT_CATEGORIES = new Set([
   'revenue', 'revenue_return', 'acquiring', 'logistics',
   'storage', 'acceptance', 'penalty', 'deduction', 'commission_adjustment',
   'other_adjustment', 'promotion', 'pickup_reward', 'wb_reward_without_vat', 'wb_reward_vat',
+  'return_wb_expense_reversal',
 ]);
 const NON_RESULT_CATEGORIES = new Set(['payout','commission','loyalty_compensation','loyalty_discount_reference','rebill_logistic_compensation']);
 const VERIFIED_RECONCILIATION_COMPONENTS = new Map([
@@ -241,6 +242,7 @@ export function calculateStoreTaxReference({ periodStart, periodEnd, selectedPro
     const document = String(row?.docTypeName ?? '').trim().toLocaleLowerCase('ru-RU');
     const operation = String(row?.sellerOperName ?? '').trim().toLocaleLowerCase('ru-RU');
     const isSaleOrReturn = (document === 'продажа' && operation === 'продажа') || (document === 'возврат' && operation === 'возврат');
+    if (!productId && /^\d+$/.test(String(row?.wbArticle??'').trim()) && !/^0+$/.test(String(row?.wbArticle??'').trim())) continue;
     if (!productId) {
       if (isSaleOrReturn) reasons.add('tax_source_unlinked');
       if (isSaleOrReturn && (raw === null || raw === undefined || raw === '')) reasons.add('tax_source_unverified');
@@ -487,6 +489,35 @@ function verifiedTransportReimbursementReferenceIds(components){
   return verified;
 }
 
+const RETURN_WB_EXPENSE_FIELDS=new Set(['acquiringFee','vw','vwNds','ppvzReward']);
+const RETURN_RAW_SCALE=12;
+
+function rawReturnAmount(value){
+  if(value===null||value===undefined||String(value).trim()==='')return 0n;
+  return parseDecimal(String(value).trim().replace(',','.'),RETURN_RAW_SCALE,'calculation_invalid_return_expense');
+}
+
+function roundReturnAmountToMoney(value){
+  const divisor=10n**BigInt(RETURN_RAW_SCALE-2),absolute=value<0n?-value:value;
+  const kopecks=(absolute+divisor/2n)/divisor;
+  return(value<0n?-kopecks:kopecks)*100n;
+}
+
+export function calculateReturnWbExpenseReversal(components){
+  const fields=new Map();
+  for(const component of components??[]){
+    const field=String(component?.sourceField??'');
+    if(!RETURN_WB_EXPENSE_FIELDS.has(field)&&!['retailAmount','forPay'].includes(field))continue;
+    if(fields.has(field))invalid('calculation_ambiguous_return_expense');
+    fields.set(field,rawReturnAmount(component.rawValue));
+  }
+  if(!fields.has('retailAmount')||!fields.has('forPay'))return null;
+  const expense=[...RETURN_WB_EXPENSE_FIELDS].reduce((sum,field)=>sum+(fields.get(field)??0n),0n);
+  const control=fields.get('retailAmount')-fields.get('forPay');
+  const rounded=roundReturnAmountToMoney(expense);
+  return rounded>0n&&rounded===roundReturnAmountToMoney(control)?rounded:null;
+}
+
 function totalsFor(lines,taxUsable=false) {
   let selected = 0n, store = 0n, tax=0n;
   for (const line of lines) {
@@ -526,11 +557,51 @@ export function calculateFinancialResult({
   const seenSources = new Set();
   const transportReimbursementReferences=verifiedTransportReimbursementReferenceIds(financialComponents);
 
+  const operationsById = new Map();
+  for (const operation of operations) {
+    const id = String(operation?.id ?? '').trim();
+    if (!id) continue;
+    const matches = operationsById.get(id) ?? [];
+    matches.push(operation);
+    operationsById.set(id, matches);
+  }
+  const componentsByOperation=new Map();
+  const returnExpenseComponentIds=new Set();
+  for(const component of financialComponents){
+    const operationId=String(component?.operationVersionId??'').trim();
+    if(!operationId)continue;
+    const group=componentsByOperation.get(operationId)??[];
+    group.push(component);componentsByOperation.set(operationId,group);
+    if(component?.operationType==='return'&&RETURN_WB_EXPENSE_FIELDS.has(component?.sourceField))returnExpenseComponentIds.add(String(component.id));
+  }
+  const excludedProduct = source => {
+    const wbArticle=String(source?.wbArticle??'').trim();
+    if(!/^\d+$/.test(wbArticle)||/^0+$/.test(wbArticle))return false;
+    if(source?.productId&&selected.has(String(source.productId)))return false;
+    return true;
+  };
+  const confirmedReturnSale = operation => {
+    const operationId=String(operation?.id??'');
+    const possibleLinks=operationLinks.filter(link=>String(link?.fromOperationVersionId??'')===operationId
+      &&link?.linkType==='return_to_original_sale'&&link?.status!=='rejected');
+    if(possibleLinks.length!==1||possibleLinks[0]?.status!=='confirmed')return null;
+    const link=possibleLinks[0];
+    const linkedSales=operationsById.get(String(link?.toOperationVersionId??''))??[];
+    const sale=linkedSales.length===1?linkedSales[0]:null;
+    if(!sale||sale?.state==='withdrawn'||sale?.operationType!=='sale'
+      ||String(sale?.productId??'')!==String(operation?.productId??'')
+      ||String(sale?.variantId??'')!==String(operation?.variantId??'')
+      ||validDate(sale?.accountingDate)>validDate(operation?.accountingDate))return null;
+    return{link,sale};
+  };
+
   for (const component of financialComponents) {
     if (component?.state === 'withdrawn' || !sourceInPeriod(component, range)) continue;
     const componentId = uniqueSource(seenSources, component?.id, 'financial_component');
     validateScopeStructure(component);
+    if(excludedProduct(component))continue;
     if (component?.productId && !selected.has(String(component.productId))) continue;
+    if(returnExpenseComponentIds.has(String(componentId)))continue;
     if (NON_RESULT_CATEGORIES.has(component?.categoryCode)) {
       if(!isVerifiedNonResultComponent(component))reasons.add('operation_unclassified');
       continue;
@@ -566,42 +637,29 @@ export function calculateFinancialResult({
     });
   }
 
-  const operationsById = new Map();
-  for (const operation of operations) {
-    const id = String(operation?.id ?? '').trim();
-    if (!id) continue;
-    const matches = operationsById.get(id) ?? [];
-    matches.push(operation);
-    operationsById.set(id, matches);
-  }
-
   for (const operation of operations) {
     if (operation?.state === 'withdrawn' || !sourceInPeriod(operation, range)) continue;
     const operationId = uniqueSource(seenSources, operation?.id, 'operation');
     if (!['sale', 'return'].includes(operation?.operationType)) continue;
+    if(excludedProduct(operation))continue;
     const scope = resolveScope({ ...operation, scopeCode: operation.scopeCode ?? 'selected_product' }, selected, reasons);
     if (!scope) continue;
     if (operation.operationType === 'return') {
-      const possibleLinks = operationLinks.filter(link =>
-        String(link?.fromOperationVersionId ?? '') === operationId &&
-        link?.linkType === 'return_to_original_sale' &&
-        link?.status !== 'rejected'
-      );
-      if (possibleLinks.length !== 1 || possibleLinks[0]?.status !== 'confirmed') {
+      const confirmed=confirmedReturnSale(operation);
+      if (!confirmed) {
         reasons.add('return_original_sale_unmatched');
         continue;
       }
-      const link = possibleLinks[0];
-      const linkedSales = operationsById.get(String(link?.toOperationVersionId ?? '')) ?? [];
-      const sale = linkedSales.length === 1 ? linkedSales[0] : null;
+      const {link,sale}=confirmed;
       const returnDate = validDate(operation.accountingDate);
-      if (!sale || sale?.state === 'withdrawn' || sale?.operationType !== 'sale' ||
-          String(sale?.productId ?? '') !== String(operation?.productId ?? '') ||
-          String(sale?.variantId ?? '') !== String(operation?.variantId ?? '') ||
-          validDate(sale?.accountingDate) > returnDate) {
-        reasons.add('return_original_sale_unmatched');
-        continue;
-      }
+      const reversal=calculateReturnWbExpenseReversal(componentsByOperation.get(operationId)??[]);
+      if(reversal===null)reasons.add('operation_unclassified');
+      else addLine(lines,{
+        ...scope,accountingDate:returnDate,categoryCode:'return_wb_expense_reversal'
+      },reversal,{
+        sourceType:'return_expense_reversal',sourceId:operationId,reportRowId:requiredId(operation.reportRowId),
+        operationLinkId:requiredId(link.id),contributionAmount:formatDecimal(reversal)
+      });
       const saleDate = validDate(sale.accountingDate);
       const cost = selectCost(costVersions, String(sale.variantId), saleDate);
       if (!cost) {

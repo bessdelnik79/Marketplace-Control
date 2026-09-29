@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   calculateFinancialResult,
+  calculateReturnWbExpenseReversal,
   calculateStoreTaxReference,
   canonicalJson,
   createInputFingerprint,
@@ -395,31 +396,76 @@ test('store expenses stay separate from selected product expenses', () => {
   ]);
 });
 
-test('return COGS restores original sale cost on the return date', () => {
+test('confirmed return reverses WB expenses once and restores original sale cost', () => {
   const result = calculateFinancialResult({
     periodStart: '2026-07-13', periodEnd: '2026-07-19', selectedProductIds: ['product-1'],
+    financialComponents: [
+      { id: 'return-retail', operationVersionId: 'return-1', operationType: 'return', productId: 'product-1', variantId: 'variant-1', accountingDate: '2026-07-16', scopeCode: 'selected_product', classificationStatus: 'confirmed', categoryCode: 'revenue_return', sourceField: 'retailAmount', rawValue: '1500', amountSigned: '-1500.0000' },
+      { id: 'return-payout', operationVersionId: 'return-1', operationType: 'return', productId: 'product-1', variantId: 'variant-1', accountingDate: '2026-07-16', scopeCode: 'reconciliation', classificationStatus: 'confirmed', categoryCode: 'payout', sourceField: 'forPay', rawValue: '1158.25', amountSigned: '-1158.2500' },
+      { id: 'return-acquiring', operationVersionId: 'return-1', operationType: 'return', productId: 'product-1', variantId: 'variant-1', accountingDate: '2026-07-16', scopeCode: 'selected_product', classificationStatus: 'unclassified', categoryCode: 'acquiring', sourceField: 'acquiringFee', rawValue: '60', amountSigned: '-60.0000' },
+      { id: 'return-vw', operationVersionId: 'return-1', operationType: 'return', productId: 'product-1', variantId: 'variant-1', accountingDate: '2026-07-16', scopeCode: 'selected_product', classificationStatus: 'confirmed', categoryCode: 'wb_reward_without_vat', sourceField: 'vw', rawValue: '227.511475', amountSigned: '-227.5115' },
+      { id: 'return-vw-nds', operationVersionId: 'return-1', operationType: 'return', productId: 'product-1', variantId: 'variant-1', accountingDate: '2026-07-16', scopeCode: 'selected_product', classificationStatus: 'confirmed', categoryCode: 'wb_reward_vat', sourceField: 'vwNds', rawValue: '50.05', amountSigned: '-50.0500' },
+      { id: 'return-ppvz', operationVersionId: 'return-1', operationType: 'return', productId: 'product-1', variantId: 'variant-1', accountingDate: '2026-07-16', scopeCode: 'selected_product', classificationStatus: 'unclassified', categoryCode: 'pickup_reward', sourceField: 'ppvzReward', rawValue: '4.188525', amountSigned: '-4.1885' }
+    ],
     operations: [
-      { id: 'sale-before-period', operationType: 'sale', productId: 'product-1', variantId: 'variant-1', accountingDate: '2026-07-10', quantity: '2' },
-      { id: 'return-1', operationType: 'return', productId: 'product-1', variantId: 'variant-1', accountingDate: '2026-07-16', quantity: '-1.234567' }
+      { id: 'sale-before-period', operationType: 'sale', productId: 'product-1', variantId: 'variant-1', accountingDate: '2026-07-10', quantity: '1' },
+      { id: 'return-1', reportRowId: 'return-row-1', operationType: 'return', productId: 'product-1', variantId: 'variant-1', accountingDate: '2026-07-16', quantity: '-1' }
     ],
     operationLinks: [
       { id: 'link-1', fromOperationVersionId: 'return-1', toOperationVersionId: 'sale-before-period', linkType: 'return_to_original_sale', status: 'confirmed' }
     ],
     costVersions: [
-      { id: 'cost-at-sale', variantId: 'variant-1', effectiveFrom: '2026-01-01', unitCost: '10.0000' },
-      { id: 'cost-at-return', variantId: 'variant-1', effectiveFrom: '2026-07-15', unitCost: '60.0000' }
+      { id: 'cost-at-sale', variantId: 'variant-1', effectiveFrom: '2026-01-01', unitCost: '407.0000' }
     ]
   });
   const cogs = result.lines.find(line => line.categoryCode === 'cost_of_goods');
   assert.equal(cogs.accountingDate, '2026-07-16');
-  assert.equal(cogs.amountSigned, '12.3457');
+  assert.equal(cogs.amountSigned, '407.0000');
   assert.deepEqual(cogs.evidence, [{
     sourceType: 'return_cost', sourceId: 'return-1', originalSaleOperationId: 'sale-before-period',
-    operationLinkId: 'link-1', costVersionId: 'cost-at-sale', quantity: '-1.234567',
-    unitCost: '10.0000', contributionAmount: '12.3457'
+    operationLinkId: 'link-1', costVersionId: 'cost-at-sale', quantity: '-1',
+    unitCost: '407.0000', contributionAmount: '407.0000'
   }]);
-  assert.equal(result.totals.selectedProductsResultBeforeTax, '12.3457');
+  const reversal=result.lines.find(line=>line.categoryCode==='return_wb_expense_reversal');
+  assert.equal(reversal.amountSigned,'341.7500');
+  assert.deepEqual(reversal.evidence,[{
+    sourceType:'return_expense_reversal',sourceId:'return-1',reportRowId:'return-row-1',
+    operationLinkId:'link-1',contributionAmount:'341.7500'
+  }]);
+  assert.equal(result.totals.selectedProductsResultBeforeTax, '-751.2500');
   assert.ok(!result.missingReasons.includes('return_original_sale_unmatched'));
+  assert.ok(!result.missingReasons.includes('operation_unclassified'));
+});
+
+test('return WB expense fields are summed raw and rounded once to kopecks',()=>{
+  assert.equal(calculateReturnWbExpenseReversal([
+    {sourceField:'retailAmount',rawValue:'1.016'},
+    {sourceField:'forPay',rawValue:'1.000'},
+    {sourceField:'acquiringFee',rawValue:'0.004'},
+    {sourceField:'vw',rawValue:'0.004'},
+    {sourceField:'vwNds',rawValue:'0.004'},
+    {sourceField:'ppvzReward',rawValue:'0.004'}
+  ]),200n);
+  assert.equal(calculateReturnWbExpenseReversal([
+    {sourceField:'retailAmount',rawValue:'1.00'},{sourceField:'forPay',rawValue:'2.00'},
+    {sourceField:'acquiringFee',rawValue:'-1.00'}
+  ]),null);
+  assert.equal(calculateReturnWbExpenseReversal([{sourceField:'retailAmount',rawValue:'1.00'}]),null);
+});
+
+test('real WB article outside catalog or selection never enters selected-SKU money',()=>{
+  const result=calculateFinancialResult({
+    periodStart:'2026-07-13',periodEnd:'2026-07-19',selectedProductIds:['product-1'],reportCoverageComplete:true,
+    financialComponents:[
+      {id:'selected',classificationStatus:'confirmed',scopeCode:'selected_product',productId:'product-1',wbArticle:'111',accountingDate:'2026-07-14',categoryCode:'revenue',amountSigned:'100.0000'},
+      {id:'excluded',classificationStatus:'confirmed',scopeCode:'product_expected',productId:null,wbArticle:'222',accountingDate:'2026-07-14',categoryCode:'logistics',amountSigned:'-126.8800'},
+      {id:'excluded-unknown',classificationStatus:'unclassified',scopeCode:'product_expected',productId:null,wbArticle:'222',accountingDate:'2026-07-14',categoryCode:'future_money_field',amountSigned:'-50.0000'}
+    ]
+  });
+  assert.equal(result.totals.selectedProductsResultBeforeTax,'100.0000');
+  assert.equal(result.lines.some(line=>line.evidence.some(item=>item.sourceId==='excluded')),false);
+  assert.equal(result.missingReasons.includes('product_link_missing'),false);
+  assert.equal(result.missingReasons.includes('operation_unclassified'),false);
 });
 
 test('return COGS stays absent for missing, non-confirmed or multiple active links', () => {

@@ -82,7 +82,7 @@ async function loadSnapshot(client,context){
   if(!affectedPeriods.length)throw new Error('financial_daily_inputs_missing');
   const affectedStart=affectedPeriods.reduce((value,row)=>row.period_start<value?row.period_start:value,affectedPeriods[0].period_start);
   const affectedEnd=affectedPeriods.reduce((value,row)=>row.period_end>value?row.period_end:value,affectedPeriods[0].period_end);
-  const method=(await client.query(`select id,implementation_version from mc.method_versions where code='financial_result' and version_no=22`,[])).rows[0];
+  const method=(await client.query(`select id,implementation_version from mc.method_versions where code='financial_result' and version_no=24`,[])).rows[0];
   if(!method)throw new Error('financial_daily_method_missing');
   const normalizationIds=reports.map(row=>row.normalization_id);
   const parserMethods=normalizationIds.length?(await client.query(
@@ -96,12 +96,12 @@ async function loadSnapshot(client,context){
     `select f.id,f.category_code,f.source_field,f.amount_signed::text,f.result_scope_classification,
             o.id as operation_version_id,o.product_id,o.variant_id,o.accounting_date::text,o.state,o.operation_type,
             rr.raw_data->>'docTypeName' as doc_type_name,rr.raw_data->>'sellerOperName' as seller_oper_name,
-            rr.raw_data->>'bonusTypeName' as bonus_type_name,rr.raw_data->>f.source_field as raw_value
+            rr.raw_data->>'bonusTypeName' as bonus_type_name,rr.raw_data->>'nmId' as wb_article,rr.raw_data->>f.source_field as raw_value
        from mc.operation_versions o join mc.financial_components f on f.operation_version_id=o.id
        join mc.report_rows rr on rr.id=o.report_row_id
       where o.report_normalization_id=any($1::uuid[]) order by f.id`,[normalizationIds])).rows.map(row=>({
         id:row.id,operationVersionId:row.operation_version_id,categoryCode:row.category_code,sourceField:row.source_field,
-        rawValue:row.raw_value,amountSigned:row.amount_signed,productId:row.product_id,variantId:row.variant_id,
+        rawValue:row.raw_value,amountSigned:row.amount_signed,productId:row.product_id,variantId:row.variant_id,wbArticle:row.wb_article,
         accountingDate:row.accounting_date,state:row.state,operationType:row.operation_type,docTypeName:row.doc_type_name,
         sellerOperName:row.seller_oper_name,bonusTypeName:row.bonus_type_name,scopeCode:row.result_scope_classification,
         classificationStatus:isVerifiedWbResultComponent({categoryCode:row.category_code,sourceField:row.source_field,
@@ -109,12 +109,12 @@ async function loadSnapshot(client,context){
           bonusTypeName:row.bonus_type_name,rawValue:row.raw_value,scopeCode:row.result_scope_classification})?'confirmed':'unclassified'
       }));
   const operations=(await client.query(
-    `select o.id,o.report_normalization_id,o.operation_type,o.product_id,o.variant_id,o.accounting_date::text,o.quantity::text,o.state,
-            rr.raw_data->>'docTypeName' as doc_type_name,rr.raw_data->>'sellerOperName' as seller_oper_name
+    `select o.id,o.report_row_id,o.report_normalization_id,o.operation_type,o.product_id,o.variant_id,o.accounting_date::text,o.quantity::text,o.state,
+            rr.raw_data->>'docTypeName' as doc_type_name,rr.raw_data->>'sellerOperName' as seller_oper_name,rr.raw_data->>'nmId' as wb_article
        from mc.operation_versions o join mc.report_rows rr on rr.id=o.report_row_id
       where o.report_normalization_id=any($1::uuid[]) and o.operation_type in ('sale','return') order by o.id`,[normalizationIds])).rows.map(row=>({
-        id:row.id,reportNormalizationId:row.report_normalization_id,operationType:row.operation_type,productId:row.product_id,
-        variantId:row.variant_id,accountingDate:row.accounting_date,quantity:row.quantity,state:row.state,
+        id:row.id,reportRowId:row.report_row_id,reportNormalizationId:row.report_normalization_id,operationType:row.operation_type,productId:row.product_id,
+        variantId:row.variant_id,wbArticle:row.wb_article,accountingDate:row.accounting_date,quantity:row.quantity,state:row.state,
         docTypeName:row.doc_type_name,sellerOperName:row.seller_oper_name,scopeCode:'selected_product'
       }));
   const costs=(await client.query(
@@ -136,7 +136,7 @@ async function loadSnapshot(client,context){
   const fingerprint=createInputFingerprint({resultMethodVersion:`${method.id}:${method.implementation_version}`,selectedProductIds:products,
     reportVersionIds:reports.map(row=>row.report_version_id),reportNormalizationIds:normalizationIds,costVersionIds:costs.map(row=>row.id),
     emptyWeekCoverageIds:emptyWeeks.map(row=>`${row.id}:${row.empty_confirmed_by_job_id}`),
-    operationLinkIds:operationLinks,expenseVersionIds:expenses.map(row=>row.id),taxSettingVersionIds:taxSettings.map(row=>row.id),
+    operationLinkIds:operationLinks.map(link=>link.id),expenseVersionIds:expenses.map(row=>row.id),taxSettingVersionIds:taxSettings.map(row=>row.id),
     periodStart:affectedStart,periodEnd:affectedEnd});
   return{businessId,storeId,selection,products,reports,affectedReports,emptyWeeks,affectedStart,affectedEnd,method,
     parserMethod:parserMethods[0],operationLinks,components,operations,costs,expenses,taxSettings,fingerprint};
@@ -151,10 +151,10 @@ export function calculateFinancialPeriods(snapshot){
     const coverageComplete=rows.length===0||(rows.every(row=>row.normalization_id)&&reportPeriodsCoverRange(rows,periodStart,periodEnd));
     const retail=snapshot.components.filter(row=>row.sourceField==='retailAmount');
     const retailIds=new Set(retail.map(row=>String(row.operationVersionId)));
-    const missing=snapshot.operations.filter(row=>!retailIds.has(String(row.id))).map(row=>({id:`missing-retail:${row.id}`,productId:row.productId,
+    const missing=snapshot.operations.filter(row=>!retailIds.has(String(row.id))).map(row=>({id:`missing-retail:${row.id}`,productId:row.productId,wbArticle:row.wbArticle,
       accountingDate:row.accountingDate,retailAmount:null,docTypeName:row.docTypeName,sellerOperName:row.sellerOperName,state:row.state}));
     const taxReference=calculateStoreTaxReference({periodStart,periodEnd,selectedProductIds:snapshot.products,
-      sourceRows:[...retail.map(row=>({id:row.id,productId:row.productId,accountingDate:row.accountingDate,retailAmount:row.rawValue,
+      sourceRows:[...retail.map(row=>({id:row.id,productId:row.productId,wbArticle:row.wbArticle,accountingDate:row.accountingDate,retailAmount:row.rawValue,
         docTypeName:row.docTypeName,sellerOperName:row.sellerOperName,state:row.state})),...missing],
       taxSettings:snapshot.taxSettings.map(row=>({id:row.id,effectiveFrom:row.effective_from,regimeCode:row.regime_code,
         usnRateFraction:row.usn_rate_fraction,vatMode:row.vat_mode,state:row.state})),reportCoverageComplete:coverageComplete});
@@ -203,6 +203,9 @@ async function persistGeneration(client,context,snapshot,generation,daily){
       if(evidence.sourceType==='financial_component')await client.query(
         `insert into mc.financial_daily_evidence(business_id,store_id,generation_id,daily_result_id,financial_component_id,contribution_amount)
          values($1,$2,$3,$4,$5,$6)`,[...args,saved.id,evidence.sourceId,evidence.contributionAmount]);
+      else if(evidence.sourceType==='return_expense_reversal')await client.query(
+        `insert into mc.financial_daily_evidence(business_id,store_id,generation_id,daily_result_id,report_row_id,source_operation_version_id,operation_link_id,contribution_amount)
+         values($1,$2,$3,$4,$5,$6,$7,$8)`,[...args,saved.id,evidence.reportRowId,evidence.sourceId,evidence.operationLinkId,evidence.contributionAmount]);
       else if(['sale_cost','return_cost'].includes(evidence.sourceType))await client.query(
         `insert into mc.financial_daily_evidence(business_id,store_id,generation_id,daily_result_id,cost_version_id,source_operation_version_id,operation_link_id,quantity,contribution_amount)
          values($1,$2,$3,$4,$5,$6,$7,$8,$9)`,[...args,saved.id,evidence.costVersionId,evidence.sourceId,evidence.operationLinkId??null,evidence.quantity,evidence.contributionAmount]);

@@ -317,7 +317,7 @@ export function createFinancialPipelineRepository({pool}){
            p_source_report_version_id=>$6,p_source_normalization_id=>$7)`,
         [context.store_id,eventKey,pointerCurrent?'report_updated':'report_accepted',source.period_start,source.period_end,versionId,normalization.id]);
 
-      // Method v22 cannot publish a range that mixes v20 and v22 days. The
+      // Method v24 cannot publish a range that mixes older and v24 days. The
       // migration queues every current report for local v12 normalization;
       // the worker that completes the last one emits exactly one full-range
       // cutover event. No WB call is involved.
@@ -345,13 +345,13 @@ export function createFinancialPipelineRepository({pool}){
              join mc.method_versions parser on parser.code='wb_finance_import'
                and parser.implementation_version='wb-finance-v12'
              join mc.method_versions result on result.code='financial_result'
-               and result.implementation_version='financial-result-v22'
+               and result.implementation_version='financial-result-v24'
             where coalesce(pointer_range.affected_from,report_range.affected_from) is not null
               and exists(select 1 from mc.product_selections selection
                 where selection.business_id=$1 and selection.store_id=$2 and selection.status='confirmed')
               and not exists(select 1 from mc.financial_input_events prior_upgrade
                 where prior_upgrade.business_id=$1 and prior_upgrade.store_id=$2
-                  and prior_upgrade.event_key='financial-result-upgrade:v22:store:'||$2)
+                   and prior_upgrade.event_key='financial-result-upgrade:v24:store:'||$2)
               and not exists(
                 select 1 from mc.reports pending_report
                 join mc.report_versions pending_version on pending_version.id=pending_report.current_version_id
@@ -366,7 +366,7 @@ export function createFinancialPipelineRepository({pool}){
         if(upgrade){
           await client.query(
             `insert into mc.calculation_invalidations(business_id,store_id,requested_by,reason,invalidated_at)
-             values($1,$2,$3,'delivery_service_reversal_v21',clock_timestamp())
+              values($1,$2,$3,'return_expense_reversal_v23',clock_timestamp())
              on conflict(store_id) do update set requested_by=excluded.requested_by,reason=excluded.reason,
                generation_token=gen_random_uuid(),invalidated_at=excluded.invalidated_at`,
             [context.business_id,context.store_id,context.actor_user_id]);
@@ -378,7 +378,7 @@ export function createFinancialPipelineRepository({pool}){
           await client.query(
             `select id from mc.emit_financial_input_event($1,$2,'result_method_updated',$3,$4,
                p_source_result_method_version_id=>$5)`,
-            [context.store_id,`financial-result-upgrade:v22:store:${context.store_id}`,
+            [context.store_id,`financial-result-upgrade:v24:store:${context.store_id}`,
               upgrade.affected_from,upgrade.affected_to,upgrade.result_method_id]);
         }
       }

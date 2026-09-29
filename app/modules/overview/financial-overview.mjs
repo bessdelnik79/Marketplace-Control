@@ -7,9 +7,9 @@ const COST_OF_GOODS_CATEGORY = 'cost_of_goods';
 const WB_TRANSFER_CATEGORIES = new Set([
   'acquiring', 'logistics', 'storage', 'acceptance', 'penalty', 'deduction',
   'commission_adjustment', 'other_adjustment', 'promotion', 'pickup_reward',
-  'wb_reward_without_vat', 'wb_reward_vat'
+  'wb_reward_without_vat', 'wb_reward_vat', 'return_wb_expense_reversal'
 ]);
-const STORE_RESULT_METHODS = new Set(['financial-result-v7', 'financial-result-v8', 'financial-result-v9', 'financial-result-v10', 'financial-result-v11', 'financial-result-v12', 'financial-result-v13', 'financial-result-v14', 'financial-result-v15', 'financial-result-v16', 'financial-result-v17', 'financial-result-v18', 'financial-result-v19', 'financial-result-v20', 'financial-result-v21', 'financial-result-v22']);
+const STORE_RESULT_METHODS = new Set(['financial-result-v7', 'financial-result-v8', 'financial-result-v9', 'financial-result-v10', 'financial-result-v11', 'financial-result-v12', 'financial-result-v13', 'financial-result-v14', 'financial-result-v15', 'financial-result-v16', 'financial-result-v17', 'financial-result-v18', 'financial-result-v19', 'financial-result-v20', 'financial-result-v21', 'financial-result-v22', 'financial-result-v23', 'financial-result-v24']);
 const MISSING_REASON_ORDER = [
   'cost_missing',
   'return_original_sale_unmatched',
@@ -210,7 +210,7 @@ function normalizeTotals(value,methodVersion) {
   if(value.selectedProductsResultBeforeTax!==undefined){
     const selected=parseScale4Money(value.selectedProductsResultBeforeTax);
     const store=value.storeLevelResultBeforeTax===undefined?0n:parseScale4Money(value.storeLevelResultBeforeTax);
-    const expected=['financial-result-v7','financial-result-v8','financial-result-v9','financial-result-v10','financial-result-v11','financial-result-v12','financial-result-v13','financial-result-v14','financial-result-v15','financial-result-v16','financial-result-v17','financial-result-v18','financial-result-v19','financial-result-v20','financial-result-v21','financial-result-v22'].includes(methodVersion)?selected+store:selected;
+    const expected=STORE_RESULT_METHODS.has(methodVersion)?selected+store:selected;
     if(expected!==beforeTax)invalid('overview_total_mismatch');
   }
   return {
@@ -251,11 +251,13 @@ export function buildFinancialPeriodOverview(envelope, { timezone = 'Europe/Mosc
   const methodVersion = requiredText(valueFrom(envelope, 'methodVersion', 'method_version'));
   const scope = normalizeScope(envelope);
   const coverage = normalizeCoverage(envelope, quality);
+  const excludedProductCount=Number(valueFrom(envelope,'excludedProductCount','excluded_product_count')??0);
+  if(!Number.isSafeInteger(excludedProductCount)||excludedProductCount<0)invalid('overview_invalid_excluded_product_count');
 
   if (quality === 'unavailable') {
     if (envelope.lines?.length || envelope.totals !== null && envelope.totals !== undefined) invalid('overview_unavailable_has_values');
     return {
-      publicationId, methodVersion, scope, period, quality, missingReasons, coverage,
+      publicationId, methodVersion, scope, period, quality, missingReasons, coverage,excludedProductCount,
       totals: { revenue: null, wbExpenses: null, toTransfer: null, costOfGoods: null, tax: null, availableResultBeforeTax: null, availableResultAfterTax: null },
       displayResult: { amount: null, basis: 'unavailable' },
       situationEvidence:null
@@ -289,6 +291,7 @@ export function buildFinancialPeriodOverview(envelope, { timezone = 'Europe/Mosc
     period,
     quality,
     missingReasons,
+    excludedProductCount,
     coverage,
     totals: {
       revenue: formatScale4Money(revenue),

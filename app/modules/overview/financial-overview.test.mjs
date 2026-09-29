@@ -28,7 +28,8 @@ function envelope({
   tax = '6.0000',
   afterTax = '94.0000',
   scope = 'selected_products',
-  coverage = undefined
+  coverage = undefined,
+  excludedProductCount = 0
 } = {}) {
   const lines = [
     { result_scope: 'selected_product', accounting_date: periodStart, category_code: 'revenue', amount_signed: revenue, quality },
@@ -44,6 +45,7 @@ function envelope({
     quality,
     missing_reasons: missingReasons,
     scope,
+    excluded_product_count: excludedProductCount,
     ...(coverage === undefined ? {} : { coverage }),
     lines,
     totals: {
@@ -115,6 +117,21 @@ test('period overview separates WB expenses and cost of goods from persisted evi
     availableResultAfterTax: '94.0000'
   });
   assert.deepEqual(overview.displayResult, { amount: '94.0000', basis: 'after_tax' });
+});
+
+test('return expense reversal reduces WB expenses and excluded products are count-only metadata',()=>{
+  const raw=envelope({
+    methodVersion:'financial-result-v24',revenue:'3495.0000',expenseLine:'-7333.5800',
+    selectedBeforeTax:'-3014.6000',beforeTax:'-3014.6000',tax:null,afterTax:null,excludedProductCount:1
+  });
+  raw.lines.push({result_scope:'selected_product',product_id:'product-1',accounting_date:'2026-09-14',
+    category_code:'return_wb_expense_reversal',amount_signed:'823.9800',quality:'complete'});
+  const overview=buildFinancialPeriodOverview(raw);
+  assert.equal(overview.totals.revenue,'3495.0000');
+  assert.equal(overview.totals.wbExpenses,'6509.6000');
+  assert.equal(overview.totals.toTransfer,'-3014.6000');
+  assert.equal(overview.excludedProductCount,1);
+  assert.equal(JSON.stringify(overview).includes('nmId'),false);
 });
 
 test('unavailable period exposes no calculated transfer amount', () => {

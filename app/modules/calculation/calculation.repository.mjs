@@ -8,7 +8,7 @@ export const compatibleFinancialParserVersions=Object.freeze([
 ]);
 
 const qualityRank={complete:0,partial:1,unavailable:2};
-const targetResultVersions=new Set(['financial-result-v10','financial-result-v12','financial-result-v14','financial-result-v16','financial-result-v18','financial-result-v20','financial-result-v22']);
+const targetResultVersions=new Set(['financial-result-v10','financial-result-v12','financial-result-v14','financial-result-v16','financial-result-v18','financial-result-v20','financial-result-v22','financial-result-v24']);
 
 function shiftCalendarDate(value,days){
   const text=String(value??'');
@@ -205,7 +205,7 @@ export async function createConfirmedReturnLinks(client,businessId,storeId,norma
          from mc.operation_versions s join mc.report_rows rr on rr.id=s.report_row_id
         where s.business_id=$1 and s.store_id=$2 and s.report_normalization_id=any($3::uuid[])
           and s.operation_type='sale' and s.state='active' and s.quantity>0
-          and s.product_id=$4 and s.variant_id=$5 and s.accounting_date<$6
+          and s.product_id=$4 and s.variant_id=$5 and s.accounting_date<=$6
           and nullif(btrim(s.srid),'')=$7 and nullif(btrim(rr.raw_data->>'shkId'),'')=$8
           and nullif(btrim(rr.raw_data->>'orderDt'),'')=$9
         order by s.id for update of s`,
@@ -227,10 +227,12 @@ export async function createConfirmedReturnLinks(client,businessId,storeId,norma
     );
   }
   return (await client.query(
-    `select l.id from mc.operation_links l join mc.operation_versions r on r.id=l.from_operation_version_id
+    `select l.id,l.from_operation_version_id,l.to_operation_version_id,l.link_type,l.status
+       from mc.operation_links l join mc.operation_versions r on r.id=l.from_operation_version_id
       where l.business_id=$1 and l.store_id=$2 and l.method_version_id=$3 and l.status='confirmed'
         and r.report_normalization_id=any($4::uuid[]) order by l.id`,[businessId,storeId,methodId,normalizationIds]
-  )).rows.map(row=>row.id);
+  )).rows.map(row=>({id:row.id,fromOperationVersionId:row.from_operation_version_id,toOperationVersionId:row.to_operation_version_id,
+    linkType:row.link_type,status:row.status}));
 }
 
 export async function getFinancialCalculationState(userId,storeId){
@@ -261,13 +263,19 @@ export async function getFinancialCompatibilityBootstrapState(userId,storeId){
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
     const selection=(await client.query(`select id from mc.product_selections
       where business_id=$1 and store_id=$2 and status='confirmed'`,[businessId,storeId])).rows[0];
-    const dailyPublished=Boolean((await client.query(`select 1 from mc.financial_daily_current_publications
-      where business_id=$1 and store_id=$2`,[businessId,storeId])).rows[0]);
+    const dailyPublication=(await client.query(
+      `select method.implementation_version
+         from mc.financial_daily_current_publications current_publication
+         join mc.financial_daily_publications publication on publication.id=current_publication.publication_id
+         join mc.financial_daily_generations generation on generation.id=publication.generation_id
+         join mc.method_versions method on method.id=generation.result_method_version_id
+        where current_publication.business_id=$1 and current_publication.store_id=$2`,[businessId,storeId])).rows[0]??null;
+    const dailyPublished=Boolean(dailyPublication);
     const pipelineActive=Boolean((await client.query(`select 1 from mc.jobs
       where business_id=$1 and store_id=$2
         and job_type in ('financial_inventory_refresh','financial_report_fetch','financial_report_normalize')
         and status in ('pending','running') limit 1`,[businessId,storeId])).rows[0]);
-    if(dailyPublished||!selection)return{dailyPublished,selectionReady:Boolean(selection),waitingForPipeline:false,targets:[]};
+    if(dailyPublication?.implementation_version==='financial-result-v24'||!selection)return{dailyPublished,selectionReady:Boolean(selection),waitingForPipeline:false,targets:[]};
     const targets=(await client.query(
       `select distinct report.period_start::text as "periodStart",report.period_end::text as "periodEnd"
          from mc.reports report
@@ -312,7 +320,7 @@ export async function getCurrentFinancialResult(userId,storeId){
          from mc.result_lines where run_id=$1
         order by accounting_date,result_scope,product_id nulls last,variant_id nulls last,category_code,id`,[publication.run_id]
     )).rows;
-    if(['financial-result-v4','financial-result-v5','financial-result-v6','financial-result-v7','financial-result-v8','financial-result-v9','financial-result-v10','financial-result-v11','financial-result-v12','financial-result-v13','financial-result-v14','financial-result-v15','financial-result-v16','financial-result-v17','financial-result-v18','financial-result-v19','financial-result-v20','financial-result-v21','financial-result-v22'].includes(publication.method_version)){
+    if(['financial-result-v4','financial-result-v5','financial-result-v6','financial-result-v7','financial-result-v8','financial-result-v9','financial-result-v10','financial-result-v11','financial-result-v12','financial-result-v13','financial-result-v14','financial-result-v15','financial-result-v16','financial-result-v17','financial-result-v18','financial-result-v19','financial-result-v20','financial-result-v21','financial-result-v22','financial-result-v23','financial-result-v24'].includes(publication.method_version)){
       const computations=(await client.query(`select id,product_id,taxable_base::text,tax_amount::text from mc.tax_computations where run_id=$1 order by product_id`,[publication.run_id])).rows;
       const taxTotals=(await client.query(`select coalesce(sum(taxable_base),0)::text as taxable_base,coalesce(sum(tax_amount),0)::text as tax_amount from mc.tax_computations where run_id=$1`,[publication.run_id])).rows[0];
       const segments=(await client.query(`select s.tax_computation_id,c.product_id,s.tax_setting_version_id,s.segment_start::text,s.segment_end::text,s.taxable_base::text,s.rate_fraction::text
@@ -511,7 +519,7 @@ export async function getFinancialPeriodRecoveryState(userId,storeId,periodStart
          from mc.calculation_requests q join mc.method_versions m on m.id=q.method_version_id
         where q.business_id=$1 and q.store_id=$2 and q.is_latest`,[businessId,storeId]
     )).rows[0];
-    if(latest?.implementation_version==='financial-result-v22'
+    if(latest?.implementation_version==='financial-result-v24'
       &&latest.period_start===target.periodStart&&latest.period_end===target.periodEnd){
       if(latest.status==='pending')return{status:'queued'};
       if(latest.status==='running')return{status:'running'};
@@ -605,11 +613,31 @@ export async function loadPublishedPeriodEnvelopes(client,runId,periodStart,peri
   });
 }
 
+const resultCategorySql=`('revenue','revenue_return','acquiring','logistics','storage','acceptance','penalty','deduction',
+  'commission_adjustment','other_adjustment','promotion','pickup_reward','wb_reward_without_vat','wb_reward_vat')`;
+
+async function countLegacyExcludedProducts(client,runId,periodStart,periodEnd){
+  const row=(await client.query(
+    `select count(distinct (report_row.raw_data->>'nmId'))::int as count
+       from mc.calculation_runs run
+       join mc.calculation_inputs input on input.run_id=run.id and input.report_normalization_id is not null
+       join mc.operation_versions operation on operation.report_normalization_id=input.report_normalization_id
+       join mc.report_rows report_row on report_row.id=operation.report_row_id
+      where run.id=$1 and operation.accounting_date between $2 and $3
+        and btrim(coalesce(report_row.raw_data->>'nmId','')) ~ '^[1-9][0-9]*$'
+        and exists(select 1 from mc.financial_components component where component.operation_version_id=operation.id
+          and component.category_code in ${resultCategorySql})
+        and (operation.product_id is null or not exists(select 1 from mc.calculation_request_products selected
+          where selected.request_id=run.request_id and selected.product_id=operation.product_id))`,[runId,periodStart,periodEnd]
+  )).rows[0];
+  return Number(row?.count??0);
+}
+
 async function getPeriodEnvelope(client,runId,periodStart,periodEnd){
   const envelopes=await loadPublishedPeriodEnvelopes(client,runId,periodStart,periodEnd);
   const exact=envelopes.find(period=>period.period_start===periodStart&&period.period_end===periodEnd);
-  if(exact)return exact;
-  return aggregatePublishedPeriodEnvelopes(periodStart,periodEnd,envelopes);
+  const result=exact??aggregatePublishedPeriodEnvelopes(periodStart,periodEnd,envelopes);
+  return{...result,excluded_product_count:await countLegacyExcludedProducts(client,runId,periodStart,periodEnd)};
 }
 
 async function getCurrentDailyPublicationContext(client,businessId,storeId){
@@ -701,9 +729,25 @@ async function getDailyPeriodEnvelope(client,publication,periodStart,periodEnd){
        join mc.jobs confirmation on confirmation.id=input.empty_confirmation_job_id`,
     [publication.publication_id,periodStart,periodEnd]
   )).rows[0]??{};
-  return aggregateDailyPublicationPeriod(periodStart,periodEnd,{days:mapped,lines,reasons,taxFacts,
+  const excluded=(await client.query(
+    `select count(distinct (report_row.raw_data->>'nmId'))::int as count
+       from mc.financial_daily_publication_days mapped_day
+       join mc.financial_daily_generation_inputs input on input.generation_id=mapped_day.generation_id
+        and input.source_kind='report' and input.report_normalization_id is not null
+       join mc.operation_versions operation on operation.report_normalization_id=input.report_normalization_id
+        and operation.accounting_date=mapped_day.accounting_date
+       join mc.report_rows report_row on report_row.id=operation.report_row_id
+      where mapped_day.publication_id=$1 and mapped_day.accounting_date between $2 and $3
+        and btrim(coalesce(report_row.raw_data->>'nmId','')) ~ '^[1-9][0-9]*$'
+        and exists(select 1 from mc.financial_components component where component.operation_version_id=operation.id
+          and component.category_code in ${resultCategorySql})
+        and (operation.product_id is null or not exists(select 1 from mc.financial_daily_generation_products selected
+          where selected.generation_id=mapped_day.generation_id and selected.selected and selected.product_id=operation.product_id))`,
+    [publication.publication_id,periodStart,periodEnd]
+  )).rows[0];
+  return{...aggregateDailyPublicationPeriod(periodStart,periodEnd,{days:mapped,lines,reasons,taxFacts,
     sourceFreshness:latestTimestamp([reportMetadata.source_freshness,emptyMetadata.source_freshness]),
-    crossBorderReportCount:reportMetadata.cross_border_report_count??0});
+    crossBorderReportCount:reportMetadata.cross_border_report_count??0}),excluded_product_count:Number(excluded?.count??0)};
 }
 
 async function getDailyUpdateStatus(client,businessId,storeId,periodStart=null,periodEnd=null,publication=null,canRetry=false){
@@ -853,11 +897,12 @@ export async function prepareFinancialCalculation(userId,storeId,{targetPeriod=n
       `select v.id from mc.tax_settings s join mc.tax_setting_versions v on v.id=s.current_version_id
         where s.business_id=$1 and s.effective_from<=$2 order by s.effective_from,v.id`,[businessId,periodEnd]
     )).rows.map(row=>row.id);
-    const methodVersion=target?22:21;
+    const methodVersion=target?24:23;
     const method=(await client.query(`select id,implementation_version from mc.method_versions where code='financial_result' and version_no=$1`,[methodVersion])).rows[0];
     if(!method)throw new Error('calculation_method_missing');
     const operationLinks=await createConfirmedReturnLinks(client,businessId,storeId,normalized.map(row=>row.normalization_id),method.id);
-    const fingerprint=createInputFingerprint({resultMethodVersion:`${method.id}:${method.implementation_version}`,selectedProductIds:products,reportVersionIds:reports.map(row=>row.report_version_id),reportNormalizationIds:normalized.map(row=>row.normalization_id),costVersionIds:costs,operationLinkIds:operationLinks,expenseVersionIds:expenses,taxSettingVersionIds:taxes,periodStart,periodEnd});
+    const operationLinkIds=operationLinks.map(link=>link.id);
+    const fingerprint=createInputFingerprint({resultMethodVersion:`${method.id}:${method.implementation_version}`,selectedProductIds:products,reportVersionIds:reports.map(row=>row.report_version_id),reportNormalizationIds:normalized.map(row=>row.normalization_id),costVersionIds:costs,operationLinkIds,expenseVersionIds:expenses,taxSettingVersionIds:taxes,periodStart,periodEnd});
     const current=(await client.query(`select id,input_fingerprint,status from mc.calculation_requests where business_id=$1 and store_id=$2 and is_latest for update`,[businessId,storeId])).rows[0];
     if(current?.input_fingerprint===fingerprint)return{id:current.id,status:current.status,changed:false};
     if(current)await client.query(`update mc.calculation_requests set is_latest=false,status='superseded',updated_at=now() where id=$1`,[current.id]);
@@ -872,7 +917,7 @@ export async function prepareFinancialCalculation(userId,storeId,{targetPeriod=n
     for(const costId of costs)await client.query(`insert into mc.calculation_request_inputs(business_id,store_id,request_id,cost_version_id) values($1,$2,$3,$4)`,[businessId,storeId,request.id,costId]);
     for(const expenseId of expenses)await client.query(`insert into mc.calculation_request_inputs(business_id,store_id,request_id,expense_version_id) values($1,$2,$3,$4)`,[businessId,storeId,request.id,expenseId]);
     for(const taxId of taxes)await client.query(`insert into mc.calculation_request_inputs(business_id,store_id,request_id,tax_setting_version_id) values($1,$2,$3,$4)`,[businessId,storeId,request.id,taxId]);
-    for(const operationLinkId of operationLinks)await client.query(`insert into mc.calculation_request_inputs(business_id,store_id,request_id,operation_link_id) values($1,$2,$3,$4)`,[businessId,storeId,request.id,operationLinkId]);
+    for(const operationLinkId of operationLinkIds)await client.query(`insert into mc.calculation_request_inputs(business_id,store_id,request_id,operation_link_id) values($1,$2,$3,$4)`,[businessId,storeId,request.id,operationLinkId]);
     return{id:request.id,status:request.status,changed:true};
   });
 }
@@ -903,18 +948,18 @@ async function executeFinancialCalculation(userId,requestId){
       `select f.id,f.category_code,f.source_field,f.amount_signed::text,f.result_scope_classification,
               o.id as operation_version_id,o.product_id,o.variant_id,o.accounting_date::text,o.state,o.operation_type,
               rr.raw_data->>'docTypeName' as doc_type_name,rr.raw_data->>'sellerOperName' as seller_oper_name,
-              rr.raw_data->>'bonusTypeName' as bonus_type_name,
+              rr.raw_data->>'bonusTypeName' as bonus_type_name,rr.raw_data->>'nmId' as wb_article,
               rr.raw_data->>f.source_field as raw_value
          from mc.operation_versions o join mc.financial_components f on f.operation_version_id=o.id
          join mc.report_rows rr on rr.id=o.report_row_id
         where o.report_normalization_id=any($1::uuid[]) order by f.id`,[normalizationIds]
-    )).rows.map(row=>({id:row.id,operationVersionId:row.operation_version_id,categoryCode:row.category_code,sourceField:row.source_field,rawValue:row.raw_value,amountSigned:row.amount_signed,productId:row.product_id,variantId:row.variant_id,accountingDate:row.accounting_date,state:row.state,operationType:row.operation_type,docTypeName:row.doc_type_name,sellerOperName:row.seller_oper_name,bonusTypeName:row.bonus_type_name,classificationStatus:isVerifiedWbResultComponent({categoryCode:row.category_code,sourceField:row.source_field,operationType:row.operation_type,docTypeName:row.doc_type_name,sellerOperName:row.seller_oper_name,bonusTypeName:row.bonus_type_name,rawValue:row.raw_value,scopeCode:row.result_scope_classification})?'confirmed':'unclassified',scopeCode:row.result_scope_classification}));
+    )).rows.map(row=>({id:row.id,operationVersionId:row.operation_version_id,categoryCode:row.category_code,sourceField:row.source_field,rawValue:row.raw_value,amountSigned:row.amount_signed,productId:row.product_id,variantId:row.variant_id,wbArticle:row.wb_article,accountingDate:row.accounting_date,state:row.state,operationType:row.operation_type,docTypeName:row.doc_type_name,sellerOperName:row.seller_oper_name,bonusTypeName:row.bonus_type_name,classificationStatus:isVerifiedWbResultComponent({categoryCode:row.category_code,sourceField:row.source_field,operationType:row.operation_type,docTypeName:row.doc_type_name,sellerOperName:row.seller_oper_name,bonusTypeName:row.bonus_type_name,rawValue:row.raw_value,scopeCode:row.result_scope_classification})?'confirmed':'unclassified',scopeCode:row.result_scope_classification}));
     const operations=(await client.query(
-      `select o.id,o.report_normalization_id,o.operation_type,o.product_id,o.variant_id,o.accounting_date::text,o.quantity::text,o.state,
-              rr.raw_data->>'docTypeName' as doc_type_name,rr.raw_data->>'sellerOperName' as seller_oper_name
+      `select o.id,o.report_row_id,o.report_normalization_id,o.operation_type,o.product_id,o.variant_id,o.accounting_date::text,o.quantity::text,o.state,
+              rr.raw_data->>'docTypeName' as doc_type_name,rr.raw_data->>'sellerOperName' as seller_oper_name,rr.raw_data->>'nmId' as wb_article
          from mc.operation_versions o join mc.report_rows rr on rr.id=o.report_row_id
         where o.report_normalization_id=any($1::uuid[]) and o.operation_type in ('sale','return') order by o.id`,[normalizationIds]
-    )).rows.map(row=>({id:row.id,reportNormalizationId:row.report_normalization_id,operationType:row.operation_type,productId:row.product_id,variantId:row.variant_id,accountingDate:row.accounting_date,quantity:row.quantity,state:row.state,docTypeName:row.doc_type_name,sellerOperName:row.seller_oper_name,scopeCode:'selected_product'}));
+    )).rows.map(row=>({id:row.id,reportRowId:row.report_row_id,reportNormalizationId:row.report_normalization_id,operationType:row.operation_type,productId:row.product_id,variantId:row.variant_id,wbArticle:row.wb_article,accountingDate:row.accounting_date,quantity:row.quantity,state:row.state,docTypeName:row.doc_type_name,sellerOperName:row.seller_oper_name,scopeCode:'selected_product'}));
     const costIds=inputs.map(row=>row.cost_version_id).filter(Boolean);
     const costs=costIds.length?(await client.query(
       `select v.id,c.variant_id,c.effective_from::text,v.unit_cost::text from mc.cost_versions v join mc.variant_costs c on c.id=v.cost_id where v.id=any($1::uuid[]) order by v.id`,[costIds]
@@ -955,9 +1000,9 @@ async function executeFinancialCalculation(userId,requestId){
         &&(!targetCalculation||reportPeriodsCoverRange(period.rows,period.periodStart,period.periodEnd));
       const retailComponents=components.filter(row=>row.sourceField==='retailAmount');
       const retailOperationIds=new Set(retailComponents.map(row=>String(row.operationVersionId)));
-      const missingRetailOperations=operations.filter(row=>!retailOperationIds.has(String(row.id))).map(row=>({id:`missing-retail:${row.id}`,productId:row.productId,accountingDate:row.accountingDate,retailAmount:null,docTypeName:row.docTypeName,sellerOperName:row.sellerOperName,state:row.state}));
+      const missingRetailOperations=operations.filter(row=>!retailOperationIds.has(String(row.id))).map(row=>({id:`missing-retail:${row.id}`,productId:row.productId,wbArticle:row.wbArticle,accountingDate:row.accountingDate,retailAmount:null,docTypeName:row.docTypeName,sellerOperName:row.sellerOperName,state:row.state}));
       const taxReference=calculateStoreTaxReference({periodStart:period.periodStart,periodEnd:period.periodEnd,selectedProductIds:selected,
-        sourceRows:[...retailComponents.map(row=>({id:row.id,productId:row.productId,accountingDate:row.accountingDate,retailAmount:row.rawValue,docTypeName:row.docTypeName,sellerOperName:row.sellerOperName,state:row.state})),...missingRetailOperations],
+        sourceRows:[...retailComponents.map(row=>({id:row.id,productId:row.productId,wbArticle:row.wbArticle,accountingDate:row.accountingDate,retailAmount:row.rawValue,docTypeName:row.docTypeName,sellerOperName:row.sellerOperName,state:row.state})),...missingRetailOperations],
         taxSettings:taxSettings.map(row=>({id:row.id,effectiveFrom:row.effective_from,regimeCode:row.regime_code,usnRateFraction:row.usn_rate_fraction,vatMode:row.vat_mode,state:row.state})),reportCoverageComplete});
       const result=calculateFinancialResult({periodStart:period.periodStart,periodEnd:period.periodEnd,selectedProductIds:selected,financialComponents:components,operations,operationLinks,costVersions:costs,expenses,
         taxSetting:tax?{regimeCode:tax.regime_code,usnRateFraction:tax.usn_rate_fraction,vatMode:tax.vat_mode,state:tax.state}:null,taxReference,reportCoverageComplete});
@@ -984,6 +1029,9 @@ async function executeFinancialCalculation(userId,requestId){
         )).rows[0];
         for(const evidence of line.evidence){
           if(evidence.sourceType==='financial_component')await client.query(`insert into mc.result_evidence(business_id,store_id,result_line_id,financial_component_id,contribution_amount) values($1,$2,$3,$4,$5)`,[businessId,request.store_id,saved.id,evidence.sourceId,evidence.contributionAmount]);
+          else if(evidence.sourceType==='return_expense_reversal')await client.query(
+            `insert into mc.result_evidence(business_id,store_id,result_line_id,report_row_id,source_operation_version_id,operation_link_id,contribution_amount)
+             values($1,$2,$3,$4,$5,$6,$7)`,[businessId,request.store_id,saved.id,evidence.reportRowId,evidence.sourceId,evidence.operationLinkId,evidence.contributionAmount]);
           else if(evidence.sourceType==='sale_cost')await client.query(`insert into mc.result_evidence(business_id,store_id,result_line_id,cost_version_id,source_operation_version_id,quantity,contribution_amount) values($1,$2,$3,$4,$5,$6,$7)`,[businessId,request.store_id,saved.id,evidence.costVersionId,evidence.sourceId,evidence.quantity,evidence.contributionAmount]);
           else if(evidence.sourceType==='return_cost')await client.query(`insert into mc.result_evidence(business_id,store_id,result_line_id,cost_version_id,source_operation_version_id,operation_link_id,quantity,contribution_amount) values($1,$2,$3,$4,$5,$6,$7,$8)`,[businessId,request.store_id,saved.id,evidence.costVersionId,evidence.sourceId,evidence.operationLinkId,evidence.quantity,evidence.contributionAmount]);
           else if(evidence.sourceType==='expense_version')await client.query(`insert into mc.result_evidence(business_id,store_id,result_line_id,expense_version_id,contribution_amount) values($1,$2,$3,$4,$5)`,[businessId,request.store_id,saved.id,evidence.sourceId,evidence.contributionAmount]);
