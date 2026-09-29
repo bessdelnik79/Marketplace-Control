@@ -2218,6 +2218,136 @@ try {
     assert.match(exactFinishGuard,/abs\(round\(f\.amount_signed,\s*4\)\)/);
     assert.equal((await tone(`select max(version)::int version from mc.schema_migrations`)).version,57);
     pass('migration 57 accepts exact-source four-decimal evidence without weakening legacy source limits');
+
+    const rowFinishRequest=await tone(`insert into mc.calculation_requests(business_id,store_id,generation_no,selection_id,method_version_id,
+      period_start,period_end,input_fingerprint,is_latest) values($1,$2,58,$3,$4,'2026-09-21','2026-09-27','exact-row-finish-v29-fixture',false) returning id`,
+      [business.id,affectedStore.id,returnSelection.id,resultV29.id]);
+    await tq(`insert into mc.calculation_request_products(business_id,store_id,request_id,product_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,rowFinishRequest.id,returnProduct.id]);
+    await tq(`insert into mc.calculation_request_inputs(business_id,store_id,request_id,report_normalization_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,rowFinishRequest.id,exactNormalization.id]);
+    await tq(`insert into mc.calculation_request_inputs(business_id,store_id,request_id,report_version_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,rowFinishRequest.id,exactVersion.id]);
+    const rowFinishRun=await tone(`insert into mc.calculation_runs(business_id,store_id,selection_id,method_version_id,period_start,period_end,
+      input_fingerprint,request_id,attempt_no) values($1,$2,$3,$4,'2026-09-21','2026-09-27','exact-row-finish-v29-fixture',$5,1) returning id`,
+      [business.id,affectedStore.id,returnSelection.id,resultV29.id,rowFinishRequest.id]);
+    const rowFinishPeriod=await tone(`insert into mc.financial_period_results(business_id,store_id,run_id,period_start,period_end,quality,missing_reasons,totals)
+      values($1,$2,$3,'2026-09-21','2026-09-27','partial','["operation_unclassified"]',
+      '{"selectedProductsResultBeforeTax":"0.0041","storeLevelResultBeforeTax":"0.0000","availableResultBeforeTax":"0.0041","estimatedUsnTax":"0.0000","availableResultAfterTax":null,"netProfit":null}') returning id`,
+      [business.id,affectedStore.id,rowFinishRun.id]);
+    await tq(`insert into mc.calculation_inputs(business_id,store_id,run_id,report_normalization_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,rowFinishRun.id,exactNormalization.id]);
+    await tq(`insert into mc.calculation_inputs(business_id,store_id,run_id,report_version_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,rowFinishRun.id,exactVersion.id]);
+    const rowFinishLine=await tone(`insert into mc.result_lines(business_id,store_id,run_id,product_id,variant_id,accounting_date,category_code,
+      amount_signed,quality,result_scope,financial_period_result_id) values($1,$2,$3,$4,$5,'2026-09-21','wb_row_rounding_adjustment',
+      0.0041,'partial','selected_product',$6) returning id`,
+      [business.id,affectedStore.id,rowFinishRun.id,returnProduct.id,returnVariant.id,rowFinishPeriod.id]);
+    await tq(`insert into mc.result_evidence(business_id,store_id,result_line_id,report_row_id,source_operation_version_id,contribution_amount)
+      values($1,$2,$3,$4,$5,0.0041)`,[business.id,affectedStore.id,rowFinishLine.id,exactRow.id,exactOperation.id]);
+    await tq(`create temporary table exact_row_finish_guard_probe(
+      id uuid primary key,status text not null,quality text,missing_reasons jsonb,finished_at timestamptz,
+      request_id uuid,method_version_id uuid not null)`);
+    await tq(`create trigger exact_row_finish_guard_probe_trigger before update on exact_row_finish_guard_probe
+      for each row execute function mc.guard_run_finish()`);
+    await tq(`insert into exact_row_finish_guard_probe(id,status,quality,missing_reasons,request_id,method_version_id)
+      values($1,'running',null,'[]',$2,$3)`,[rowFinishRun.id,rowFinishRequest.id,resultV29.id]);
+    await assert.rejects(()=>tq(`update exact_row_finish_guard_probe set status='succeeded',quality='partial',
+      missing_reasons='["operation_unclassified"]',finished_at=clock_timestamp() where id=$1`,[rowFinishRun.id]),
+      /evidence source missing from calculation inputs/);
+
+    const alternateParserV13=await tone(`insert into mc.method_versions(code,version_no,description,parameters,implementation_version)
+      values('wb_finance_import_test_alternate',1,'Test-only alternate normalization','{}','wb-finance-v13') returning id`);
+    const alternateNormalization=await tone(`insert into mc.report_normalizations(
+      business_id,store_id,report_version_id,method_version_id,normalization_key,status)
+      values($1,$2,$3,$4,'exact-row-alternate-normalization','succeeded') returning id`,
+      [business.id,affectedStore.id,exactVersion.id,alternateParserV13.id]);
+    const alternateOperationIdentity=await tone(`insert into mc.operations(business_id,store_id,source_code,source_operation_key)
+      values($1,$2,'wb_finance','exact-row-alternate-sale') returning id`,[business.id,affectedStore.id]);
+    const alternateOperation=await tone(`insert into mc.operation_versions(business_id,store_id,operation_id,report_row_id,version_no,
+      operation_type,product_id,variant_id,accounting_date,quantity,report_normalization_id)
+      values($1,$2,$3,$4,1,'sale',$5,$6,'2026-09-21',1,$7) returning id`,
+      [business.id,affectedStore.id,alternateOperationIdentity.id,exactRow2.id,returnProduct.id,returnVariant.id,alternateNormalization.id]);
+    for(const [key,category,amount,field,scope] of [
+      ['retailAmount','revenue','500','retailAmount','selected_product'],
+      ['vw','wb_reward_without_vat','-56.5360655737704918','vw','selected_product'],
+      ['vwNds','wb_reward_vat','-12.108','vwNds','selected_product'],
+      ['forPay','payout','431.36','forPay','reconciliation']
+    ])await tq(`insert into mc.financial_components(business_id,store_id,operation_version_id,component_key,category_code,
+      amount_signed,method_version_id,source_field,result_scope_classification) values($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [business.id,affectedStore.id,alternateOperation.id,key,category,amount,alternateParserV13.id,field,scope]);
+    const alternateRequest=await tone(`insert into mc.calculation_requests(business_id,store_id,generation_no,selection_id,method_version_id,
+      period_start,period_end,input_fingerprint,is_latest) values($1,$2,59,$3,$4,'2026-09-21','2026-09-27','alternate-row-finish-v29-fixture',false) returning id`,
+      [business.id,affectedStore.id,returnSelection.id,resultV29.id]);
+    await tq(`insert into mc.calculation_request_products(business_id,store_id,request_id,product_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,alternateRequest.id,returnProduct.id]);
+    await tq(`insert into mc.calculation_request_inputs(business_id,store_id,request_id,report_normalization_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,alternateRequest.id,exactNormalization.id]);
+    await tq(`insert into mc.calculation_request_inputs(business_id,store_id,request_id,report_version_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,alternateRequest.id,exactVersion.id]);
+    const alternateRun=await tone(`insert into mc.calculation_runs(business_id,store_id,selection_id,method_version_id,period_start,period_end,
+      input_fingerprint,request_id,attempt_no) values($1,$2,$3,$4,'2026-09-21','2026-09-27','alternate-row-finish-v29-fixture',$5,1) returning id`,
+      [business.id,affectedStore.id,returnSelection.id,resultV29.id,alternateRequest.id]);
+    const alternatePeriod=await tone(`insert into mc.financial_period_results(business_id,store_id,run_id,period_start,period_end,quality,missing_reasons,totals)
+      values($1,$2,$3,'2026-09-21','2026-09-27','partial','["operation_unclassified"]',
+      '{"selectedProductsResultBeforeTax":"0.0041","storeLevelResultBeforeTax":"0.0000","availableResultBeforeTax":"0.0041","estimatedUsnTax":"0.0000","availableResultAfterTax":null,"netProfit":null}') returning id`,
+      [business.id,affectedStore.id,alternateRun.id]);
+    await tq(`insert into mc.calculation_inputs(business_id,store_id,run_id,report_normalization_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,alternateRun.id,exactNormalization.id]);
+    await tq(`insert into mc.calculation_inputs(business_id,store_id,run_id,report_version_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,alternateRun.id,exactVersion.id]);
+    const alternateLine=await tone(`insert into mc.result_lines(business_id,store_id,run_id,product_id,variant_id,accounting_date,category_code,
+      amount_signed,quality,result_scope,financial_period_result_id) values($1,$2,$3,$4,$5,'2026-09-21','wb_row_rounding_adjustment',
+      0.0041,'partial','selected_product',$6) returning id`,
+      [business.id,affectedStore.id,alternateRun.id,returnProduct.id,returnVariant.id,alternatePeriod.id]);
+    await assert.rejects(()=>tq(`insert into mc.result_evidence(business_id,store_id,result_line_id,report_row_id,source_operation_version_id,contribution_amount)
+      values($1,$2,$3,$4,$5,0.0041)`,[business.id,affectedStore.id,alternateLine.id,exactRow2.id,alternateOperation.id]),
+      /outside frozen request inputs/);
+
+    const missingLinkRequest=await tone(`insert into mc.calculation_requests(business_id,store_id,generation_no,selection_id,method_version_id,
+      period_start,period_end,input_fingerprint,is_latest) values($1,$2,60,$3,$4,'2026-09-21','2026-09-27','exact-link-finish-v29-fixture',false) returning id`,
+      [business.id,affectedStore.id,returnSelection.id,resultV29.id]);
+    await tq(`insert into mc.calculation_request_products(business_id,store_id,request_id,product_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,missingLinkRequest.id,returnProduct.id]);
+    for(const [column,value] of [['report_normalization_id',exactNormalization.id],['report_version_id',exactVersion.id]])
+      await tq(`insert into mc.calculation_request_inputs(business_id,store_id,request_id,${column}) values($1,$2,$3,$4)`,
+        [business.id,affectedStore.id,missingLinkRequest.id,value]);
+    const missingLinkRun=await tone(`insert into mc.calculation_runs(business_id,store_id,selection_id,method_version_id,period_start,period_end,
+      input_fingerprint,request_id,attempt_no) values($1,$2,$3,$4,'2026-09-21','2026-09-27','exact-link-finish-v29-fixture',$5,1) returning id`,
+      [business.id,affectedStore.id,returnSelection.id,resultV29.id,missingLinkRequest.id]);
+    const missingLinkPeriod=await tone(`insert into mc.financial_period_results(business_id,store_id,run_id,period_start,period_end,quality,missing_reasons,totals)
+      values($1,$2,$3,'2026-09-21','2026-09-27','partial','["operation_unclassified"]',
+      '{"selectedProductsResultBeforeTax":"311.3335","storeLevelResultBeforeTax":"0.0000","availableResultBeforeTax":"311.3335","estimatedUsnTax":"0.0000","availableResultAfterTax":null,"netProfit":null}') returning id`,
+      [business.id,affectedStore.id,missingLinkRun.id]);
+    await tq(`insert into mc.calculation_inputs(business_id,store_id,run_id,report_normalization_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,missingLinkRun.id,exactNormalization.id]);
+    await tq(`insert into mc.calculation_inputs(business_id,store_id,run_id,report_version_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,missingLinkRun.id,exactVersion.id]);
+    const missingLinkLine=await tone(`insert into mc.result_lines(business_id,store_id,run_id,product_id,variant_id,accounting_date,category_code,
+      amount_signed,quality,result_scope,financial_period_result_id) values($1,$2,$3,$4,$5,'2026-09-22','return_wb_expense_reversal',
+      311.3335,'partial','selected_product',$6) returning id`,
+      [business.id,affectedStore.id,missingLinkRun.id,returnProduct.id,returnVariant.id,missingLinkPeriod.id]);
+    assert.deepEqual(await tone(`select
+      exists(select 1 from mc.calculation_request_inputs where request_id=$1 and report_normalization_id=$2) frozen_normalization,
+      exists(select 1 from mc.calculation_request_inputs where request_id=$1 and operation_link_id=$3) frozen_link,
+      (select product_id=$4 and report_normalization_id=$2 and report_row_id=$5 from mc.operation_versions where id=$6) source_matches`,
+      [missingLinkRequest.id,exactNormalization.id,exactReturnLink.id,returnProduct.id,returnRow.id,exactReturnV13.id]),
+      {frozen_normalization:true,frozen_link:false,source_matches:true});
+    await assert.rejects(()=>tq(`insert into mc.result_evidence(business_id,store_id,result_line_id,report_row_id,source_operation_version_id,operation_link_id,
+      contribution_amount) values($1,$2,$3,$4,$5,$6,311.3335)`,
+      [business.id,affectedStore.id,missingLinkLine.id,returnRow.id,exactReturnV13.id,exactReturnLink.id]),
+      /outside frozen request inputs/);
+
+    await tq(`select set_config('app.user_id','',false),set_config('app.business_id','',false)`);
+    await transportUpgradeDb.exec(await readFile(path.join(root,'db/migrations/058_exact_wb_row_evidence_input.sql'),'utf8'));
+    await tq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[owner.id,business.id]);
+    await tq(`update exact_row_finish_guard_probe set status='succeeded',quality='partial',
+      missing_reasons='["operation_unclassified"]',finished_at=clock_timestamp() where id=$1`,[rowFinishRun.id]);
+    const exactRowFinishGuard=(await tone(`select pg_get_functiondef('mc.guard_run_finish()'::regprocedure) definition`)).definition;
+    assert.match(exactRowFinishGuard,/return_wb_expense_reversal/);
+    assert.match(exactRowFinishGuard,/wb_row_rounding_adjustment/);
+    assert.equal((await tone(`select max(version)::int version from mc.schema_migrations`)).version,58);
+    pass('migration 58 accepts only frozen exact WB row evidence during run finalization');
   }finally{await transportUpgradeDb.close();}
 
   // Produce a machine-derived field/constraint inventory for review.
