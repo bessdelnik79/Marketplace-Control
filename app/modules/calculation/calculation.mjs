@@ -481,7 +481,7 @@ function verifiedTransportReimbursementReferenceIds(components){
     if(group.length!==3||fields.size!==3
       ||!fields.has('rebillLogisticCost')||!fields.has('vw')||!fields.has('vwNds'))continue;
     const net=group.reduce((sum,component)=>sum+rawReturnAmount(component.amountSigned),0n);
-    if(net!==0n)continue;
+    if(roundExactToKopecksScale4(net)!==0n)continue;
     for(const component of group){
       if(component.sourceField==='vw'||component.sourceField==='vwNds')verified.add(String(component.id));
     }
