@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,55);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,56);
   assert.deepEqual((await q("select table_name from information_schema.tables where table_schema='mc' and table_name in ('financial_input_events','financial_store_event_state') order by table_name")).map(row=>row.table_name),['financial_input_events','financial_store_event_state']);
   assert.equal((await one("select relforcerowsecurity as forced from pg_class join pg_namespace on pg_namespace.oid=pg_class.relnamespace where nspname='mc' and relname='financial_input_events'")).forced,true);
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.establish_financial_pipeline_context(uuid,bigint,uuid,text,text)'::regprocedure"));
@@ -1971,6 +1971,10 @@ try {
     assert.match(exactDailyGuard,/daily WB row rounding evidence is invalid/);
     assert.match(await readFile(path.join(root,'db/migrations/055_exact_wb_row_result.sql'),'utf8'),
       /coverage\.credential_generation=connection\.credential_generation/);
+    const cutoverRecovery=await readFile(path.join(root,'db/migrations/056_exact_wb_cutover_recovery.sql'),'utf8');
+    assert.match(cutoverRecovery,/financial-result-upgrade:v30:store:/);
+    assert.match(cutoverRecovery,/normalization_method\.implementation_version='wb-finance-v13'/);
+    assert.match(cutoverRecovery,/current_method\.version_no<30/);
     const parserV13=await tone(`select id from mc.method_versions where code='wb_finance_import' and version_no=13`);
     const resultV29=await tone(`select id from mc.method_versions where code='financial_result' and version_no=29`);
     const exactDocument=await tone(`insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness)
@@ -2106,6 +2110,62 @@ try {
       contribution_amount) values($1,$2,$3,$4,$5,$6,-0.0035)`,
       [business.id,affectedStore.id,returnAdjustmentLine.id,returnRow.id,exactReturnV13.id,exactReturnLink.id]);
     pass('migration 55 preserves exact WB precision and refetches accepted reports newest-first before v30 cutover');
+
+    await tq(`insert into mc.report_normalizations(business_id,store_id,report_version_id,method_version_id,normalization_key,status)
+      select report.business_id,report.store_id,version.id,$3,'cutover-ready-v13:'||version.id,'succeeded'
+        from mc.reports report join mc.report_versions version on version.id=report.current_version_id
+       where report.business_id=$1 and report.store_id=$2 and version.status='accepted'
+      on conflict(report_version_id,method_version_id) do nothing`,[business.id,affectedStore.id,parserV13.id]);
+    const resultV30=await tone(`select id from mc.method_versions where code='financial_result' and version_no=30`);
+    await tq(`select id from mc.emit_financial_input_event($1,$2,'result_method_updated','2026-05-12','2026-05-12',
+      p_source_result_method_version_id=>$3)`,[affectedStore.id,`financial-result-upgrade:v30:store:${affectedStore.id}`,resultV30.id]);
+    const cutoverPreconditions=await tone(`select method.version_no current_method_version,
+      (select count(*)::int from mc.reports report join mc.report_versions version on version.id=report.current_version_id
+        where report.store_id=$1 and version.status='accepted' and not exists(
+          select 1 from mc.report_normalizations normalization join mc.method_versions parser on parser.id=normalization.method_version_id
+           where normalization.report_version_id=version.id and normalization.status='succeeded' and parser.implementation_version='wb-finance-v13')) missing_v13,
+      exists(select 1 from mc.product_selections selection where selection.store_id=$1 and selection.status='confirmed') selection_ready
+      from mc.financial_daily_current_publications pointer join mc.financial_daily_publications publication on publication.id=pointer.publication_id
+      join mc.financial_daily_generations generation on generation.id=publication.generation_id
+      join mc.method_versions method on method.id=generation.result_method_version_id where pointer.store_id=$1`,[affectedStore.id]);
+    assert.deepEqual(cutoverPreconditions,{current_method_version:20,missing_v13:0,selection_ready:true});
+    const cutoverReadyCount=await tone(`select count(distinct store.id)::int n from mc.stores store
+      join mc.financial_daily_current_publications pointer on pointer.business_id=store.business_id and pointer.store_id=store.id
+      join mc.financial_daily_publications publication on publication.id=pointer.publication_id
+      join mc.financial_daily_generations generation on generation.id=publication.generation_id
+      join mc.method_versions current_method on current_method.id=generation.result_method_version_id
+      left join mc.financial_daily_publication_days day on day.publication_id=publication.id
+      join mc.reports report on report.business_id=store.business_id and report.store_id=store.id
+      join mc.report_versions version on version.id=report.current_version_id and version.status='accepted'
+      join mc.method_versions parser on parser.code='wb_finance_import' and parser.implementation_version='wb-finance-v13'
+      join mc.method_versions result on result.code='financial_result' and result.implementation_version='financial-result-v30'
+      where store.id=$1 and store.status='active' and current_method.version_no<30
+        and not exists(select 1 from mc.reports pending_report join mc.report_versions pending_version on pending_version.id=pending_report.current_version_id
+          where pending_report.store_id=store.id and pending_version.status='accepted' and not exists(
+            select 1 from mc.report_normalizations normalization join mc.method_versions normalization_method on normalization_method.id=normalization.method_version_id
+            where normalization.report_version_id=pending_version.id and normalization.status='succeeded'
+              and normalization_method.implementation_version='wb-finance-v13'))`,[affectedStore.id]);
+    assert.equal(cutoverReadyCount.n,1);
+    await tq(`select set_config('app.user_id','',false),set_config('app.business_id','',false)`);
+    await transportUpgradeDb.exec(await readFile(path.join(root,'db/migrations/056_exact_wb_cutover_recovery.sql'),'utf8'));
+    await tq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[owner.id,business.id]);
+    const repairedCutover=await tone(`select affected_from::text,affected_to::text,allows_wb_api from mc.financial_input_events
+      where event_key='financial-result-upgrade:v30:cutover-repair:v1:store:'||$1`,[affectedStore.id]);
+    const v30CutoverEvents=await tq(`select event_key,affected_from::text,affected_to::text from mc.financial_input_events
+      where store_id=$1 and event_key like 'financial-result-upgrade:v30:%' order by event_key`,[affectedStore.id]);
+    const expectedCutover=await tone(`select least((select min(day.accounting_date) from mc.financial_daily_current_publications pointer
+        join mc.financial_daily_publication_days day on day.publication_id=pointer.publication_id where pointer.store_id=$1),
+        (select min(report.period_start) from mc.reports report join mc.report_versions version on version.id=report.current_version_id
+          where report.store_id=$1 and version.status='accepted'))::text affected_from,
+      greatest((select max(day.accounting_date) from mc.financial_daily_current_publications pointer
+        join mc.financial_daily_publication_days day on day.publication_id=pointer.publication_id where pointer.store_id=$1),
+        (select max(report.period_end) from mc.reports report join mc.report_versions version on version.id=report.current_version_id
+          where report.store_id=$1 and version.status='accepted'))::text affected_to`,[affectedStore.id]);
+    assert.deepEqual(repairedCutover,{...expectedCutover,allows_wb_api:false},JSON.stringify(v30CutoverEvents));
+    assert.equal((await tone(`select reason from mc.calculation_invalidations where store_id=$1`,[affectedStore.id])).reason,
+      'exact_wb_row_result_v30');
+    assert.equal((await tone(`select max(version)::int version from mc.schema_migrations`)).version,56);
+    pass('migration 56 repairs a narrow v30 cutover with one full-range local successor');
   }finally{await transportUpgradeDb.close();}
 
   // Produce a machine-derived field/constraint inventory for review.

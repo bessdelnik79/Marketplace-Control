@@ -63,6 +63,34 @@ test('service reads adjacent weeks atomically and exposes publication provenance
   assert.deepEqual(overview.crossBorderBuyout,{present:false,reportCount:0});
 });
 
+test('service hides a publication produced by an obsolete financial method while exact recalculation is pending',async()=>{
+  const overview=await getFinancialOverview('user-1','store-1','2026-09-14',{
+    loadPeriodPair:async()=>pair({
+      method_version:'financial-result-v28',
+      method_upgrade_pending:true,
+      update_status:{status:'pending',updatedAt:new Date('2026-09-29T08:00:00Z'),lastErrorCode:null,
+        affectedPeriod:{start:'2026-09-14',end:'2026-09-20'},methodUpgradePending:true}
+    })
+  });
+  assert.equal(overview.status,'unavailable');
+  assert.equal(overview.quality,'unavailable');
+  assert.equal(overview.totals,null);
+  assert.equal(overview.displayResult,null);
+  assert.deepEqual(overview.missingReasons,['financial_method_upgrade_pending']);
+  assert.equal(overview.updateStatus.methodUpgradePending,true);
+});
+
+test('service keeps an unmapped period unavailable instead of falling back while the exact method is pending',async()=>{
+  const overview=await getFinancialOverview('user-1','store-1','2026-08-03',{
+    loadPeriodPair:async()=>pair({method_version:'financial-result-v28',method_upgrade_pending:true,current:null,previous:null,
+      update_status:{status:'pending',methodUpgradePending:true,updatedAt:new Date('2026-09-29T08:00:00Z')}})
+  });
+  assert.equal(overview.status,'unavailable');
+  assert.equal(overview.totals,null);
+  assert.deepEqual(overview.missingReasons,['financial_method_upgrade_pending']);
+  assert.equal(overview.updateStatus.methodUpgradePending,true);
+});
+
 test('service reads only exact arbitrary published envelopes and compares the immediately preceding equal range', async () => {
   let request;
   const current = period('2026-08-19', '2026-09-25');

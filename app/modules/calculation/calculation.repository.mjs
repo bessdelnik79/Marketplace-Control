@@ -10,6 +10,24 @@ export const compatibleFinancialParserVersions=Object.freeze([
 const qualityRank={complete:0,partial:1,unavailable:2};
 const targetResultVersions=new Set(['financial-result-v10','financial-result-v12','financial-result-v14','financial-result-v16','financial-result-v18','financial-result-v20','financial-result-v22','financial-result-v24','financial-result-v26','financial-result-v28','financial-result-v30']);
 
+export function methodUpgradeUpdateStatus({job=null,inputsPending=false,publicationId=null,publishedAt=null,
+  periodStart=null,periodEnd=null,canRetry=false}={}){
+  const failed=job?.status==='failed'&&!inputsPending;
+  return{
+    status:failed?'failed':job?.status==='running'?'running':'pending',publicationId,
+    updatedAt:job?.updated_at??publishedAt??null,
+    lastErrorCode:failed?job.last_error_code??'financial_daily_update_failed':null,
+    affectedPeriod:job?.affected_from&&job?.affected_to
+      ?{start:job.affected_from,end:job.affected_to}
+      :periodStart&&periodEnd?{start:periodStart,end:periodEnd}:null,
+    canRetry:failed&&canRetry,methodUpgradePending:true
+  };
+}
+
+export function blocksLegacyFinancialFallback(dailyPublication){
+  return dailyPublication?.method_upgrade_pending===true;
+}
+
 function shiftCalendarDate(value,days){
   const text=String(value??'');
   if(!/^\d{4}-\d{2}-\d{2}$/.test(text))throw new Error('calculation_invalid_period');
@@ -644,11 +662,18 @@ async function getCurrentDailyPublicationContext(client,businessId,storeId){
   const publication=(await client.query(
     `select publication.id as publication_id,publication.created_at as published_at,
             publication.watermark_generation,method.code as method_code,
-            method.implementation_version as method_version,business.timezone
+            method.implementation_version as method_version,
+            expected_method.implementation_version as expected_method_version,business.timezone
        from mc.financial_daily_current_publications current_publication
        join mc.financial_daily_publications publication on publication.id=current_publication.publication_id
        join mc.financial_daily_generations generation on generation.id=publication.generation_id
        join mc.method_versions method on method.id=generation.result_method_version_id
+       left join lateral(
+         select candidate.implementation_version
+           from mc.method_versions candidate
+          where candidate.code='financial_result' and candidate.parameters @> '{"targetPeriod":true}'::jsonb
+          order by candidate.version_no desc limit 1
+       ) expected_method on true
        join mc.businesses business on business.id=publication.business_id
       where current_publication.business_id=$1 and current_publication.store_id=$2`,[businessId,storeId]
   )).rows[0];
@@ -659,7 +684,9 @@ async function getCurrentDailyPublicationContext(client,businessId,storeId){
        join mc.financial_daily_generation_products product on product.generation_id=mapped_day.generation_id and product.selected
       where mapped_day.publication_id=$1 order by product.product_id`,[publication.publication_id]
   )).rows.map(row=>row.product_id);
-  return{...publication,publication_source:'daily',scope:{type:'selected_products',productIds}};
+  return{...publication,publication_source:'daily',
+    method_upgrade_pending:Boolean(publication.expected_method_version&&publication.expected_method_version!==publication.method_version),
+    scope:{type:'selected_products',productIds}};
 }
 
 async function latestDailyPeriod(client,publicationId){
@@ -763,6 +790,22 @@ async function getDailyUpdateStatus(client,businessId,storeId,periodStart=null,p
       order by job.created_at desc,job.id desc limit 1`,params
   )).rows[0];
   const publicationId=publication?.publication_id??null;
+  if(publication?.method_upgrade_pending){
+    const inputsPending=(await client.query(
+      `select exists(
+         select 1 from mc.reports report
+         join mc.report_versions version on version.id=report.current_version_id
+        where report.business_id=$1 and report.store_id=$2 and version.status='accepted'
+          and not exists(
+            select 1 from mc.report_normalizations normalization
+            join mc.method_versions parser on parser.id=normalization.method_version_id
+           where normalization.report_version_id=version.id and normalization.status='succeeded'
+             and parser.implementation_version='wb-finance-v13'
+          )
+       ) inputs_pending`,[businessId,storeId])).rows[0]?.inputs_pending===true;
+    return methodUpgradeUpdateStatus({job,inputsPending,publicationId,publishedAt:publication.published_at,
+      periodStart,periodEnd,canRetry});
+  }
   if(!job||publication&&BigInt(job.event_generation)<=BigInt(publication.watermark_generation))return{
     status:'current',publicationId,updatedAt:publication?.published_at??null,lastErrorCode:null,affectedPeriod:null,canRetry
   };
@@ -800,6 +843,11 @@ export async function getPublishedFinancialPeriod(userId,storeId,periodStart,per
     if(daily){
       const period=await getDailyPeriodEnvelope(client,daily,periodStart,periodEnd);
       if(period)return{...daily,update_status:await getDailyUpdateStatus(client,businessId,storeId,periodStart,periodEnd,daily,canRetry),...period};
+      if(blocksLegacyFinancialFallback(daily))return{...daily,
+        update_status:await getDailyUpdateStatus(client,businessId,storeId,periodStart,periodEnd,daily,canRetry),
+        period_start:periodStart,period_end:periodEnd,quality:'unavailable',
+        missing_reasons:['financial_method_upgrade_pending'],totals:null,lines:[],covered_period:null,
+        cross_border_buyout:{present:null,reportCount:null}};
     }
     const legacy=await getLegacyPair(client,businessId,storeId,{periodStart,periodEnd,previousPeriodStart:null,previousPeriodEnd:null},canRetry);
     return legacy?.current?{...legacy,...legacy.current,current:undefined,previous:undefined}:null;
@@ -827,6 +875,9 @@ export async function getPublishedFinancialPeriodPair(userId,storeId,{periodStar
           return{...daily,update_status:await getDailyUpdateStatus(client,businessId,storeId,periodStart,periodEnd,daily,canRetry),current,previous};
         }
       }
+      if(blocksLegacyFinancialFallback(daily))return{...daily,
+        update_status:await getDailyUpdateStatus(client,businessId,storeId,periodStart,periodEnd,daily,canRetry),
+        current:null,previous:null};
     }
     return getLegacyPair(client,businessId,storeId,requested,canRetry);
   });

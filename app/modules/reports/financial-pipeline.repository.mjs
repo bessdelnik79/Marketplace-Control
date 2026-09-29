@@ -9,6 +9,20 @@ import { reconcileBankPayment } from './bank-reconciliation.mjs';
 const safeDate=value=>/^\d{4}-\d{2}-\d{2}$/.test(String(value??''))?String(value):null;
 const safeId=value=>/^\d+$/.test(String(value??''))?String(value).replace(/^0+(?=\d)/,''):null;
 
+export function exactFinancialCutoverPlan({storeId,currentResultVersionNo=null,affectedFrom,affectedTo,parserEventId=null,
+  parserEventCovers=false,resultEventId=null}={}){
+  if(Number(currentResultVersionNo)>=30)return null;
+  const range=`${affectedFrom}:${affectedTo}:store:${storeId}`;
+  return{
+    parserEventKey:parserEventCovers?null:parserEventId
+      ?`financial-parser-upgrade:v13:cutover-repair:${range}`
+      :`financial-parser-upgrade:v13:store:${storeId}`,
+    resultEventKey:resultEventId
+      ?`financial-result-upgrade:v30:cutover-repair:${range}`
+      :`financial-result-upgrade:v30:store:${storeId}`
+  };
+}
+
 function contextArgs(jobId,generation,leaseToken,workerId,type){
   return[jobId,generation,leaseToken,workerId,type];
 }
@@ -329,9 +343,13 @@ export function createFinancialPipelineRepository({pool}){
           [context.business_id,context.store_id]);
         const upgrade=(await client.query(
           `with pointer_range as (
-             select min(day.accounting_date) affected_from,max(day.accounting_date) affected_to
+             select min(day.accounting_date) affected_from,max(day.accounting_date) affected_to,
+                    max(pointer_method.version_no) current_result_version_no
                from mc.financial_daily_current_publications pointer
-               join mc.financial_daily_publication_days day on day.publication_id=pointer.publication_id
+               join mc.financial_daily_publications pointer_publication on pointer_publication.id=pointer.publication_id
+               join mc.financial_daily_generations pointer_generation on pointer_generation.id=pointer_publication.generation_id
+               join mc.method_versions pointer_method on pointer_method.id=pointer_generation.result_method_version_id
+               left join mc.financial_daily_publication_days day on day.publication_id=pointer.publication_id
               where pointer.business_id=$1 and pointer.store_id=$2
            ), report_range as (
              select min(report.period_start) affected_from,max(report.period_end) affected_to
@@ -340,18 +358,27 @@ export function createFinancialPipelineRepository({pool}){
            )
            select least(pointer_range.affected_from,report_range.affected_from)::text affected_from,
                   greatest(pointer_range.affected_to,report_range.affected_to)::text affected_to,
-                  parser.id parser_method_id,result.id result_method_id
+                  parser.id parser_method_id,result.id result_method_id,
+                  pointer_range.current_result_version_no,
+                  parser_event.id parser_event_id,
+                  parser_event.affected_from::text parser_event_from,parser_event.affected_to::text parser_event_to,
+                  result_event.id result_event_id,
+                  result_event.affected_from::text result_event_from,result_event.affected_to::text result_event_to
              from pointer_range cross join report_range
              join mc.method_versions parser on parser.code='wb_finance_import'
                and parser.implementation_version='wb-finance-v13'
              join mc.method_versions result on result.code='financial_result'
                and result.implementation_version='financial-result-v30'
+             left join mc.financial_input_events parser_event
+               on parser_event.business_id=$1 and parser_event.store_id=$2
+              and parser_event.event_key='financial-parser-upgrade:v13:store:'||$2
+             left join mc.financial_input_events result_event
+               on result_event.business_id=$1 and result_event.store_id=$2
+              and result_event.event_key='financial-result-upgrade:v30:store:'||$2
             where least(pointer_range.affected_from,report_range.affected_from) is not null
+              and coalesce(pointer_range.current_result_version_no,0)<30
               and exists(select 1 from mc.product_selections selection
                 where selection.business_id=$1 and selection.store_id=$2 and selection.status='confirmed')
-              and not exists(select 1 from mc.financial_input_events prior_upgrade
-                where prior_upgrade.business_id=$1 and prior_upgrade.store_id=$2
-                   and prior_upgrade.event_key='financial-result-upgrade:v30:store:'||$2)
               and not exists(
                 select 1 from mc.reports pending_report
                 join mc.report_versions pending_version on pending_version.id=pending_report.current_version_id
@@ -362,7 +389,11 @@ export function createFinancialPipelineRepository({pool}){
                     where ready.report_version_id=pending_version.id and ready.status='succeeded'
                       and ready_method.implementation_version='wb-finance-v13'
                   )
-              )`,[context.business_id,context.store_id])).rows[0];
+              )
+              and (result_event.id is null
+                or result_event.affected_from>least(pointer_range.affected_from,report_range.affected_from)
+                or result_event.affected_to<greatest(pointer_range.affected_to,report_range.affected_to))`,
+          [context.business_id,context.store_id])).rows[0];
         if(upgrade){
           await client.query(
             `insert into mc.calculation_invalidations(business_id,store_id,requested_by,reason,invalidated_at)
@@ -370,15 +401,21 @@ export function createFinancialPipelineRepository({pool}){
              on conflict(store_id) do update set requested_by=excluded.requested_by,reason=excluded.reason,
                generation_token=gen_random_uuid(),invalidated_at=excluded.invalidated_at`,
             [context.business_id,context.store_id,context.actor_user_id]);
-          await client.query(
+          const parserEventCovers=upgrade.parser_event_id&&upgrade.parser_event_from<=upgrade.affected_from
+            &&upgrade.parser_event_to>=upgrade.affected_to;
+          const cutover=exactFinancialCutoverPlan({storeId:context.store_id,currentResultVersionNo:upgrade.current_result_version_no,
+            affectedFrom:upgrade.affected_from,affectedTo:upgrade.affected_to,parserEventId:upgrade.parser_event_id,
+            parserEventCovers,resultEventId:upgrade.result_event_id});
+          if(!cutover)return{superseded:false,insertedRows,issues,normalizationId:normalization.id};
+          if(cutover.parserEventKey)await client.query(
             `select id from mc.emit_financial_input_event($1,$2,'parser_method_updated',$3,$4,
                p_source_parser_method_version_id=>$5)`,
-            [context.store_id,`financial-parser-upgrade:v13:store:${context.store_id}`,
+            [context.store_id,cutover.parserEventKey,
               upgrade.affected_from,upgrade.affected_to,upgrade.parser_method_id]);
           await client.query(
             `select id from mc.emit_financial_input_event($1,$2,'result_method_updated',$3,$4,
                p_source_result_method_version_id=>$5)`,
-            [context.store_id,`financial-result-upgrade:v30:store:${context.store_id}`,
+            [context.store_id,cutover.resultEventKey,
               upgrade.affected_from,upgrade.affected_to,upgrade.result_method_id]);
         }
       }

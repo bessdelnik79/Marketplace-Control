@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { aggregateDailyPublicationPeriod,aggregatePublishedPeriodEnvelopes,classifyNormalizationRecovery,compatibleFinancialParserVersions,loadPublishedPeriodEnvelopes,missingNormalizationRanges,prepareFinancialCalculation,reportPeriodsCoverRange,selectFullyNormalizedReportPeriods } from './calculation.repository.mjs';
+import { aggregateDailyPublicationPeriod,aggregatePublishedPeriodEnvelopes,blocksLegacyFinancialFallback,classifyNormalizationRecovery,compatibleFinancialParserVersions,loadPublishedPeriodEnvelopes,methodUpgradeUpdateStatus,missingNormalizationRanges,prepareFinancialCalculation,reportPeriodsCoverRange,selectFullyNormalizedReportPeriods } from './calculation.repository.mjs';
 import { buildFinancialPeriodOverview } from '../overview/financial-overview.mjs';
 
 function envelope(start,end,{quality='complete',missingReasons=[],amount='10.0000',freshness=`${end}T10:00:00Z`,crossBorder=0}={}){
@@ -19,6 +19,25 @@ function envelope(start,end,{quality='complete',missingReasons=[],amount='10.000
 test('current financial parser keeps v12 and v11 as compatibility fallbacks',()=>{
   assert.deepEqual(compatibleFinancialParserVersions.slice(0,3),['wb-finance-v13','wb-finance-v12','wb-finance-v11']);
   assert.match(prepareFinancialCalculation.toString(),/target\?30:29/);
+});
+
+test('exact-method status keeps loading while v13 inputs are pending but exposes a terminal daily failure when ready',()=>{
+  const job={status:'failed',last_error_code:'financial_daily_publication_scope_incompatible',updated_at:'2026-09-29T08:00:00Z',
+    affected_from:'2025-11-24',affected_to:'2026-09-27'};
+  assert.deepEqual(methodUpgradeUpdateStatus({job,inputsPending:true,publicationId:'old',canRetry:true}),{
+    status:'pending',publicationId:'old',updatedAt:job.updated_at,lastErrorCode:null,
+    affectedPeriod:{start:job.affected_from,end:job.affected_to},canRetry:false,methodUpgradePending:true
+  });
+  assert.deepEqual(methodUpgradeUpdateStatus({job,inputsPending:false,publicationId:'old',canRetry:true}),{
+    status:'failed',publicationId:'old',updatedAt:job.updated_at,lastErrorCode:job.last_error_code,
+    affectedPeriod:{start:job.affected_from,end:job.affected_to},canRetry:true,methodUpgradePending:true
+  });
+});
+
+test('obsolete daily publication blocks fallback to a legacy calculation outside its mapped range',()=>{
+  assert.equal(blocksLegacyFinancialFallback({method_upgrade_pending:true,method_version:'financial-result-v28'}),true);
+  assert.equal(blocksLegacyFinancialFallback({method_upgrade_pending:false,method_version:'financial-result-v30'}),false);
+  assert.equal(blocksLegacyFinancialFallback(null),false);
 });
 
 test('excludes an entire report period when one accepted report lacks current normalization',()=>{

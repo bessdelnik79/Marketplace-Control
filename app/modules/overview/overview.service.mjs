@@ -97,12 +97,14 @@ export async function getFinancialOverview(userId, storeId, selectedDate, select
       updatedAt: timestamp(pair.update_status.updatedAt),
       lastErrorCode: pair.update_status.lastErrorCode ?? null,
       affectedPeriod: pair.update_status.affectedPeriod ?? null,
-      canRetry: pair.update_status.canRetry === true
-    } : { status: 'current', updatedAt: timestamp(pair.published_at), lastErrorCode: null, affectedPeriod: null, canRetry:false },
+      canRetry: pair.update_status.canRetry === true,
+      methodUpgradePending: pair.update_status.methodUpgradePending === true
+    } : { status: 'current', updatedAt: timestamp(pair.published_at), lastErrorCode: null, affectedPeriod: null, canRetry:false, methodUpgradePending:false },
     timezone,
     scope
   };
   if (!pair.current) {
+    const methodUpgradePending=pair.method_upgrade_pending===true||pair.update_status?.methodUpgradePending===true;
     return {
       status: 'unavailable',
       ...provenance,
@@ -111,11 +113,36 @@ export async function getFinancialOverview(userId, storeId, selectedDate, select
       requestedPeriod: period??null,
       coveredPeriod: null,
       quality: 'unavailable',
-      missingReasons: ['published_period_missing'],
+      missingReasons: [methodUpgradePending?'financial_method_upgrade_pending':'published_period_missing'],
       totals: null,
       displayResult: null,
       comparison: {
         period: previousPeriod??null,
+        quality: 'unavailable',
+        amount: null,
+        changeAmount: null,
+        changePercent: null,
+        comparable: false,
+        reason: 'current_period_unavailable'
+      }
+    };
+  }
+
+  if (pair.method_upgrade_pending === true || pair.update_status?.methodUpgradePending === true) {
+    return {
+      status: 'unavailable',
+      ...provenance,
+      sourceFreshness: timestamp(pair.current.source_freshness),
+      crossBorderBuyout: { present: null, reportCount: null },
+      period,
+      requestedPeriod: period,
+      coveredPeriod: pair.current.covered_period ?? null,
+      quality: 'unavailable',
+      missingReasons: ['financial_method_upgrade_pending'],
+      totals: null,
+      displayResult: null,
+      comparison: {
+        period: previousPeriod,
         quality: 'unavailable',
         amount: null,
         changeAmount: null,
