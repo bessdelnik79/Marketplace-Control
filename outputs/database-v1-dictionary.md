@@ -641,7 +641,7 @@
 | operation_version_id | uuid | нет | — |
 | component_key | text | нет | — |
 | category_code | text | нет | — |
-| amount_signed | numeric(20,4) | нет | — |
+| amount_signed | numeric | нет | — |
 | method_version_id | uuid | нет | — |
 | source_field | text | да | — |
 | created_at | timestamp with time zone | нет | now() |
@@ -752,7 +752,7 @@
 - `FOREIGN KEY (business_id, store_id, tax_computation_id) REFERENCES mc.tax_computations(business_id, store_id, id)`
 - `CHECK ((num_nonnulls(financial_component_id, cost_version_id, expense_version_id, tax_computation_id, report_row_id) = 1))`
 - `PRIMARY KEY (id)`
-- `CHECK ((((cost_version_id IS NULL) AND (report_row_id IS NULL) AND (source_operation_version_id IS NULL) AND (operation_link_id IS NULL) AND (quantity IS NULL)) OR ((cost_version_id IS NOT NULL) AND (report_row_id IS NULL) AND (source_operation_version_id IS NOT NULL) AND (quantity IS NOT NULL)) OR ((report_row_id IS NOT NULL) AND (cost_version_id IS NULL) AND (source_operation_version_id IS NOT NULL) AND (operation_link_id IS NOT NULL) AND (quantity IS NULL))))`
+- `CHECK ((((cost_version_id IS NULL) AND (report_row_id IS NULL) AND (source_operation_version_id IS NULL) AND (operation_link_id IS NULL) AND (quantity IS NULL)) OR ((cost_version_id IS NOT NULL) AND (report_row_id IS NULL) AND (source_operation_version_id IS NOT NULL) AND (quantity IS NOT NULL)) OR ((report_row_id IS NOT NULL) AND (cost_version_id IS NULL) AND (source_operation_version_id IS NOT NULL) AND (quantity IS NULL))))`
 
 ## financial_daily_generation_inputs
 
@@ -1926,7 +1926,7 @@
 - `FOREIGN KEY (business_id, store_id, result_line_id) REFERENCES mc.result_lines(business_id, store_id, id)`
 - `CHECK ((num_nonnulls(financial_component_id, cost_version_id, expense_version_id, tax_computation_id, report_row_id) = 1))`
 - `FOREIGN KEY (business_id, store_id, operation_link_id) REFERENCES mc.operation_links(business_id, store_id, id)`
-- `CHECK ((((operation_link_id IS NULL) AND (report_row_id IS NULL) AND ((source_operation_version_id IS NULL) OR (cost_version_id IS NOT NULL))) OR ((cost_version_id IS NOT NULL) AND (source_operation_version_id IS NOT NULL) AND (quantity IS NOT NULL) AND (report_row_id IS NULL)) OR ((report_row_id IS NOT NULL) AND (source_operation_version_id IS NOT NULL) AND (operation_link_id IS NOT NULL) AND (cost_version_id IS NULL) AND (quantity IS NULL))))`
+- `CHECK ((((operation_link_id IS NULL) AND (report_row_id IS NULL) AND ((source_operation_version_id IS NULL) OR (cost_version_id IS NOT NULL))) OR ((cost_version_id IS NOT NULL) AND (source_operation_version_id IS NOT NULL) AND (quantity IS NOT NULL) AND (report_row_id IS NULL)) OR ((report_row_id IS NOT NULL) AND (source_operation_version_id IS NOT NULL) AND (cost_version_id IS NULL) AND (quantity IS NULL))))`
 - `PRIMARY KEY (id)`
 - `FOREIGN KEY (business_id, store_id, report_row_id) REFERENCES mc.report_rows(business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, source_operation_version_id) REFERENCES mc.operation_versions(business_id, store_id, id)`

@@ -143,6 +143,15 @@ test('negative signed return correction increases WB expenses',()=>{
   assert.equal(overview.totals.toTransfer,'75.2700');
 });
 
+test('v30 row rounding adjustment participates in WB expenses and transfer',()=>{
+  const raw=envelope({methodVersion:'financial-result-v30',revenue:'500.0000',expenseLine:'-68.6441',selectedBeforeTax:'431.3600',beforeTax:'431.3600',tax:null,afterTax:null});
+  raw.lines.push({result_scope:'selected_product',product_id:'product-1',accounting_date:'2026-09-14',
+    category_code:'wb_row_rounding_adjustment',amount_signed:'0.0041',quality:'complete'});
+  const overview=buildFinancialPeriodOverview(raw);
+  assert.equal(overview.totals.wbExpenses,'68.6400');
+  assert.equal(overview.totals.toTransfer,'431.3600');
+});
+
 test('unavailable period exposes no calculated transfer amount', () => {
   const overview = buildFinancialPeriodOverview({
     publication_id: 'publication-1', method_version: 'financial-result-v14',

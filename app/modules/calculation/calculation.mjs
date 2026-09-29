@@ -5,7 +5,7 @@ const RESULT_CATEGORIES = new Set([
   'revenue', 'revenue_return', 'acquiring', 'logistics',
   'storage', 'acceptance', 'penalty', 'deduction', 'commission_adjustment',
   'other_adjustment', 'promotion', 'pickup_reward', 'wb_reward_without_vat', 'wb_reward_vat',
-  'return_wb_expense_reversal',
+  'return_wb_expense_reversal', 'wb_row_rounding_adjustment',
 ]);
 const NON_RESULT_CATEGORIES = new Set(['payout','commission','loyalty_compensation','loyalty_discount_reference','rebill_logistic_compensation']);
 const VERIFIED_RECONCILIATION_COMPONENTS = new Map([
@@ -480,7 +480,7 @@ function verifiedTransportReimbursementReferenceIds(components){
     const fields=new Set(group.map(component=>component.sourceField));
     if(group.length!==3||fields.size!==3
       ||!fields.has('rebillLogisticCost')||!fields.has('vw')||!fields.has('vwNds'))continue;
-    const net=group.reduce((sum,component)=>sum+money(component.amountSigned),0n);
+    const net=group.reduce((sum,component)=>sum+rawReturnAmount(component.amountSigned),0n);
     if(net!==0n)continue;
     for(const component of group){
       if(component.sourceField==='vw'||component.sourceField==='vwNds')verified.add(String(component.id));
@@ -491,7 +491,7 @@ function verifiedTransportReimbursementReferenceIds(components){
 
 const RETURN_WB_EXPENSE_FIELDS=new Set(['acquiringFee','vw','vwNds','ppvzReward']);
 const RETURN_REPLACED_EXPENSE_FIELDS=new Set(['vw','vwNds','ppvzReward']);
-const RETURN_RAW_SCALE=18;
+const RETURN_RAW_SCALE=30;
 
 function rawReturnAmount(value){
   if(value===null||value===undefined||String(value).trim()==='')return 0n;
@@ -502,6 +502,31 @@ function roundReturnAmountToMoney(value){
   const divisor=10n**BigInt(RETURN_RAW_SCALE-2),absolute=value<0n?-value:value;
   const kopecks=(absolute+divisor/2n)/divisor;
   return(value<0n?-kopecks:kopecks)*100n;
+}
+
+function roundExactToScale4(value){
+  const divisor=10n**BigInt(RETURN_RAW_SCALE-MONEY_SCALE),absolute=value<0n?-value:value;
+  const rounded=(absolute+divisor/2n)/divisor;
+  return value<0n?-rounded:rounded;
+}
+
+function roundExactToKopecksScale4(value){
+  const divisor=10n**BigInt(RETURN_RAW_SCALE-2),absolute=value<0n?-value:value;
+  const kopecks=(absolute+divisor/2n)/divisor;
+  return(value<0n?-kopecks:kopecks)*100n;
+}
+
+function exactReturnWbExpenseReversal(components){
+  const fields=new Map();
+  for(const component of components??[]){
+    const field=String(component?.sourceField??'');
+    if(!RETURN_WB_EXPENSE_FIELDS.has(field)&&!['retailAmount','forPay'].includes(field))continue;
+    if(fields.has(field))return null;
+    fields.set(field,rawReturnAmount(component.rawValue));
+  }
+  if(!fields.has('retailAmount')||!fields.has('forPay'))return null;
+  const expense=[...RETURN_WB_EXPENSE_FIELDS].reduce((sum,field)=>sum+(fields.get(field)??0n),0n);
+  return roundReturnAmountToMoney(expense)===roundReturnAmountToMoney(fields.get('retailAmount')-fields.get('forPay'))?expense:null;
 }
 
 export function calculateReturnWbExpenseReversal(components){
@@ -567,7 +592,8 @@ export function calculateFinancialResult({
     matches.push(operation);
     operationsById.set(id, matches);
   }
-  const signedReturnExpenseMethod=['financial-result-v25','financial-result-v26','financial-result-v27','financial-result-v28'].includes(resultMethodVersion);
+  const signedReturnExpenseMethod=['financial-result-v25','financial-result-v26','financial-result-v27','financial-result-v28','financial-result-v29','financial-result-v30'].includes(resultMethodVersion);
+  const exactRowResultMethod=['financial-result-v29','financial-result-v30'].includes(resultMethodVersion);
   const retainReturnAcquiringMethod=['financial-result-v25','financial-result-v26'].includes(resultMethodVersion);
   const replacedReturnExpenseFields=retainReturnAcquiringMethod?RETURN_REPLACED_EXPENSE_FIELDS:RETURN_WB_EXPENSE_FIELDS;
   const componentsByOperation=new Map();
@@ -605,12 +631,51 @@ export function calculateFinancialResult({
     if(!signedReturnExpenseMethod||(operationCandidates.length===1&&confirmedReturnSale(operationCandidates[0])))returnExpenseComponentIds.add(String(component.id));
   }
 
+  const exactRowPlans=new Map(),invalidExactRows=new Set();
+  if(exactRowResultMethod)for(const operation of operations){
+    if(operation?.state==='withdrawn'||!sourceInPeriod(operation,range)||!['sale','return'].includes(operation?.operationType))continue;
+    if(excludedProduct(operation)||!operation?.productId||!selected.has(String(operation.productId)))continue;
+    const operationId=String(operation.id),group=componentsByOperation.get(operationId)??[];
+    const payouts=group.filter(component=>component?.sourceField==='forPay'&&component?.categoryCode==='payout');
+    const confirmed=operation.operationType==='return'?confirmedReturnSale(operation):null;
+    if(operation.operationType==='return'&&!confirmed)continue;
+    let exactSum=0n,roundedCategorySum=0n,valid=payouts.length===1;
+    for(const component of group){
+      if(component?.state==='withdrawn'||!sourceInPeriod(component,range))continue;
+      if(NON_RESULT_CATEGORIES.has(component?.categoryCode)||transportReimbursementReferences.has(String(component?.id)))continue;
+      if(operation.operationType==='return'&&replacedReturnExpenseFields.has(component?.sourceField))continue;
+      if(!RESULT_CATEGORIES.has(component?.categoryCode)||component?.scopeCode==='reconciliation'||component?.classificationStatus!=='confirmed'){
+        valid=false;continue;
+      }
+      const exact=rawReturnAmount(component.amountSigned);
+      exactSum+=exact;roundedCategorySum+=roundExactToScale4(exact);
+    }
+    let reversalAmount=null;
+    if(operation.operationType==='return'){
+      const exactReversal=exactReturnWbExpenseReversal(group);
+      if(exactReversal===null)valid=false;
+      else{
+        reversalAmount=roundExactToScale4(exactReversal);
+        exactSum+=exactReversal;roundedCategorySum+=reversalAmount;
+      }
+    }
+    const roundedTarget=roundExactToKopecksScale4(exactSum);
+    const payout=valid?rawReturnAmount(payouts[0].amountSigned):0n;
+    const payoutEqualsTarget=payout===roundedTarget*10n**BigInt(RETURN_RAW_SCALE-MONEY_SCALE);
+    if(!valid||!payoutEqualsTarget){invalidExactRows.add(operationId);continue;}
+    exactRowPlans.set(operationId,{
+      adjustment:roundedTarget-roundedCategorySum,reversalAmount,reportRowId:operation.reportRowId,
+      operationLinkId:confirmed?.link?.id??null
+    });
+  }
+
   for (const component of financialComponents) {
     if (component?.state === 'withdrawn' || !sourceInPeriod(component, range)) continue;
     const componentId = uniqueSource(seenSources, component?.id, 'financial_component');
     validateScopeStructure(component);
     if(excludedProduct(component))continue;
     if (component?.productId && !selected.has(String(component.productId))) continue;
+    if(invalidExactRows.has(String(component?.operationVersionId))){reasons.add('operation_unclassified');continue;}
     if(returnExpenseComponentIds.has(String(componentId)))continue;
     if (NON_RESULT_CATEGORIES.has(component?.categoryCode)) {
       if(!isVerifiedNonResultComponent(component))reasons.add('operation_unclassified');
@@ -640,7 +705,7 @@ export function calculateFinancialResult({
     }
     const scope = resolveScope(component, selected, reasons);
     if (!scope) continue;
-    const amount = money(component.amountSigned);
+    const amount = exactRowResultMethod?roundExactToScale4(rawReturnAmount(component.amountSigned)):money(component.amountSigned);
     addLine(lines, {
       ...scope,
       accountingDate: validDate(component.accountingDate),
@@ -659,6 +724,14 @@ export function calculateFinancialResult({
     if(excludedProduct(operation))continue;
     const scope = resolveScope({ ...operation, scopeCode: operation.scopeCode ?? 'selected_product' }, selected, reasons);
     if (!scope) continue;
+    if(invalidExactRows.has(operationId)){reasons.add('operation_unclassified');continue;}
+    const exactPlan=exactRowPlans.get(operationId);
+    if(exactPlan?.adjustment)addLine(lines,{
+      ...scope,accountingDate:validDate(operation.accountingDate),categoryCode:'wb_row_rounding_adjustment'
+    },exactPlan.adjustment,{
+      sourceType:'wb_row_rounding_adjustment',sourceId:operationId,reportRowId:requiredId(exactPlan.reportRowId),
+      operationLinkId:exactPlan.operationLinkId,contributionAmount:formatDecimal(exactPlan.adjustment)
+    });
     if (operation.operationType === 'return') {
       const confirmed=confirmedReturnSale(operation);
       if (!confirmed) {
@@ -667,7 +740,7 @@ export function calculateFinancialResult({
       }
       const {link,sale}=confirmed;
       const returnDate = validDate(operation.accountingDate);
-      const reversal=calculateReturnWbExpenseReversal(componentsByOperation.get(operationId)??[]);
+      const reversal=exactRowResultMethod?exactPlan?.reversalAmount??null:calculateReturnWbExpenseReversal(componentsByOperation.get(operationId)??[]);
       if(reversal===null||(!signedReturnExpenseMethod&&reversal<=0n))reasons.add('operation_unclassified');
       else addLine(lines,{
         ...scope,accountingDate:returnDate,categoryCode:'return_wb_expense_reversal'

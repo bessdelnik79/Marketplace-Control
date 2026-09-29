@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { aggregateDailyPublicationPeriod,aggregatePublishedPeriodEnvelopes,classifyNormalizationRecovery,compatibleFinancialParserVersions,loadPublishedPeriodEnvelopes,missingNormalizationRanges,reportPeriodsCoverRange,selectFullyNormalizedReportPeriods } from './calculation.repository.mjs';
+import { aggregateDailyPublicationPeriod,aggregatePublishedPeriodEnvelopes,classifyNormalizationRecovery,compatibleFinancialParserVersions,loadPublishedPeriodEnvelopes,missingNormalizationRanges,prepareFinancialCalculation,reportPeriodsCoverRange,selectFullyNormalizedReportPeriods } from './calculation.repository.mjs';
 import { buildFinancialPeriodOverview } from '../overview/financial-overview.mjs';
 
 function envelope(start,end,{quality='complete',missingReasons=[],amount='10.0000',freshness=`${end}T10:00:00Z`,crossBorder=0}={}){
@@ -16,8 +16,9 @@ function envelope(start,end,{quality='complete',missingReasons=[],amount='10.000
   };
 }
 
-test('current financial parser keeps v10 as the first compatibility fallback after v11',()=>{
-  assert.deepEqual(compatibleFinancialParserVersions.slice(0,3),['wb-finance-v12','wb-finance-v11','wb-finance-v10']);
+test('current financial parser keeps v12 and v11 as compatibility fallbacks',()=>{
+  assert.deepEqual(compatibleFinancialParserVersions.slice(0,3),['wb-finance-v13','wb-finance-v12','wb-finance-v11']);
+  assert.match(prepareFinancialCalculation.toString(),/target\?30:29/);
 });
 
 test('excludes an entire report period when one accepted report lacks current normalization',()=>{

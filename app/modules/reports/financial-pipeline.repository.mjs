@@ -317,11 +317,11 @@ export function createFinancialPipelineRepository({pool}){
            p_source_report_version_id=>$6,p_source_normalization_id=>$7)`,
         [context.store_id,eventKey,pointerCurrent?'report_updated':'report_accepted',source.period_start,source.period_end,versionId,normalization.id]);
 
-      // Method v24 cannot publish a range that mixes older and v24 days. The
-      // migration queues every current report for local v12 normalization;
+      // The current result cannot publish a range that mixes older and current days. The
+      // migration queues every current report for local v13 normalization;
       // the worker that completes the last one emits exactly one full-range
       // cutover event. No WB call is involved.
-      if(financialParserVersion==='wb-finance-v12'){
+      if(financialParserVersion==='wb-finance-v13'){
         // Serialize the final readiness check per store. Without this lock two
         // concurrent last normalizations can each miss the other's commit and
         // neither would emit the cutover.
@@ -338,20 +338,20 @@ export function createFinancialPipelineRepository({pool}){
                from mc.reports report join mc.report_versions version on version.id=report.current_version_id
               where report.business_id=$1 and report.store_id=$2 and version.status='accepted'
            )
-           select coalesce(pointer_range.affected_from,report_range.affected_from)::text affected_from,
-                  coalesce(pointer_range.affected_to,report_range.affected_to)::text affected_to,
+           select least(pointer_range.affected_from,report_range.affected_from)::text affected_from,
+                  greatest(pointer_range.affected_to,report_range.affected_to)::text affected_to,
                   parser.id parser_method_id,result.id result_method_id
              from pointer_range cross join report_range
              join mc.method_versions parser on parser.code='wb_finance_import'
-               and parser.implementation_version='wb-finance-v12'
+               and parser.implementation_version='wb-finance-v13'
              join mc.method_versions result on result.code='financial_result'
-               and result.implementation_version='financial-result-v28'
-            where coalesce(pointer_range.affected_from,report_range.affected_from) is not null
+               and result.implementation_version='financial-result-v30'
+            where least(pointer_range.affected_from,report_range.affected_from) is not null
               and exists(select 1 from mc.product_selections selection
                 where selection.business_id=$1 and selection.store_id=$2 and selection.status='confirmed')
               and not exists(select 1 from mc.financial_input_events prior_upgrade
                 where prior_upgrade.business_id=$1 and prior_upgrade.store_id=$2
-                   and prior_upgrade.event_key='financial-result-upgrade:v28:store:'||$2)
+                   and prior_upgrade.event_key='financial-result-upgrade:v30:store:'||$2)
               and not exists(
                 select 1 from mc.reports pending_report
                 join mc.report_versions pending_version on pending_version.id=pending_report.current_version_id
@@ -360,25 +360,25 @@ export function createFinancialPipelineRepository({pool}){
                     select 1 from mc.report_normalizations ready
                     join mc.method_versions ready_method on ready_method.id=ready.method_version_id
                     where ready.report_version_id=pending_version.id and ready.status='succeeded'
-                      and ready_method.implementation_version='wb-finance-v12'
+                      and ready_method.implementation_version='wb-finance-v13'
                   )
               )`,[context.business_id,context.store_id])).rows[0];
         if(upgrade){
           await client.query(
             `insert into mc.calculation_invalidations(business_id,store_id,requested_by,reason,invalidated_at)
-              values($1,$2,$3,'single_count_return_expense_reversal_v27',clock_timestamp())
+              values($1,$2,$3,'exact_wb_row_result_v30',clock_timestamp())
              on conflict(store_id) do update set requested_by=excluded.requested_by,reason=excluded.reason,
                generation_token=gen_random_uuid(),invalidated_at=excluded.invalidated_at`,
             [context.business_id,context.store_id,context.actor_user_id]);
           await client.query(
             `select id from mc.emit_financial_input_event($1,$2,'parser_method_updated',$3,$4,
                p_source_parser_method_version_id=>$5)`,
-            [context.store_id,`financial-parser-upgrade:v12:store:${context.store_id}`,
+            [context.store_id,`financial-parser-upgrade:v13:store:${context.store_id}`,
               upgrade.affected_from,upgrade.affected_to,upgrade.parser_method_id]);
           await client.query(
             `select id from mc.emit_financial_input_event($1,$2,'result_method_updated',$3,$4,
                p_source_result_method_version_id=>$5)`,
-            [context.store_id,`financial-result-upgrade:v28:store:${context.store_id}`,
+            [context.store_id,`financial-result-upgrade:v30:store:${context.store_id}`,
               upgrade.affected_from,upgrade.affected_to,upgrade.result_method_id]);
         }
       }

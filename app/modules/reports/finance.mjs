@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 
 export const financialReportsEndpoint = 'https://finance-api.wildberries.ru/api/finance/v1/sales-reports/detailed';
-export const financialParserVersion = 'wb-finance-v12';
+export const financialParserVersion = 'wb-finance-v13';
 const unverifiedMoneyFields = [
   'sellerPromo','installmentCoFinancingAmount','cashbackAmount',
   'cashbackCommissionChange','sellerPromoDiscount','loyaltyDiscount','agencyVat'
@@ -23,6 +23,16 @@ export function financialReportPeriodMatches(existing,incoming){
 
 const identifierFields = ['reportId','rrdId','giId','nmId','shkId','ppvzOfficeId','orderId','trbxId','loyaltyId'];
 const identifierPattern = new RegExp(`("(?:${identifierFields.join('|')})"\\s*:\\s*)(-?\\d+)(?=\\s*[,}])`, 'g');
+const monetaryFields = [
+  'retailPrice','retailAmount','salePercent','commissionPercent','retailPriceWithdiscRub',
+  'deliveryAmount','returnAmount','deliveryRub','deliveryService','productDiscountForReport','sellerPromo','supplierPromo',
+  'ppvzSppPrc','ppvzKvwPrcBase','ppvzKvwPrc','supRatingPrcUp','ppvzSalesCommission',
+  'forPay','ppvzForPay','ppvzReward','acquiringFee','acquiringPercent','vw','vwNds','penalty',
+  'additionalPayment','rebillLogisticCost','paidStorage','storageFee','deduction','paidAcceptance','acceptance',
+  'installmentCoFinancingAmount','cashbackAmount','cashbackDiscount','cashbackCommissionChange',
+  'sellerPromoDiscount','loyaltyDiscount','cashWithdrawal','agencyFee','agencyVat','vatRate','transactionTotal','bankPaymentSum'
+];
+const monetaryPattern = new RegExp(`("(?:${monetaryFields.join('|')})"\\s*:\\s*)(-?\\d+(?:\\.\\d+)?)(?=\\s*[,}])`, 'g');
 const decimalPattern = /^-?\d+(?:\.\d+)?$/;
 // srid and shkId identify a WB transaction/package, not a catalog item. WB also
 // sends them on store-level service rows where nmId and SKU are empty.
@@ -104,7 +114,7 @@ function apiError(message, response, retryAfterMs) {
 
 export function parseFinancialJson(raw) {
   try {
-    return JSON.parse(String(raw).replace(identifierPattern, '$1"$2"'));
+    return JSON.parse(String(raw).replace(identifierPattern, '$1"$2"').replace(monetaryPattern, '$1"$2"'));
   } catch {
     throw new Error('financial_invalid_response');
   }
@@ -154,19 +164,6 @@ export function decimal(value, { absolute = false, negative = false } = {}) {
   return result;
 }
 
-function roundedKopecks(value) {
-  const raw = decimal(value);
-  if (raw === null) return null;
-  const negative = raw.startsWith('-');
-  const [whole, fraction = ''] = raw.replace(/^-/, '').split('.');
-  let kopecks = BigInt(whole) * 100n + BigInt(fraction.padEnd(2, '0').slice(0, 2));
-  if ((fraction[2] ?? '0') >= '5') kopecks += 1n;
-  if (kopecks === 0n) return '0';
-  const integer = kopecks / 100n;
-  const remainder = String(kopecks % 100n).padStart(2, '0');
-  return decimal(`${negative ? '-' : ''}${integer}.${remainder}`);
-}
-
 function hasMoney(row, fields) {
   return fields.some(field => {
     const value = decimal(row[field]);
@@ -188,9 +185,7 @@ export function normalizeFinancialOperation(row) {
 
   const components = [];
   const add = (field, categoryCode, direction) => {
-    const raw = direction === 'rounded_expense' || direction === 'absolute_expense'
-      ? roundedKopecks(row?.[field])
-      : decimal(row?.[field]);
+    const raw = decimal(row?.[field]);
     if (raw === null || raw === '0') return;
     let amountSigned=raw;
     if(direction==='income')amountSigned=decimal(raw,{absolute:true});

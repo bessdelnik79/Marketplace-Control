@@ -82,7 +82,7 @@ async function loadSnapshot(client,context){
   if(!affectedPeriods.length)throw new Error('financial_daily_inputs_missing');
   const affectedStart=affectedPeriods.reduce((value,row)=>row.period_start<value?row.period_start:value,affectedPeriods[0].period_start);
   const affectedEnd=affectedPeriods.reduce((value,row)=>row.period_end>value?row.period_end:value,affectedPeriods[0].period_end);
-  const method=(await client.query(`select id,implementation_version from mc.method_versions where code='financial_result' and version_no=28`,[])).rows[0];
+  const method=(await client.query(`select id,implementation_version from mc.method_versions where code='financial_result' and version_no=30`,[])).rows[0];
   if(!method)throw new Error('financial_daily_method_missing');
   const normalizationIds=reports.map(row=>row.normalization_id);
   const parserMethods=normalizationIds.length?(await client.query(
@@ -159,7 +159,7 @@ export function calculateFinancialPeriods(snapshot){
       taxSettings:snapshot.taxSettings.map(row=>({id:row.id,effectiveFrom:row.effective_from,regimeCode:row.regime_code,
         usnRateFraction:row.usn_rate_fraction,vatMode:row.vat_mode,state:row.state})),reportCoverageComplete:coverageComplete});
     const currentTax=snapshot.taxSettings.filter(row=>row.effective_from<=periodEnd).at(-1)??null;
-    const result=calculateFinancialResult({periodStart,periodEnd,resultMethodVersion:snapshot.method?.implementation_version??'financial-result-v28',selectedProductIds:snapshot.products,financialComponents:snapshot.components,
+    const result=calculateFinancialResult({periodStart,periodEnd,resultMethodVersion:snapshot.method?.implementation_version??'financial-result-v30',selectedProductIds:snapshot.products,financialComponents:snapshot.components,
       operations:snapshot.operations,operationLinks:snapshot.operationLinks,costVersions:snapshot.costs,expenses:snapshot.expenses,
       taxSetting:currentTax?{regimeCode:currentTax.regime_code,usnRateFraction:currentTax.usn_rate_fraction,vatMode:currentTax.vat_mode,state:currentTax.state}:null,
       taxReference,reportCoverageComplete:coverageComplete,allowEmptyResult:rows.length===0});
@@ -206,6 +206,9 @@ async function persistGeneration(client,context,snapshot,generation,daily){
       else if(evidence.sourceType==='return_expense_reversal')await client.query(
         `insert into mc.financial_daily_evidence(business_id,store_id,generation_id,daily_result_id,report_row_id,source_operation_version_id,operation_link_id,contribution_amount)
          values($1,$2,$3,$4,$5,$6,$7,$8)`,[...args,saved.id,evidence.reportRowId,evidence.sourceId,evidence.operationLinkId,evidence.contributionAmount]);
+      else if(evidence.sourceType==='wb_row_rounding_adjustment')await client.query(
+        `insert into mc.financial_daily_evidence(business_id,store_id,generation_id,daily_result_id,report_row_id,source_operation_version_id,operation_link_id,contribution_amount)
+         values($1,$2,$3,$4,$5,$6,$7,$8)`,[...args,saved.id,evidence.reportRowId,evidence.sourceId,evidence.operationLinkId??null,evidence.contributionAmount]);
       else if(['sale_cost','return_cost'].includes(evidence.sourceType))await client.query(
         `insert into mc.financial_daily_evidence(business_id,store_id,generation_id,daily_result_id,cost_version_id,source_operation_version_id,operation_link_id,quantity,contribution_amount)
          values($1,$2,$3,$4,$5,$6,$7,$8,$9)`,[...args,saved.id,evidence.costVersionId,evidence.sourceId,evidence.operationLinkId??null,evidence.quantity,evidence.contributionAmount]);

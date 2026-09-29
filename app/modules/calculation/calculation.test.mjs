@@ -100,9 +100,9 @@ test('transport reimbursement is verified by one source row, component fields an
     periodStart:'2026-08-17',periodEnd:'2026-08-23',selectedProductIds:['product-1'],
     financialComponents:[
       {id:'revenue',classificationStatus:'confirmed',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-08-18',categoryCode:'revenue',sourceField:'retailAmount',rawValue:'100',operationType:'sale',docTypeName:'Продажа',sellerOperName:'Продажа',amountSigned:'100'},
-      {id:'rebill',operationVersionId:'transport-row',rrdId:0,classificationStatus:'confirmed',scopeCode:'reconciliation',productId:'product-1',accountingDate:'2026-08-19',categoryCode:'rebill_logistic_compensation',sourceField:'rebillLogisticCost',rawValue:'18.97501',operationType:'other',docTypeName:'Изменяемый текст WB',sellerOperName:'Возмещение издержек по перемещению и операционной обработке товара',amountSigned:'-18.9800'},
-      {id:'vw',operationVersionId:'transport-row',rrdId:0,classificationStatus:'unclassified',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-08-19',categoryCode:'wb_reward_without_vat',sourceField:'vw',rawValue:'-15.547',operationType:'other',docTypeName:'Изменяемый текст WB',sellerOperName:'Возмещение издержек по перемещению и операционной обработке товара',amountSigned:'15.5500'},
-      {id:'vat',operationVersionId:'transport-row',rrdId:0,classificationStatus:'unclassified',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-08-19',categoryCode:'wb_reward_vat',sourceField:'vwNds',rawValue:'-3.42801',operationType:'other',docTypeName:'Изменяемый текст WB',sellerOperName:'Возмещение издержек по перемещению и операционной обработке товара',amountSigned:'3.4300'}
+      {id:'rebill',operationVersionId:'transport-row',rrdId:0,classificationStatus:'confirmed',scopeCode:'reconciliation',productId:'product-1',accountingDate:'2026-08-19',categoryCode:'rebill_logistic_compensation',sourceField:'rebillLogisticCost',rawValue:'18.97501234567890123456',operationType:'other',docTypeName:'Изменяемый текст WB',sellerOperName:'Возмещение издержек по перемещению и операционной обработке товара',amountSigned:'-18.97501234567890123456'},
+      {id:'vw',operationVersionId:'transport-row',rrdId:0,classificationStatus:'unclassified',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-08-19',categoryCode:'wb_reward_without_vat',sourceField:'vw',rawValue:'-15.54700123456789012345',operationType:'other',docTypeName:'Изменяемый текст WB',sellerOperName:'Возмещение издержек по перемещению и операционной обработке товара',amountSigned:'15.54700123456789012345'},
+      {id:'vat',operationVersionId:'transport-row',rrdId:0,classificationStatus:'unclassified',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-08-19',categoryCode:'wb_reward_vat',sourceField:'vwNds',rawValue:'-3.42801111111101111111',operationType:'other',docTypeName:'Изменяемый текст WB',sellerOperName:'Возмещение издержек по перемещению и операционной обработке товара',amountSigned:'3.42801111111101111111'}
     ]
   });
   assert.equal(result.missingReasons.includes('operation_unclassified'),false);
@@ -452,6 +452,59 @@ test('return WB expense fields are summed raw and rounded once to kopecks',()=>{
   assert.equal(calculateReturnWbExpenseReversal([{sourceField:'retailAmount',rawValue:'1.00'}]),null);
 });
 
+test('v30 rounds each WB sale result once and reconciles September rows to signed forPay',()=>{
+  const component=(operationVersionId,accountingDate,id,categoryCode,sourceField,amountSigned,scopeCode='selected_product')=>({
+    id,operationVersionId,operationType:'sale',productId:'product-1',variantId:'variant-1',accountingDate,scopeCode,
+    classificationStatus:'confirmed',categoryCode,sourceField,rawValue:amountSigned.replace(/^-/,''),amountSigned
+  });
+  const result=calculateFinancialResult({
+    resultMethodVersion:'financial-result-v30',periodStart:'2026-09-21',periodEnd:'2026-09-27',selectedProductIds:['product-1'],
+    financialComponents:[
+      component('sale-3135408992540','2026-09-21','3135408992540-retail','revenue','retailAmount','500'),
+      component('sale-3135408992540','2026-09-21','3135408992540-vw','wb_reward_without_vat','vw','-56.5360655737704918'),
+      component('sale-3135408992540','2026-09-21','3135408992540-vat','wb_reward_vat','vwNds','-12.108'),
+      component('sale-3135408992540','2026-09-21','3135408992540-payout','payout','forPay','431.36','reconciliation'),
+      component('sale-3135408992542','2026-09-22','3135408992542-retail','revenue','retailAmount','1000'),
+      component('sale-3135408992542','2026-09-22','3135408992542-vw','wb_reward_without_vat','vw','-2.8451'),
+      component('sale-3135408992542','2026-09-22','3135408992542-vat','wb_reward_vat','vwNds','-0.4951'),
+      component('sale-3135408992542','2026-09-22','3135408992542-payout','payout','forPay','996.66','reconciliation'),
+      {...component('unselected-sale','2026-09-23','unselected-retail','revenue','retailAmount','100'),productId:'product-2'},
+      {...component('unselected-sale','2026-09-23','unselected-payout','payout','forPay','1','reconciliation'),productId:'product-2'}
+    ],
+    operations:[
+      {id:'sale-3135408992540',reportRowId:'3135408992540',operationType:'sale',productId:'product-1',variantId:'variant-1',accountingDate:'2026-09-21',quantity:'1'},
+      {id:'sale-3135408992542',reportRowId:'3135408992542',operationType:'sale',productId:'product-1',variantId:'variant-1',accountingDate:'2026-09-22',quantity:'1'},
+      {id:'unselected-sale',reportRowId:'unselected-row',operationType:'sale',productId:'product-2',variantId:'variant-2',accountingDate:'2026-09-23',quantity:'1'}
+    ],
+    costVersions:[{id:'zero-cost',variantId:'variant-1',effectiveFrom:'2026-01-01',unitCost:'0'}]
+  });
+  const wbRows=date=>result.lines.filter(line=>line.accountingDate===date&&line.categoryCode!=='cost_of_goods')
+    .reduce((sum,line)=>sum+BigInt(line.amountSigned.replace('.','')),0n);
+  assert.equal(wbRows('2026-09-21'),4313600n);
+  assert.equal(wbRows('2026-09-22'),9966600n);
+  assert.equal(result.lines.filter(line=>line.categoryCode==='wb_row_rounding_adjustment').reduce((sum,line)=>sum+BigInt(line.amountSigned.replace('.','')),0n),43n);
+  assert.equal(result.totals.selectedProductsResultBeforeTax,'1428.0200');
+  assert.equal(result.missingReasons.includes('operation_unclassified'),false);
+  assert.equal(JSON.stringify(result).includes('unselected'),false);
+  assert.deepEqual(result.lines.find(line=>line.categoryCode==='wb_row_rounding_adjustment'&&line.accountingDate==='2026-09-21').evidence,[{
+    sourceType:'wb_row_rounding_adjustment',sourceId:'sale-3135408992540',reportRowId:'3135408992540',operationLinkId:null,contributionAmount:'0.0041'
+  }]);
+});
+
+test('v30 fails closed on a selected WB row whose signed forPay disagrees with its exact result',()=>{
+  const result=calculateFinancialResult({
+    resultMethodVersion:'financial-result-v30',periodStart:'2026-09-21',periodEnd:'2026-09-27',selectedProductIds:['product-1'],
+    financialComponents:[
+      {id:'retail',operationVersionId:'sale',operationType:'sale',productId:'product-1',variantId:'variant-1',accountingDate:'2026-09-21',scopeCode:'selected_product',classificationStatus:'confirmed',categoryCode:'revenue',sourceField:'retailAmount',rawValue:'100',amountSigned:'100'},
+      {id:'payout',operationVersionId:'sale',operationType:'sale',productId:'product-1',variantId:'variant-1',accountingDate:'2026-09-21',scopeCode:'reconciliation',classificationStatus:'confirmed',categoryCode:'payout',sourceField:'forPay',rawValue:'99.99',amountSigned:'99.99'}
+    ],
+    operations:[{id:'sale',reportRowId:'row-sale',operationType:'sale',productId:'product-1',variantId:'variant-1',accountingDate:'2026-09-21',quantity:'1'}],
+    costVersions:[{id:'zero-cost',variantId:'variant-1',effectiveFrom:'2026-01-01',unitCost:'0'}]
+  });
+  assert.equal(result.totals,null);
+  assert.deepEqual(result.missingReasons,['operation_unclassified','tax_setting_missing']);
+});
+
 test('v28 replaces all four return expense fields with one raw signed adjustment',()=>{
   const result=calculateFinancialResult({
     resultMethodVersion:'financial-result-v28',periodStart:'2026-08-03',periodEnd:'2026-08-09',selectedProductIds:['product-1'],
@@ -475,6 +528,32 @@ test('v28 replaces all four return expense fields with one raw signed adjustment
   ]);
   assert.equal(result.lines.some(line=>['acquiring','vw','vat','pickup'].includes(line.evidence[0]?.sourceId)),false);
   assert.equal(result.totals.selectedProductsResultBeforeTax,'-330.6700');
+});
+
+test('v30 keeps a linked return single-counted while reconciling its exact row result',()=>{
+  const base={operationVersionId:'return-v30',operationType:'return',productId:'product-1',variantId:'variant-1',accountingDate:'2026-08-06',scopeCode:'selected_product',classificationStatus:'confirmed'};
+  const result=calculateFinancialResult({
+    resultMethodVersion:'financial-result-v30',periodStart:'2026-08-03',periodEnd:'2026-08-09',selectedProductIds:['product-1'],
+    financialComponents:[
+      {...base,id:'retail-v30',categoryCode:'revenue_return',sourceField:'retailAmount',rawValue:'642',amountSigned:'-642'},
+      {...base,id:'payout-v30',scopeCode:'reconciliation',categoryCode:'payout',sourceField:'forPay',rawValue:'330.67',amountSigned:'-330.67'},
+      {...base,id:'acquiring-v30',categoryCode:'acquiring',sourceField:'acquiringFee',rawValue:'31.33',amountSigned:'31.33'},
+      {...base,id:'vw-v30',categoryCode:'wb_reward_without_vat',sourceField:'vw',rawValue:'208.8475409836065574',amountSigned:'-208.8475409836065574'},
+      {...base,id:'vat-v30',categoryCode:'wb_reward_vat',sourceField:'vwNds',rawValue:'45.95',amountSigned:'-45.95'},
+      {...base,id:'pickup-v30',classificationStatus:'unclassified',categoryCode:'pickup_reward',sourceField:'ppvzReward',rawValue:'25.206',amountSigned:'-25.206'}
+    ],
+    operations:[
+      {id:'sale-v30',operationType:'sale',productId:'product-1',variantId:'variant-1',accountingDate:'2026-08-02',quantity:'1'},
+      {id:'return-v30',reportRowId:'return-row-v30',operationType:'return',productId:'product-1',variantId:'variant-1',accountingDate:'2026-08-06',quantity:'-1'}
+    ],
+    operationLinks:[{id:'link-v30',fromOperationVersionId:'return-v30',toOperationVersionId:'sale-v30',linkType:'return_to_original_sale',status:'confirmed'}],
+    costVersions:[{id:'zero-cost-v30',variantId:'variant-1',effectiveFrom:'2026-01-01',unitCost:'0'}]
+  });
+  assert.equal(result.totals.selectedProductsResultBeforeTax,'-330.6700');
+  assert.deepEqual(result.lines.filter(line=>['return_wb_expense_reversal','wb_row_rounding_adjustment'].includes(line.categoryCode)).map(line=>[line.categoryCode,line.amountSigned]),[
+    ['return_wb_expense_reversal','311.3335'],['wb_row_rounding_adjustment','-0.0035']
+  ]);
+  assert.equal(result.lines.some(line=>line.evidence.some(evidence=>['acquiring-v30','vw-v30','vat-v30','pickup-v30'].includes(evidence.sourceId))),false);
 });
 
 test('legacy v24 keeps its frozen positive-only return expense semantics',()=>{
