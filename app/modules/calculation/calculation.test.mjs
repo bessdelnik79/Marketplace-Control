@@ -105,6 +105,11 @@ test('transport reimbursement is verified by one source row, component fields an
       {id:'vat',operationVersionId:'transport-row',rrdId:0,classificationStatus:'unclassified',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-08-19',categoryCode:'wb_reward_vat',sourceField:'vwNds',rawValue:'-3.42801111111101111111',operationType:'other',docTypeName:'Изменяемый текст WB',sellerOperName:'Возмещение издержек по перемещению и операционной обработке товара',amountSigned:'3.42801111111101111111'}
     ]
   });
+  assert.equal(result.missingReasons.includes('operation_unclassified'),false);
+  assert.equal(result.totals.availableResultBeforeTax,'100.0000');
+  assert.deepEqual(result.lines.map(line=>line.categoryCode),['revenue']);
+});
+
   test('transport reimbursement accepts sub-kopeck residual after rounding the bundle total to kopecks',()=>{
   const bundles=[
     {
@@ -208,10 +213,6 @@ test('transport reimbursement is verified by one source row, component fields an
       '100.0000'
     );
   }
-});
-  assert.equal(result.missingReasons.includes('operation_unclassified'),false);
-  assert.equal(result.totals.availableResultBeforeTax,'100.0000');
-  assert.deepEqual(result.lines.map(line=>line.categoryCode),['revenue']);
 });
 
 test('transport reimbursement references remain fail-closed without an exact zero companion set',()=>{
