@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,52);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,53);
   assert.deepEqual((await q("select table_name from information_schema.tables where table_schema='mc' and table_name in ('financial_input_events','financial_store_event_state') order by table_name")).map(row=>row.table_name),['financial_input_events','financial_store_event_state']);
   assert.equal((await one("select relforcerowsecurity as forced from pg_class join pg_namespace on pg_namespace.oid=pg_class.relnamespace where nspname='mc' and relname='financial_input_events'")).forced,true);
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.establish_financial_pipeline_context(uuid,bigint,uuid,text,text)'::regprocedure"));
@@ -104,7 +104,7 @@ try {
   assert.match(publicationFunction,/financial_daily_shadow_day_compatible/);
   assert.match(shadowDayFunction,/comparison.status='matched'/);
   assert.match(shadowDayFunction,/legacy_method.code='financial_result'/);
-  assert.match(shadowDayFunction,/legacy_method.version_no BETWEEN 9 AND 24/);
+  assert.match(shadowDayFunction,/legacy_method.version_no BETWEEN 9 AND 26/);
   assert.match(shadowDayFunction,/legacy_method.implementation_version='financial-result-v'\|\|legacy_method.version_no/);
   assert.match(shadowDayFunction,/p_accounting_date BETWEEN comparison.period_start AND comparison.period_end/);
   assert.match(shadowDayFunction,/day\.quality IN \('complete','partial'\)/);
@@ -193,6 +193,8 @@ try {
   const resultMethodV22=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=22");
   const resultMethodV23=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=23");
   const resultMethodV24=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=24");
+  const resultMethodV25=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=25");
+  const resultMethodV26=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=26");
   assert.equal(resultMethodV11.implementation_version,'financial-result-v11');
   assert.equal(resultMethodV12.implementation_version,'financial-result-v12');
   assert.equal(financeMethodV11.implementation_version,'wb-finance-v11');
@@ -220,6 +222,11 @@ try {
   assert.equal(resultMethodV24.implementation_version,'financial-result-v24');
   assert.equal(resultMethodV24.parameters.targetPeriod,true);
   assert.equal(resultMethodV24.parameters.excludedProductNotice,'count-only-v1');
+  assert.equal(resultMethodV25.implementation_version,'financial-result-v25');
+  assert.equal(resultMethodV25.parameters.returnExpenseReversal,'raw-signed-four-fields-retain-acquiring-v2');
+  assert.equal(resultMethodV26.implementation_version,'financial-result-v26');
+  assert.equal(resultMethodV26.parameters.targetPeriod,true);
+  assert.equal(resultMethodV26.parameters.returnExpenseReversal,'raw-signed-four-fields-retain-acquiring-v2');
   assert.equal(resultMethodV14.parameters.targetPeriod,true);
   assert.equal(resultMethodV12.parameters.targetPeriod,true);
   assert.equal(resultMethodV10.parameters.targetPeriod,true);
@@ -245,12 +252,14 @@ try {
   assert.match(targetGuard,/financial-result-v22/);
   assert.match(targetGuard,/wb-finance-v12/);
   assert.match(targetGuard,/financial-result-v24/);
+  assert.match(targetGuard,/financial-result-v26/);
+  assert.match(targetGuard,/WHEN 'financial-result-v26'.*THEN 'wb-finance-v12'/s);
   assert.match((await one("select pg_get_functiondef('mc.guard_confirmed_return_link()'::regprocedure) as definition")).definition,/sold\.accounting_date\s*>\s*returned\.accounting_date/);
   assert.match((await one("select pg_get_functiondef('mc.guard_evidence_source()'::regprocedure) as definition")).definition,/return_wb_expense_reversal/);
   const dailyCompatibility=(await one("select pg_get_functiondef('mc.financial_daily_shadow_day_compatible(uuid,date)'::regprocedure) as definition")).definition;
-  assert.match(dailyCompatibility,/generation_method\.version_no\s*=\s*24/g);
-  assert.doesNotMatch(dailyCompatibility,/generation_method\.version_no\s*=\s*22/);
-  assert.match(dailyCompatibility,/BETWEEN 9 AND 24/);
+  assert.match(dailyCompatibility,/generation_method\.version_no\s*=\s*26/g);
+  assert.doesNotMatch(dailyCompatibility,/generation_method\.version_no\s*=\s*24/);
+  assert.match(dailyCompatibility,/BETWEEN 9 AND 26/);
   const taxComputationColumns=(await q("select column_name from information_schema.columns where table_schema='mc' and table_name='tax_computations' order by column_name")).map(row=>row.column_name);
   assert.ok(taxComputationColumns.includes('product_id'));
   assert.ok(!taxComputationColumns.includes('tax_year')&&!taxComputationColumns.includes('tax_setting_version_id')&&!taxComputationColumns.includes('rate_fraction'));
@@ -1695,7 +1704,7 @@ try {
       values($1,$2,'wb_api','catalog','return-upgrade-catalog','complete') returning id`,[business.id,affectedStore.id]);
     const returnProduct=await tone(`insert into mc.products(business_id,store_id,wb_article,seller_article)
       values($1,$2,520001,'RETURN-UPGRADE') returning id`,[business.id,affectedStore.id]);
-    await tone(`select mc.confirm_product_selection($1,$2,$3::uuid[]) id`,[affectedStore.id,returnCatalog.id,[returnProduct.id]]);
+    const returnSelection=await tone(`select mc.confirm_product_selection($1,$2,$3::uuid[]) id`,[affectedStore.id,returnCatalog.id,[returnProduct.id]]);
     await tq(`select set_config('app.user_id','',false),set_config('app.business_id','',false)`);
     await transportUpgradeDb.exec(await readFile(path.join(root,'db/migrations/052_return_expense_reversal.sql'),'utf8'));
     await tq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[owner.id,business.id]);
@@ -1718,20 +1727,22 @@ try {
         business_id,store_id,report_version_id,method_version_id,normalization_key,status)
       values($1,$2,$3,$4,'return-link-normalization','succeeded') returning id`,
       [business.id,affectedStore.id,returnVersion.id,returnParserV12.id]);
-    const insertReturnOperation=async(key,rowNumber,operationType,quantity,shkId)=>{
+    const insertReturnOperation=async(key,rowNumber,operationType,quantity,shkId,{srid='same-srid',rawFields={}}={})=>{
       const raw={rrdId:0,nmId:520001,shkId,orderDt:'2026-05-11T10:00:00Z',rrDate:'2026-05-12',
-        docTypeName:operationType==='sale'?'Продажа':'Возврат',sellerOperName:operationType==='sale'?'Продажа':'Возврат'};
+        docTypeName:operationType==='sale'?'Продажа':'Возврат',sellerOperName:operationType==='sale'?'Продажа':'Возврат',...rawFields};
       const row=await tone(`insert into mc.report_rows(business_id,store_id,report_version_id,external_row_key,row_number,raw_data,row_checksum)
         values($1,$2,$3,$4,$5,$6::jsonb,$7) returning id`,[business.id,affectedStore.id,returnVersion.id,key,rowNumber,JSON.stringify(raw),`${key}-checksum`]);
       const operation=await tone(`insert into mc.operations(business_id,store_id,source_code,source_operation_key)
         values($1,$2,'wb',$3) returning id`,[business.id,affectedStore.id,key]);
       return tone(`insert into mc.operation_versions(business_id,store_id,operation_id,report_row_id,version_no,srid,operation_type,
           product_id,variant_id,accounting_date,quantity,report_normalization_id)
-        values($1,$2,$3,$4,1,'same-srid',$5,$6,$7,'2026-05-12',$8,$9) returning id`,
-        [business.id,affectedStore.id,operation.id,row.id,operationType,returnProduct.id,returnVariant.id,quantity,returnNormalization.id]);
+        values($1,$2,$3,$4,1,$5,$6,$7,$8,'2026-05-12',$9,$10) returning id,report_row_id`,
+        [business.id,affectedStore.id,operation.id,row.id,srid,operationType,returnProduct.id,returnVariant.id,quantity,returnNormalization.id]);
     };
     const exactSale=await insertReturnOperation('return-link-sale',1,'sale','1','same-shk');
-    const exactReturn=await insertReturnOperation('return-link-return',2,'return','-1','same-shk');
+    const exactReturn=await insertReturnOperation('return-link-return',2,'return','-1','same-shk',{
+      rawFields:{acquiringFee:'31.33',vw:'208.84754',vwNds:'45.95',ppvzReward:'25.206',retailAmount:'642.00',forPay:'330.67'}
+    });
     const mismatchReturn=await insertReturnOperation('return-link-mismatch',3,'return','-1','other-shk');
     const excessReturn=await insertReturnOperation('return-link-excess',4,'return','-1','same-shk');
     const resultV23=await tone(`select id from mc.method_versions where code='financial_result' and version_no=23`);
@@ -1752,6 +1763,88 @@ try {
     assert.match((await tone(`select pg_get_functiondef('mc.guard_daily_return_expense_evidence()'::regprocedure) definition`)).definition,
       /return_wb_expense_reversal/);
     pass('migration 52 versions selected-SKU return expense reversal and queues local recalculation');
+
+    const negativeSale=await insertReturnOperation('return-link-negative-sale',5,'sale','1','negative-shk',{srid:'negative-srid'});
+    const negativeReturn=await insertReturnOperation('return-link-negative-return',6,'return','-1','negative-shk',{
+      srid:'negative-srid',rawFields:{acquiringFee:'1.00',vw:'-5.73',vwNds:'0',ppvzReward:'0',retailAmount:'100.00',forPay:'104.73'}
+    });
+    await tq(`select set_config('app.user_id','',false),set_config('app.business_id','',false)`);
+    await transportUpgradeDb.exec(await readFile(path.join(root,'db/migrations/053_signed_return_expense_reversal.sql'),'utf8'));
+    await tq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[owner.id,business.id]);
+    const signedReturnMethods=await tq(`select version_no,implementation_version,parameters->>'returnExpenseReversal' rule
+      from mc.method_versions where code='financial_result' and version_no in(25,26) order by version_no`);
+    assert.deepEqual(signedReturnMethods,[
+      {version_no:25,implementation_version:'financial-result-v25',rule:'raw-signed-four-fields-retain-acquiring-v2'},
+      {version_no:26,implementation_version:'financial-result-v26',rule:'raw-signed-four-fields-retain-acquiring-v2'}
+    ]);
+    const resultV25=await tone(`select id from mc.method_versions where code='financial_result' and version_no=25`);
+    const resultV26=await tone(`select id from mc.method_versions where code='financial_result' and version_no=26`);
+    const positiveLink=await tone(`insert into mc.operation_links(business_id,store_id,from_operation_version_id,to_operation_version_id,
+        link_type,status,method_version_id,evidence) values($1,$2,$3,$4,'return_to_original_sale','confirmed',$5,'{}') returning id`,
+      [business.id,affectedStore.id,exactReturn.id,exactSale.id,resultV25.id]);
+    const negativeLink=await tone(`insert into mc.operation_links(business_id,store_id,from_operation_version_id,to_operation_version_id,
+        link_type,status,method_version_id,evidence) values($1,$2,$3,$4,'return_to_original_sale','confirmed',$5,'{}') returning id`,
+      [business.id,affectedStore.id,negativeReturn.id,negativeSale.id,resultV25.id]);
+    const signedRequest=await tone(`insert into mc.calculation_requests(
+        business_id,store_id,generation_no,selection_id,method_version_id,period_start,period_end,input_fingerprint,is_latest
+      ) values($1,$2,53,$3,$4,'2026-05-11','2026-05-17','signed-return-v25-fixture',false) returning id`,
+      [business.id,affectedStore.id,returnSelection.id,resultV25.id]);
+    await tq(`insert into mc.calculation_request_products(business_id,store_id,request_id,product_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,signedRequest.id,returnProduct.id]);
+    await tq(`insert into mc.calculation_request_inputs(business_id,store_id,request_id,report_normalization_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,signedRequest.id,returnNormalization.id]);
+    for(const link of [positiveLink,negativeLink])await tq(`insert into mc.calculation_request_inputs(
+        business_id,store_id,request_id,operation_link_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,signedRequest.id,link.id]);
+    const signedRun=await tone(`insert into mc.calculation_runs(
+        business_id,store_id,selection_id,method_version_id,period_start,period_end,input_fingerprint,request_id,attempt_no
+      ) values($1,$2,$3,$4,'2026-05-11','2026-05-17','signed-return-v25-fixture',$5,1) returning id`,
+      [business.id,affectedStore.id,returnSelection.id,resultV25.id,signedRequest.id]);
+    const signedPeriod=await tone(`insert into mc.financial_period_results(
+        business_id,store_id,run_id,period_start,period_end,quality,missing_reasons,totals
+      ) values($1,$2,$3,'2026-05-11','2026-05-17','partial','["operation_unclassified"]',
+        '{"selectedProductsResultBeforeTax":"0.0000","storeLevelResultBeforeTax":"0.0000","availableResultBeforeTax":"0.0000","estimatedUsnTax":"0.0000","availableResultAfterTax":null,"netProfit":null}') returning id`,
+      [business.id,affectedStore.id,signedRun.id]);
+    await tq(`insert into mc.calculation_inputs(business_id,store_id,run_id,report_normalization_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,signedRun.id,returnNormalization.id]);
+    for(const link of [positiveLink,negativeLink])await tq(`insert into mc.calculation_inputs(
+        business_id,store_id,run_id,operation_link_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,signedRun.id,link.id]);
+    const reversalLine=await tone(`insert into mc.result_lines(
+        business_id,store_id,run_id,product_id,variant_id,accounting_date,category_code,amount_signed,quality,result_scope,financial_period_result_id
+      ) values($1,$2,$3,$4,$5,'2026-05-12','return_wb_expense_reversal',306.60,'complete','selected_product',$6) returning id`,
+      [business.id,affectedStore.id,signedRun.id,returnProduct.id,returnVariant.id,signedPeriod.id]);
+    await tq(`insert into mc.result_evidence(
+        business_id,store_id,result_line_id,report_row_id,source_operation_version_id,operation_link_id,contribution_amount
+      ) values($1,$2,$3,$4,$5,$6,311.33)`,
+      [business.id,affectedStore.id,reversalLine.id,exactReturn.report_row_id,exactReturn.id,positiveLink.id]);
+    await tq(`insert into mc.result_evidence(
+        business_id,store_id,result_line_id,report_row_id,source_operation_version_id,operation_link_id,contribution_amount
+      ) values($1,$2,$3,$4,$5,$6,-4.73)`,
+      [business.id,affectedStore.id,reversalLine.id,negativeReturn.report_row_id,negativeReturn.id,negativeLink.id]);
+    const acquiringComponent=await tone(`insert into mc.financial_components(
+        business_id,store_id,operation_version_id,component_key,category_code,amount_signed,method_version_id,source_field,result_scope_classification
+      ) values($1,$2,$3,'acquiringFee','acquiring',31.33,$4,'acquiringFee','selected_product') returning id`,
+      [business.id,affectedStore.id,exactReturn.id,returnParserV12.id]);
+    const acquiringLine=await tone(`insert into mc.result_lines(
+        business_id,store_id,run_id,product_id,variant_id,accounting_date,category_code,amount_signed,quality,result_scope,financial_period_result_id
+      ) values($1,$2,$3,$4,$5,'2026-05-12','acquiring',31.33,'complete','selected_product',$6) returning id`,
+      [business.id,affectedStore.id,signedRun.id,returnProduct.id,returnVariant.id,signedPeriod.id]);
+    await tq(`insert into mc.result_evidence(
+        business_id,store_id,result_line_id,financial_component_id,contribution_amount
+      ) values($1,$2,$3,$4,31.33)`,[business.id,affectedStore.id,acquiringLine.id,acquiringComponent.id]);
+    assert.equal((await tone(`select count(*)::int n from mc.financial_input_events
+      where event_key='financial-result-upgrade:v26:store:'||$1 and source_result_method_version_id=$2`,[affectedStore.id,resultV26.id])).n,1);
+    assert.equal((await tone(`select count(*)::int n from mc.financial_input_events
+      where event_key='financial-result-upgrade:v26:store:'||$1 and source_result_method_version_id=$2`,[noPointerStore.id,resultV26.id])).n,0);
+    assert.equal((await tone(`select count(*)::int n from mc.financial_input_events
+      where event_key='financial-result-upgrade:v26:store:'||$1`,[archivedStore.id])).n,0);
+    assert.equal((await tone(`select max(version)::int version from mc.schema_migrations`)).version,53);
+    const signedEvidenceGuard=(await tone(`select pg_get_functiondef('mc.guard_evidence_source()'::regprocedure) definition`)).definition;
+    assert.match(signedEvidenceGuard,/financial-result-v25/);
+    assert.match(signedEvidenceGuard,/reversal\s*=\s*0/);
+    assert.doesNotMatch(signedEvidenceGuard,/reversal\s*<=\s*0/);
+    pass('migration 53 keeps acquiring and accepts exact positive and negative signed return reversals');
   }finally{await transportUpgradeDb.close();}
 
   // Produce a machine-derived field/constraint inventory for review.

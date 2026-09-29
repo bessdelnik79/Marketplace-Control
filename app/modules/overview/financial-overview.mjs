@@ -9,7 +9,7 @@ const WB_TRANSFER_CATEGORIES = new Set([
   'commission_adjustment', 'other_adjustment', 'promotion', 'pickup_reward',
   'wb_reward_without_vat', 'wb_reward_vat', 'return_wb_expense_reversal'
 ]);
-const STORE_RESULT_METHODS = new Set(['financial-result-v7', 'financial-result-v8', 'financial-result-v9', 'financial-result-v10', 'financial-result-v11', 'financial-result-v12', 'financial-result-v13', 'financial-result-v14', 'financial-result-v15', 'financial-result-v16', 'financial-result-v17', 'financial-result-v18', 'financial-result-v19', 'financial-result-v20', 'financial-result-v21', 'financial-result-v22', 'financial-result-v23', 'financial-result-v24']);
+const STORE_RESULT_METHODS = new Set(['financial-result-v7', 'financial-result-v8', 'financial-result-v9', 'financial-result-v10', 'financial-result-v11', 'financial-result-v12', 'financial-result-v13', 'financial-result-v14', 'financial-result-v15', 'financial-result-v16', 'financial-result-v17', 'financial-result-v18', 'financial-result-v19', 'financial-result-v20', 'financial-result-v21', 'financial-result-v22', 'financial-result-v23', 'financial-result-v24', 'financial-result-v25', 'financial-result-v26']);
 const MISSING_REASON_ORDER = [
   'cost_missing',
   'return_original_sale_unmatched',

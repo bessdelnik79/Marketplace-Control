@@ -98,6 +98,12 @@ export function isVerifiedWbResultComponent({ categoryCode, sourceField, operati
   if(scopeCode==='store')return VERIFIED_STORE_COMPONENTS.get(sourceField)?.has(categoryCode)===true;
   if(sourceField==='ppvzReward'&&categoryCode==='pickup_reward')return true;
   if(sourceField==='rebillLogisticCost'&&categoryCode==='rebill_logistic_compensation')return false;
+  if(sourceField==='acquiringFee'&&categoryCode==='acquiring'){
+    const document=String(docTypeName??'').trim();
+    const name=String(sellerOperName??'').trim();
+    return(operationType==='sale'&&!value.startsWith('-')&&document==='Продажа'&&name==='Продажа')||
+      (operationType==='return'&&document==='Возврат'&&name==='Возврат');
+  }
   if((sourceField==='vw'&&categoryCode==='wb_reward_without_vat')||(sourceField==='vwNds'&&categoryCode==='wb_reward_vat')){
     const document=String(docTypeName??'').trim();
     const name=String(sellerOperName??'').trim();
@@ -490,7 +496,8 @@ function verifiedTransportReimbursementReferenceIds(components){
 }
 
 const RETURN_WB_EXPENSE_FIELDS=new Set(['acquiringFee','vw','vwNds','ppvzReward']);
-const RETURN_RAW_SCALE=12;
+const RETURN_REPLACED_EXPENSE_FIELDS=new Set(['vw','vwNds','ppvzReward']);
+const RETURN_RAW_SCALE=18;
 
 function rawReturnAmount(value){
   if(value===null||value===undefined||String(value).trim()==='')return 0n;
@@ -515,7 +522,7 @@ export function calculateReturnWbExpenseReversal(components){
   const expense=[...RETURN_WB_EXPENSE_FIELDS].reduce((sum,field)=>sum+(fields.get(field)??0n),0n);
   const control=fields.get('retailAmount')-fields.get('forPay');
   const rounded=roundReturnAmountToMoney(expense);
-  return rounded>0n&&rounded===roundReturnAmountToMoney(control)?rounded:null;
+  return rounded===roundReturnAmountToMoney(control)?rounded:null;
 }
 
 function totalsFor(lines,taxUsable=false) {
@@ -539,6 +546,7 @@ function totalsFor(lines,taxUsable=false) {
 export function calculateFinancialResult({
   periodStart,
   periodEnd,
+  resultMethodVersion = 'financial-result-v26',
   selectedProductIds = [],
   financialComponents = [],
   operations = [],
@@ -565,14 +573,14 @@ export function calculateFinancialResult({
     matches.push(operation);
     operationsById.set(id, matches);
   }
+  const signedReturnExpenseMethod=['financial-result-v25','financial-result-v26'].includes(resultMethodVersion);
+  const replacedReturnExpenseFields=signedReturnExpenseMethod?RETURN_REPLACED_EXPENSE_FIELDS:RETURN_WB_EXPENSE_FIELDS;
   const componentsByOperation=new Map();
-  const returnExpenseComponentIds=new Set();
   for(const component of financialComponents){
     const operationId=String(component?.operationVersionId??'').trim();
     if(!operationId)continue;
     const group=componentsByOperation.get(operationId)??[];
     group.push(component);componentsByOperation.set(operationId,group);
-    if(component?.operationType==='return'&&RETURN_WB_EXPENSE_FIELDS.has(component?.sourceField))returnExpenseComponentIds.add(String(component.id));
   }
   const excludedProduct = source => {
     const wbArticle=String(source?.wbArticle??'').trim();
@@ -594,6 +602,13 @@ export function calculateFinancialResult({
       ||validDate(sale?.accountingDate)>validDate(operation?.accountingDate))return null;
     return{link,sale};
   };
+  const returnExpenseComponentIds=new Set();
+  for(const component of financialComponents){
+    if(component?.operationType!=='return'||!replacedReturnExpenseFields.has(component?.sourceField))continue;
+    const operationId=String(component?.operationVersionId??'').trim();
+    const operationCandidates=operationsById.get(operationId)??[];
+    if(!signedReturnExpenseMethod||(operationCandidates.length===1&&confirmedReturnSale(operationCandidates[0])))returnExpenseComponentIds.add(String(component.id));
+  }
 
   for (const component of financialComponents) {
     if (component?.state === 'withdrawn' || !sourceInPeriod(component, range)) continue;
@@ -653,7 +668,7 @@ export function calculateFinancialResult({
       const {link,sale}=confirmed;
       const returnDate = validDate(operation.accountingDate);
       const reversal=calculateReturnWbExpenseReversal(componentsByOperation.get(operationId)??[]);
-      if(reversal===null)reasons.add('operation_unclassified');
+      if(reversal===null||(!signedReturnExpenseMethod&&reversal<=0n))reasons.add('operation_unclassified');
       else addLine(lines,{
         ...scope,accountingDate:returnDate,categoryCode:'return_wb_expense_reversal'
       },reversal,{

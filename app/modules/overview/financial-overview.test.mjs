@@ -121,7 +121,7 @@ test('period overview separates WB expenses and cost of goods from persisted evi
 
 test('return expense reversal reduces WB expenses and excluded products are count-only metadata',()=>{
   const raw=envelope({
-    methodVersion:'financial-result-v24',revenue:'3495.0000',expenseLine:'-7333.5800',
+    methodVersion:'financial-result-v26',revenue:'3495.0000',expenseLine:'-7333.5800',
     selectedBeforeTax:'-3014.6000',beforeTax:'-3014.6000',tax:null,afterTax:null,excludedProductCount:1
   });
   raw.lines.push({result_scope:'selected_product',product_id:'product-1',accounting_date:'2026-09-14',
@@ -132,6 +132,15 @@ test('return expense reversal reduces WB expenses and excluded products are coun
   assert.equal(overview.totals.toTransfer,'-3014.6000');
   assert.equal(overview.excludedProductCount,1);
   assert.equal(JSON.stringify(overview).includes('nmId'),false);
+});
+
+test('negative signed return correction increases WB expenses',()=>{
+  const raw=envelope({methodVersion:'financial-result-v26',periodStart:'2026-03-02',periodEnd:'2026-03-08',revenue:'100.0000',expenseLine:'-20.0000',selectedBeforeTax:'75.2700',beforeTax:'75.2700',tax:null,afterTax:null});
+  raw.lines.push({result_scope:'selected_product',product_id:'product-1',accounting_date:'2026-03-05',
+    category_code:'return_wb_expense_reversal',amount_signed:'-4.7300',quality:'complete'});
+  const overview=buildFinancialPeriodOverview(raw);
+  assert.equal(overview.totals.wbExpenses,'24.7300');
+  assert.equal(overview.totals.toTransfer,'75.2700');
 });
 
 test('unavailable period exposes no calculated transfer amount', () => {

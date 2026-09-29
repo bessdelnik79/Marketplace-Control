@@ -82,7 +82,7 @@ async function loadSnapshot(client,context){
   if(!affectedPeriods.length)throw new Error('financial_daily_inputs_missing');
   const affectedStart=affectedPeriods.reduce((value,row)=>row.period_start<value?row.period_start:value,affectedPeriods[0].period_start);
   const affectedEnd=affectedPeriods.reduce((value,row)=>row.period_end>value?row.period_end:value,affectedPeriods[0].period_end);
-  const method=(await client.query(`select id,implementation_version from mc.method_versions where code='financial_result' and version_no=24`,[])).rows[0];
+  const method=(await client.query(`select id,implementation_version from mc.method_versions where code='financial_result' and version_no=26`,[])).rows[0];
   if(!method)throw new Error('financial_daily_method_missing');
   const normalizationIds=reports.map(row=>row.normalization_id);
   const parserMethods=normalizationIds.length?(await client.query(
@@ -159,7 +159,7 @@ export function calculateFinancialPeriods(snapshot){
       taxSettings:snapshot.taxSettings.map(row=>({id:row.id,effectiveFrom:row.effective_from,regimeCode:row.regime_code,
         usnRateFraction:row.usn_rate_fraction,vatMode:row.vat_mode,state:row.state})),reportCoverageComplete:coverageComplete});
     const currentTax=snapshot.taxSettings.filter(row=>row.effective_from<=periodEnd).at(-1)??null;
-    const result=calculateFinancialResult({periodStart,periodEnd,selectedProductIds:snapshot.products,financialComponents:snapshot.components,
+    const result=calculateFinancialResult({periodStart,periodEnd,resultMethodVersion:snapshot.method?.implementation_version??'financial-result-v26',selectedProductIds:snapshot.products,financialComponents:snapshot.components,
       operations:snapshot.operations,operationLinks:snapshot.operationLinks,costVersions:snapshot.costs,expenses:snapshot.expenses,
       taxSetting:currentTax?{regimeCode:currentTax.regime_code,usnRateFraction:currentTax.usn_rate_fraction,vatMode:currentTax.vat_mode,state:currentTax.state}:null,
       taxReference,reportCoverageComplete:coverageComplete,allowEmptyResult:rows.length===0});
