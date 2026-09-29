@@ -105,6 +105,110 @@ test('transport reimbursement is verified by one source row, component fields an
       {id:'vat',operationVersionId:'transport-row',rrdId:0,classificationStatus:'unclassified',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-08-19',categoryCode:'wb_reward_vat',sourceField:'vwNds',rawValue:'-3.42801111111101111111',operationType:'other',docTypeName:'Изменяемый текст WB',sellerOperName:'Возмещение издержек по перемещению и операционной обработке товара',amountSigned:'3.42801111111101111111'}
     ]
   });
+  test('transport reimbursement accepts sub-kopeck residual after rounding the bundle total to kopecks',()=>{
+  const bundles=[
+    {
+      rebill:'-1.6500',
+      rebillRaw:'1.65',
+      vw:'1.3524590163934426',
+      vat:'0.3000'
+    },
+    {
+      rebill:'-20.7600',
+      rebillRaw:'20.76',
+      vw:'17.0163934426229508',
+      vat:'3.7400'
+    },
+    {
+      rebill:'-3.7300',
+      rebillRaw:'3.73',
+      vw:'3.0573770491803279',
+      vat:'0.6700'
+    }
+  ];
+
+  for(const [index,bundle] of bundles.entries()){
+    const operationVersionId=`transport-sub-kopeck-${index}`;
+
+    const result=calculateFinancialResult({
+      periodStart:'2026-09-21',
+      periodEnd:'2026-09-21',
+      selectedProductIds:['product-1'],
+      financialComponents:[
+        {
+          id:`revenue-${index}`,
+          classificationStatus:'confirmed',
+          scopeCode:'selected_product',
+          productId:'product-1',
+          accountingDate:'2026-09-21',
+          categoryCode:'revenue',
+          sourceField:'retailAmount',
+          rawValue:'100',
+          operationType:'sale',
+          docTypeName:'Продажа',
+          sellerOperName:'Продажа',
+          amountSigned:'100'
+        },
+        {
+          id:`rebill-${index}`,
+          operationVersionId,
+          classificationStatus:'confirmed',
+          scopeCode:'reconciliation',
+          productId:'product-1',
+          accountingDate:'2026-09-21',
+          categoryCode:'rebill_logistic_compensation',
+          sourceField:'rebillLogisticCost',
+          rawValue:bundle.rebillRaw,
+          operationType:'service_charge',
+          docTypeName:'',
+          sellerOperName:'Возмещение издержек по перемещению и операционной обработке товара',
+          amountSigned:bundle.rebill
+        },
+        {
+          id:`vw-${index}`,
+          operationVersionId,
+          classificationStatus:'unclassified',
+          scopeCode:'selected_product',
+          productId:'product-1',
+          accountingDate:'2026-09-21',
+          categoryCode:'wb_reward_without_vat',
+          sourceField:'vw',
+          rawValue:`-${bundle.vw}`,
+          operationType:'service_charge',
+          docTypeName:'',
+          sellerOperName:'Возмещение издержек по перемещению и операционной обработке товара',
+          amountSigned:bundle.vw
+        },
+        {
+          id:`vat-${index}`,
+          operationVersionId,
+          classificationStatus:'unclassified',
+          scopeCode:'selected_product',
+          productId:'product-1',
+          accountingDate:'2026-09-21',
+          categoryCode:'wb_reward_vat',
+          sourceField:'vwNds',
+          rawValue:`-${bundle.vat}`,
+          operationType:'service_charge',
+          docTypeName:'',
+          sellerOperName:'Возмещение издержек по перемещению и операционной обработке товара',
+          amountSigned:bundle.vat
+        }
+      ]
+    });
+
+    assert.equal(
+      result.missingReasons.includes('operation_unclassified'),
+      false,
+      `bundle ${index + 1}`
+    );
+
+    assert.equal(
+      result.totals.availableResultBeforeTax,
+      '100.0000'
+    );
+  }
+});
   assert.equal(result.missingReasons.includes('operation_unclassified'),false);
   assert.equal(result.totals.availableResultBeforeTax,'100.0000');
   assert.deepEqual(result.lines.map(line=>line.categoryCode),['revenue']);
