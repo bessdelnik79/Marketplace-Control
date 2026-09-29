@@ -15,6 +15,31 @@ ALTER TABLE mc.stores NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE mc.memberships NO FORCE ROW LEVEL SECURITY;
 ALTER TABLE mc.calculation_invalidations NO FORCE ROW LEVEL SECURITY;
 
+DO $guard$
+DECLARE
+  definition text;
+  updated text;
+BEGIN
+  SELECT pg_get_functiondef(
+    'mc.expected_wb_row_rounding_adjustment(uuid,uuid,uuid)'::regprocedure
+  )
+  INTO definition;
+
+  updated := replace(
+    definition,
+    'coalesce(sum(amount_signed),0)=0',
+    'round(coalesce(sum(amount_signed),0),2)=0'
+  );
+
+  IF updated = definition THEN
+    RAISE EXCEPTION
+      'expected_wb_row_rounding_adjustment transport zero contract not found';
+  END IF;
+
+  EXECUTE updated;
+END
+$guard$;
+
 DO $backfill$
 DECLARE
   target record;

@@ -110,7 +110,7 @@ test('transport reimbursement is verified by one source row, component fields an
   assert.deepEqual(result.lines.map(line=>line.categoryCode),['revenue']);
 });
 
-  test('transport reimbursement accepts sub-kopeck residual after rounding the bundle total to kopecks',()=>{
+test('transport reimbursement accepts sub-kopeck residual after rounding the bundle total to kopecks',()=>{
   const bundles=[
     {
       rebill:'-1.6500',
