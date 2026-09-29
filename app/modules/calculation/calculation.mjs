@@ -98,12 +98,6 @@ export function isVerifiedWbResultComponent({ categoryCode, sourceField, operati
   if(scopeCode==='store')return VERIFIED_STORE_COMPONENTS.get(sourceField)?.has(categoryCode)===true;
   if(sourceField==='ppvzReward'&&categoryCode==='pickup_reward')return true;
   if(sourceField==='rebillLogisticCost'&&categoryCode==='rebill_logistic_compensation')return false;
-  if(sourceField==='acquiringFee'&&categoryCode==='acquiring'){
-    const document=String(docTypeName??'').trim();
-    const name=String(sellerOperName??'').trim();
-    return(operationType==='sale'&&!value.startsWith('-')&&document==='Продажа'&&name==='Продажа')||
-      (operationType==='return'&&document==='Возврат'&&name==='Возврат');
-  }
   if((sourceField==='vw'&&categoryCode==='wb_reward_without_vat')||(sourceField==='vwNds'&&categoryCode==='wb_reward_vat')){
     const document=String(docTypeName??'').trim();
     const name=String(sellerOperName??'').trim();
@@ -546,7 +540,7 @@ function totalsFor(lines,taxUsable=false) {
 export function calculateFinancialResult({
   periodStart,
   periodEnd,
-  resultMethodVersion = 'financial-result-v26',
+  resultMethodVersion = 'financial-result-v28',
   selectedProductIds = [],
   financialComponents = [],
   operations = [],
@@ -573,8 +567,9 @@ export function calculateFinancialResult({
     matches.push(operation);
     operationsById.set(id, matches);
   }
-  const signedReturnExpenseMethod=['financial-result-v25','financial-result-v26'].includes(resultMethodVersion);
-  const replacedReturnExpenseFields=signedReturnExpenseMethod?RETURN_REPLACED_EXPENSE_FIELDS:RETURN_WB_EXPENSE_FIELDS;
+  const signedReturnExpenseMethod=['financial-result-v25','financial-result-v26','financial-result-v27','financial-result-v28'].includes(resultMethodVersion);
+  const retainReturnAcquiringMethod=['financial-result-v25','financial-result-v26'].includes(resultMethodVersion);
+  const replacedReturnExpenseFields=retainReturnAcquiringMethod?RETURN_REPLACED_EXPENSE_FIELDS:RETURN_WB_EXPENSE_FIELDS;
   const componentsByOperation=new Map();
   for(const component of financialComponents){
     const operationId=String(component?.operationVersionId??'').trim();
@@ -626,7 +621,12 @@ export function calculateFinancialResult({
       reasons.add('operation_unclassified');
       continue;
     }
-    if (component?.classificationStatus !== 'confirmed') {
+    const rawComponentValue=String(component?.rawValue??'').trim().replace(',', '.');
+    const retainedReturnAcquiring=retainReturnAcquiringMethod&&component?.operationType==='return'
+      &&component?.sourceField==='acquiringFee'&&component?.categoryCode==='acquiring'
+      &&String(component?.docTypeName??'').trim()==='Возврат'&&String(component?.sellerOperName??'').trim()==='Возврат'
+      &&/^-?\d+(?:\.\d+)?$/.test(rawComponentValue)&&/[1-9]/.test(rawComponentValue);
+    if (component?.classificationStatus !== 'confirmed'&&!retainedReturnAcquiring) {
       reasons.add('operation_unclassified');
       continue;
     }

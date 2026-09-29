@@ -4,7 +4,7 @@
 
 Этот документ фиксирует следующий архитектурный этап после P0.3/P0.4: устойчивую загрузку финансовых отчётов WB, локальный событийный пересчёт и дневную read-модель. Текущее поведение описано в [«Финансовых отчётах Wildberries»](financial-reports.md), финансовая методика — в [«Формулах финансового расчёта»](financial-formulas.md), проверенные контракты — в [планах P0.3](p0.3-plan.md) и [P0.4](p0.4-plan.md).
 
-Статус выполнения: этапы 1–5 реализованы. Durable queue, credential generation, недельный ledger, list-first inventory, понедельничное расписание, адресный raw/version pipeline и локальная дневная generation работают. После обязательной shadow-сверки текущей методики `financial-result-v26` атомарный pointer переключает period read на дневную модель; пока publication строится, обзор сохраняет предыдущие суммы и показывает статус обновления.
+Статус выполнения: этапы 1–5 реализованы. Durable queue, credential generation, недельный ledger, list-first inventory, понедельничное расписание, адресный raw/version pipeline и локальная дневная generation работают. После обязательной shadow-сверки текущей методики `financial-result-v28` атомарный pointer переключает period read на дневную модель; пока publication строится, обзор сохраняет предыдущие суммы и показывает статус обновления.
 
 ## Цель
 
@@ -261,7 +261,7 @@ legacy history.
 - [x] Реализовать stale-while-revalidate UI и polling до новой publication либо terminal job.
 - [x] Удалить расчёты и постановку заданий из overview GET; process-local financial compatibility `Map` заменён durable invalidation worker, а ручная загрузка — PostgreSQL inventory job.
 
-Первая публикация допускается только для generation текущей exact/daily-методики (`financial-result-v26`),
+Первая публикация допускается только для generation текущей exact/daily-методики (`financial-result-v28`),
 когда каждый публикуемый день покрыт matched shadow-сравнением с точной legacy
 publication и идентичным набором выбранных товаров. Если накопленное событие
 шире legacy history, первый pointer включает только полный union таких
@@ -272,7 +272,7 @@ Matched-сравнение принимается и для точной legacy 
 канонической версией финансового метода v9–v20: оно доказывает равенство
 агрегированных итогов, quality и причин за legacy-период при том же наборе
 товаров. Дневное распределение внутри проверенного периода задаёт generation
-`financial-result-v26`; legacy publication дневной детализации не содержит.
+`financial-result-v28`; legacy publication дневной детализации не содержит.
 Миграция восстановления повторно ставит только непрерывный диапазон таких
 проверенных, но ранее не включённых дней и не обращается к WB API.
 Если текущий daily pointer пересекает запрошенный диапазон, он авторитетен даже

@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,53);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,54);
   assert.deepEqual((await q("select table_name from information_schema.tables where table_schema='mc' and table_name in ('financial_input_events','financial_store_event_state') order by table_name")).map(row=>row.table_name),['financial_input_events','financial_store_event_state']);
   assert.equal((await one("select relforcerowsecurity as forced from pg_class join pg_namespace on pg_namespace.oid=pg_class.relnamespace where nspname='mc' and relname='financial_input_events'")).forced,true);
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.establish_financial_pipeline_context(uuid,bigint,uuid,text,text)'::regprocedure"));
@@ -104,7 +104,7 @@ try {
   assert.match(publicationFunction,/financial_daily_shadow_day_compatible/);
   assert.match(shadowDayFunction,/comparison.status='matched'/);
   assert.match(shadowDayFunction,/legacy_method.code='financial_result'/);
-  assert.match(shadowDayFunction,/legacy_method.version_no BETWEEN 9 AND 26/);
+  assert.match(shadowDayFunction,/legacy_method.version_no BETWEEN 9 AND 28/);
   assert.match(shadowDayFunction,/legacy_method.implementation_version='financial-result-v'\|\|legacy_method.version_no/);
   assert.match(shadowDayFunction,/p_accounting_date BETWEEN comparison.period_start AND comparison.period_end/);
   assert.match(shadowDayFunction,/day\.quality IN \('complete','partial'\)/);
@@ -195,6 +195,8 @@ try {
   const resultMethodV24=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=24");
   const resultMethodV25=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=25");
   const resultMethodV26=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=26");
+  const resultMethodV27=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=27");
+  const resultMethodV28=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=28");
   assert.equal(resultMethodV11.implementation_version,'financial-result-v11');
   assert.equal(resultMethodV12.implementation_version,'financial-result-v12');
   assert.equal(financeMethodV11.implementation_version,'wb-finance-v11');
@@ -227,6 +229,11 @@ try {
   assert.equal(resultMethodV26.implementation_version,'financial-result-v26');
   assert.equal(resultMethodV26.parameters.targetPeriod,true);
   assert.equal(resultMethodV26.parameters.returnExpenseReversal,'raw-signed-four-fields-retain-acquiring-v2');
+  assert.equal(resultMethodV27.implementation_version,'financial-result-v27');
+  assert.equal(resultMethodV27.parameters.returnExpenseReversal,'raw-signed-four-fields-single-count-v3');
+  assert.equal(resultMethodV28.implementation_version,'financial-result-v28');
+  assert.equal(resultMethodV28.parameters.targetPeriod,true);
+  assert.equal(resultMethodV28.parameters.returnExpenseReversal,'raw-signed-four-fields-single-count-v3');
   assert.equal(resultMethodV14.parameters.targetPeriod,true);
   assert.equal(resultMethodV12.parameters.targetPeriod,true);
   assert.equal(resultMethodV10.parameters.targetPeriod,true);
@@ -253,13 +260,14 @@ try {
   assert.match(targetGuard,/wb-finance-v12/);
   assert.match(targetGuard,/financial-result-v24/);
   assert.match(targetGuard,/financial-result-v26/);
-  assert.match(targetGuard,/WHEN 'financial-result-v26'.*THEN 'wb-finance-v12'/s);
+  assert.match(targetGuard,/financial-result-v28/);
+  assert.match(targetGuard,/WHEN 'financial-result-v28'.*THEN 'wb-finance-v12'/s);
   assert.match((await one("select pg_get_functiondef('mc.guard_confirmed_return_link()'::regprocedure) as definition")).definition,/sold\.accounting_date\s*>\s*returned\.accounting_date/);
   assert.match((await one("select pg_get_functiondef('mc.guard_evidence_source()'::regprocedure) as definition")).definition,/return_wb_expense_reversal/);
   const dailyCompatibility=(await one("select pg_get_functiondef('mc.financial_daily_shadow_day_compatible(uuid,date)'::regprocedure) as definition")).definition;
-  assert.match(dailyCompatibility,/generation_method\.version_no\s*=\s*26/g);
-  assert.doesNotMatch(dailyCompatibility,/generation_method\.version_no\s*=\s*24/);
-  assert.match(dailyCompatibility,/BETWEEN 9 AND 26/);
+  assert.match(dailyCompatibility,/generation_method\.version_no\s*=\s*28/g);
+  assert.doesNotMatch(dailyCompatibility,/generation_method\.version_no\s*=\s*26/);
+  assert.match(dailyCompatibility,/BETWEEN 9 AND 28/);
   const taxComputationColumns=(await q("select column_name from information_schema.columns where table_schema='mc' and table_name='tax_computations' order by column_name")).map(row=>row.column_name);
   assert.ok(taxComputationColumns.includes('product_id'));
   assert.ok(!taxComputationColumns.includes('tax_year')&&!taxComputationColumns.includes('tax_setting_version_id')&&!taxComputationColumns.includes('rate_fraction'));
@@ -1845,6 +1853,84 @@ try {
     assert.match(signedEvidenceGuard,/reversal\s*=\s*0/);
     assert.doesNotMatch(signedEvidenceGuard,/reversal\s*<=\s*0/);
     pass('migration 53 keeps acquiring and accepts exact positive and negative signed return reversals');
+
+    await tq(`select set_config('app.user_id','',false),set_config('app.business_id','',false)`);
+    await transportUpgradeDb.exec(await readFile(path.join(root,'db/migrations/054_single_count_return_expense_reversal.sql'),'utf8'));
+    await tq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[owner.id,business.id]);
+    assert.deepEqual(await tq(`select version_no,implementation_version,parameters->>'returnExpenseReversal' rule
+      from mc.method_versions where code='financial_result' and version_no in(27,28) order by version_no`),[
+      {version_no:27,implementation_version:'financial-result-v27',rule:'raw-signed-four-fields-single-count-v3'},
+      {version_no:28,implementation_version:'financial-result-v28',rule:'raw-signed-four-fields-single-count-v3'}
+    ]);
+    const resultV27=await tone(`select id from mc.method_versions where code='financial_result' and version_no=27`);
+    const resultV28=await tone(`select id from mc.method_versions where code='financial_result' and version_no=28`);
+    const singlePositiveLink=await tone(`insert into mc.operation_links(business_id,store_id,from_operation_version_id,to_operation_version_id,
+        link_type,status,method_version_id,evidence) values($1,$2,$3,$4,'return_to_original_sale','confirmed',$5,'{}') returning id`,
+      [business.id,affectedStore.id,exactReturn.id,exactSale.id,resultV27.id]);
+    const singleNegativeLink=await tone(`insert into mc.operation_links(business_id,store_id,from_operation_version_id,to_operation_version_id,
+        link_type,status,method_version_id,evidence) values($1,$2,$3,$4,'return_to_original_sale','confirmed',$5,'{}') returning id`,
+      [business.id,affectedStore.id,negativeReturn.id,negativeSale.id,resultV27.id]);
+    const singleRequest=await tone(`insert into mc.calculation_requests(
+        business_id,store_id,generation_no,selection_id,method_version_id,period_start,period_end,input_fingerprint,is_latest
+      ) values($1,$2,54,$3,$4,'2026-05-11','2026-05-17','single-count-return-v27-fixture',false) returning id`,
+      [business.id,affectedStore.id,returnSelection.id,resultV27.id]);
+    await tq(`insert into mc.calculation_request_products(business_id,store_id,request_id,product_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,singleRequest.id,returnProduct.id]);
+    await tq(`insert into mc.calculation_request_inputs(business_id,store_id,request_id,report_normalization_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,singleRequest.id,returnNormalization.id]);
+    for(const link of [singlePositiveLink,singleNegativeLink])await tq(`insert into mc.calculation_request_inputs(
+        business_id,store_id,request_id,operation_link_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,singleRequest.id,link.id]);
+    const singleRun=await tone(`insert into mc.calculation_runs(
+        business_id,store_id,selection_id,method_version_id,period_start,period_end,input_fingerprint,request_id,attempt_no
+      ) values($1,$2,$3,$4,'2026-05-11','2026-05-17','single-count-return-v27-fixture',$5,1) returning id`,
+      [business.id,affectedStore.id,returnSelection.id,resultV27.id,singleRequest.id]);
+    const singlePeriod=await tone(`insert into mc.financial_period_results(
+        business_id,store_id,run_id,period_start,period_end,quality,missing_reasons,totals
+      ) values($1,$2,$3,'2026-05-11','2026-05-17','partial','["operation_unclassified"]',
+        '{"selectedProductsResultBeforeTax":"0.0000","storeLevelResultBeforeTax":"0.0000","availableResultBeforeTax":"0.0000","estimatedUsnTax":"0.0000","availableResultAfterTax":null,"netProfit":null}') returning id`,
+      [business.id,affectedStore.id,singleRun.id]);
+    await tq(`insert into mc.calculation_inputs(business_id,store_id,run_id,report_normalization_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,singleRun.id,returnNormalization.id]);
+    for(const link of [singlePositiveLink,singleNegativeLink])await tq(`insert into mc.calculation_inputs(
+        business_id,store_id,run_id,operation_link_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,singleRun.id,link.id]);
+    const singleReversalLine=await tone(`insert into mc.result_lines(
+        business_id,store_id,run_id,product_id,variant_id,accounting_date,category_code,amount_signed,quality,result_scope,financial_period_result_id
+      ) values($1,$2,$3,$4,$5,'2026-05-12','return_wb_expense_reversal',306.60,'complete','selected_product',$6) returning id`,
+      [business.id,affectedStore.id,singleRun.id,returnProduct.id,returnVariant.id,singlePeriod.id]);
+    await tq(`insert into mc.result_evidence(
+        business_id,store_id,result_line_id,report_row_id,source_operation_version_id,operation_link_id,contribution_amount
+      ) values($1,$2,$3,$4,$5,$6,311.33)`,
+      [business.id,affectedStore.id,singleReversalLine.id,exactReturn.report_row_id,exactReturn.id,singlePositiveLink.id]);
+    await tq(`insert into mc.result_evidence(
+        business_id,store_id,result_line_id,report_row_id,source_operation_version_id,operation_link_id,contribution_amount
+      ) values($1,$2,$3,$4,$5,$6,-4.73)`,
+      [business.id,affectedStore.id,singleReversalLine.id,negativeReturn.report_row_id,negativeReturn.id,singleNegativeLink.id]);
+    const prohibitedAcquiringLine=await tone(`insert into mc.result_lines(
+        business_id,store_id,run_id,product_id,variant_id,accounting_date,category_code,amount_signed,quality,result_scope,financial_period_result_id
+      ) values($1,$2,$3,$4,$5,'2026-05-12','acquiring',31.33,'complete','selected_product',$6) returning id`,
+      [business.id,affectedStore.id,singleRun.id,returnProduct.id,returnVariant.id,singlePeriod.id]);
+    await assert.rejects(()=>tq(`insert into mc.result_evidence(
+        business_id,store_id,result_line_id,financial_component_id,contribution_amount
+      ) values($1,$2,$3,$4,31.33)`,[business.id,affectedStore.id,prohibitedAcquiringLine.id,acquiringComponent.id]),
+      /linked return individual expense component/);
+    assert.equal((await tone(`select count(*)::int n from mc.financial_input_events
+      where event_key='financial-result-upgrade:v28:store:'||$1 and source_result_method_version_id=$2`,[affectedStore.id,resultV28.id])).n,1);
+    assert.equal((await tone(`select count(*)::int n from mc.financial_input_events
+      where event_key='financial-result-upgrade:v28:store:'||$1`,[noPointerStore.id])).n,0);
+    assert.equal((await tone(`select count(*)::int n from mc.financial_input_events
+      where event_key='financial-result-upgrade:v28:store:'||$1`,[archivedStore.id])).n,0);
+    assert.equal((await tone(`select reason from mc.calculation_invalidations where store_id=$1`,[affectedStore.id])).reason,
+      'single_count_return_expense_reversal_v27');
+    assert.equal((await tone(`select max(version)::int version from mc.schema_migrations`)).version,54);
+    const singleEvidenceGuard=(await tone(`select pg_get_functiondef('mc.guard_evidence_source()'::regprocedure) definition`)).definition;
+    assert.match(singleEvidenceGuard,/financial-result-v27/);
+    assert.match(singleEvidenceGuard,/linked return individual expense component/);
+    const singleDailyGuard=(await tone(`select pg_get_functiondef('mc.guard_daily_return_expense_evidence()'::regprocedure) definition`)).definition;
+    assert.match(singleDailyGuard,/financial-result-v28/);
+    assert.match(singleDailyGuard,/linked daily return individual expense component/);
+    pass('migration 54 single-counts all four exact linked return fields and backfills only selected active stores');
   }finally{await transportUpgradeDb.close();}
 
   // Produce a machine-derived field/constraint inventory for review.
