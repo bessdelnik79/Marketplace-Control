@@ -35,7 +35,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,56);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,57);
   assert.deepEqual((await q("select table_name from information_schema.tables where table_schema='mc' and table_name in ('financial_input_events','financial_store_event_state') order by table_name")).map(row=>row.table_name),['financial_input_events','financial_store_event_state']);
   assert.equal((await one("select relforcerowsecurity as forced from pg_class join pg_namespace on pg_namespace.oid=pg_class.relnamespace where nspname='mc' and relname='financial_input_events'")).forced,true);
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.establish_financial_pipeline_context(uuid,bigint,uuid,text,text)'::regprocedure"));
@@ -2166,6 +2166,58 @@ try {
       'exact_wb_row_result_v30');
     assert.equal((await tone(`select max(version)::int version from mc.schema_migrations`)).version,56);
     pass('migration 56 repairs a narrow v30 cutover with one full-range local successor');
+
+    await tq(`update mc.report_versions set status='validated' where id=$1`,[exactVersion.id]);
+    await tq(`update mc.report_versions set status='accepted',accepted_at=clock_timestamp() where id=$1`,[exactVersion.id]);
+    await tq(`update mc.reports set current_version_id=$1 where id=$2`,[exactVersion.id,exactReport.id]);
+    const exactComponent=await tone(`select id from mc.financial_components
+      where operation_version_id=$1 and source_field='vw'`,[exactOperation.id]);
+    const finishRequest=await tone(`insert into mc.calculation_requests(business_id,store_id,generation_no,selection_id,method_version_id,
+      period_start,period_end,input_fingerprint,is_latest) values($1,$2,57,$3,$4,'2026-09-21','2026-09-27','exact-finish-v29-fixture',false) returning id`,
+      [business.id,affectedStore.id,returnSelection.id,resultV29.id]);
+    await tq(`insert into mc.calculation_request_products(business_id,store_id,request_id,product_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,finishRequest.id,returnProduct.id]);
+    await tq(`insert into mc.calculation_request_inputs(business_id,store_id,request_id,report_normalization_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,finishRequest.id,exactNormalization.id]);
+    await tq(`insert into mc.calculation_request_inputs(business_id,store_id,request_id,report_version_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,finishRequest.id,exactVersion.id]);
+    const finishRun=await tone(`insert into mc.calculation_runs(business_id,store_id,selection_id,method_version_id,period_start,period_end,
+      input_fingerprint,request_id,attempt_no) values($1,$2,$3,$4,'2026-09-21','2026-09-27','exact-finish-v29-fixture',$5,1) returning id`,
+      [business.id,affectedStore.id,returnSelection.id,resultV29.id,finishRequest.id]);
+    const finishPeriod=await tone(`insert into mc.financial_period_results(business_id,store_id,run_id,period_start,period_end,quality,missing_reasons,totals)
+      values($1,$2,$3,'2026-09-21','2026-09-27','partial','["operation_unclassified"]',
+      '{"selectedProductsResultBeforeTax":"-56.5361","storeLevelResultBeforeTax":"0.0000","availableResultBeforeTax":"-56.5361","estimatedUsnTax":"0.0000","availableResultAfterTax":null,"netProfit":null}') returning id`,
+      [business.id,affectedStore.id,finishRun.id]);
+    await tq(`insert into mc.calculation_inputs(business_id,store_id,run_id,report_normalization_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,finishRun.id,exactNormalization.id]);
+    await tq(`insert into mc.calculation_inputs(business_id,store_id,run_id,report_version_id) values($1,$2,$3,$4)`,
+      [business.id,affectedStore.id,finishRun.id,exactVersion.id]);
+    const finishLine=await tone(`insert into mc.result_lines(business_id,store_id,run_id,product_id,variant_id,accounting_date,category_code,
+      amount_signed,quality,result_scope,financial_period_result_id) values($1,$2,$3,$4,$5,'2026-09-21','wb_reward_without_vat',
+      -56.5361,'partial','selected_product',$6) returning id`,
+      [business.id,affectedStore.id,finishRun.id,returnProduct.id,returnVariant.id,finishPeriod.id]);
+    await tq(`insert into mc.result_evidence(business_id,store_id,result_line_id,financial_component_id,contribution_amount)
+      values($1,$2,$3,$4,-56.5361)`,[business.id,affectedStore.id,finishLine.id,exactComponent.id]);
+    await tq(`create temporary table exact_finish_guard_probe(
+      id uuid primary key,status text not null,quality text,missing_reasons jsonb,finished_at timestamptz,
+      request_id uuid,method_version_id uuid not null)`);
+    await tq(`create trigger exact_finish_guard_probe_trigger before update on exact_finish_guard_probe
+      for each row execute function mc.guard_run_finish()`);
+    await tq(`insert into exact_finish_guard_probe(id,status,quality,missing_reasons,request_id,method_version_id)
+      values($1,'running',null,'[]',$2,$3)`,[finishRun.id,finishRequest.id,resultV29.id]);
+    await assert.rejects(()=>tq(`update exact_finish_guard_probe set status='succeeded',quality='partial',
+      missing_reasons='["operation_unclassified"]',finished_at=clock_timestamp() where id=$1`,[finishRun.id]),
+      /source amount counted more than once/);
+    await tq(`select set_config('app.user_id','',false),set_config('app.business_id','',false)`);
+    await transportUpgradeDb.exec(await readFile(path.join(root,'db/migrations/057_exact_wb_evidence_finish_guard.sql'),'utf8'));
+    await tq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[owner.id,business.id]);
+    await tq(`update exact_finish_guard_probe set status='succeeded',quality='partial',
+      missing_reasons='["operation_unclassified"]',finished_at=clock_timestamp() where id=$1`,[finishRun.id]);
+    const exactFinishGuard=(await tone(`select pg_get_functiondef('mc.guard_run_finish()'::regprocedure) definition`)).definition;
+    assert.match(exactFinishGuard,/financial-result-v29/);
+    assert.match(exactFinishGuard,/abs\(round\(f\.amount_signed,\s*4\)\)/);
+    assert.equal((await tone(`select max(version)::int version from mc.schema_migrations`)).version,57);
+    pass('migration 57 accepts exact-source four-decimal evidence without weakening legacy source limits');
   }finally{await transportUpgradeDb.close();}
 
   // Produce a machine-derived field/constraint inventory for review.
