@@ -63,3 +63,69 @@ test('expense page renders safe row-level errors and keeps failed import atomic 
 test('tax page distinguishes regime and VAT and explains missing settings',()=>{const html=taxesPage(user,[],{current:null,history:[]});assert.match(html,/Налог пока не учтён/);assert.match(html,/не заполнена налоговая ставка/i);assert.match(html,/name="regimeCode"/);assert.match(html,/name="vatMode"/);assert.match(html,/Без НДС/);assert.match(html,/С НДС · общая ставка/);assert.match(html,/УСН «Доходы минус расходы» — позже/);});
 test('tax page shows current effective version, recalculation scope, and void action without calling it payable',()=>{const state={current:{setting_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',effective_from:'2026-09-01',regime_code:'usn_income',usn_rate_fraction:'0.060000000',vat_mode:'exempt',state:'active'},history:[]};const html=taxesPage(user,[],state);assert.match(html,/УСН «Доходы» · 6%/);assert.match(html,/Без НДС/);assert.match(html,/затронутые периоды пересчитываются/);assert.match(html,/только начиная с даты «Действует с»/);assert.match(html,/action="\/taxes\/void"/);assert.doesNotMatch(html,/Налог к уплате/);});
 test('voided latest tax setting does not fall back silently and keeps exact rate history',()=>{const state={current:{setting_id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',effective_from:'2026-09-01',regime_code:'usn_income',usn_rate_fraction:'0.055000000',vat_mode:'exempt',state:'voided'},history:[{effective_from:'2026-09-01',regime_code:'usn_income',usn_rate_fraction:'0.055000000',vat_mode:'exempt',state:'voided'}]};const html=taxesPage(user,[],state);assert.match(html,/Налог пока не учтён/);assert.match(html,/5,5%/);assert.doesNotMatch(html,/ТЕКУЩАЯ НАСТРОЙКА/);});
+test('operational overview exposes returns tab without inventing return metrics',()=>{
+  const stores=[
+    {id:'store-1',name:'WB',connected:true}
+  ];
+
+  const state={
+    store:{id:'store-1'},
+    financial:{
+      status:'unavailable',
+      quality:'unavailable',
+      requestedPeriod:{
+        start:'2026-09-24',
+        end:'2026-09-30'
+      },
+      missingReasons:['published_period_missing']
+    },
+    operational:{
+      status:'available',
+      quality:'complete',
+      period:{
+        start:'2026-09-24',
+        end:'2026-09-30'
+      },
+      updatedAt:'2026-09-30T14:38:00Z',
+      orders:{
+        count:'7',
+        amount:'13657.0000'
+      },
+      buyouts:{
+        count:'5',
+        amount:'10000.0000'
+      },
+      missingReasons:[],
+      comparison:{
+        available:false,
+        reason:'operational_history_insufficient'
+      },
+      dailySeries:[]
+    },
+    situations:{
+      status:'unavailable',
+      items:[]
+    }
+  };
+
+  const html=overviewPage(
+    user,
+    stores,
+    state,
+    {selectedStoreId:'store-1'}
+  );
+
+  assert.match(html,/data-live-metric="orders"/);
+  assert.match(html,/data-live-metric="buyouts"/);
+  assert.match(html,/data-live-metric="returns"/);
+
+  assert.match(
+    html,
+    /data-live-metric-panel="returns" hidden/
+  );
+
+  assert.match(
+    html,
+    /Данные возвратов пока не подключены к оперативному источнику WB/
+  );
+});
