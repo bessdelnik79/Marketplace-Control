@@ -230,7 +230,13 @@ function normalizeTax(taxReference, totals, taxLineTotal, hasTaxLines) {
   if (totals.estimatedTax === null || totals.afterTax === null) invalid('overview_tax_mismatch');
   if (taxReference.estimatedTax !== undefined && taxReference.estimatedTax !== null &&
       parseScale4Money(taxReference.estimatedTax) !== totals.estimatedTax) invalid('overview_tax_mismatch');
-  if (!hasTaxLines || taxLineTotal !== -totals.estimatedTax) invalid('overview_tax_mismatch');
+
+  if (hasTaxLines) {
+    if (taxLineTotal !== -totals.estimatedTax) invalid('overview_tax_mismatch');
+  } else if (totals.estimatedTax !== 0n) {
+      invalid('overview_tax_mismatch');
+    }
+
   if (totals.beforeTax - totals.estimatedTax !== totals.afterTax) invalid('overview_tax_mismatch');
   return { tax: totals.estimatedTax, afterTax: totals.afterTax, basis: 'after_tax' };
 }
