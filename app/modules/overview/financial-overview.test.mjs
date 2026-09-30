@@ -378,3 +378,43 @@ test('overview rejects inconsistent persisted totals, tax, line quality, dates a
   const wrongPrevious = envelope({ periodStart: '2026-08-31', periodEnd: '2026-09-06' });
   assert.throws(() => buildFinancialOverview({ current: envelope(), previous: wrongPrevious }), { message: 'overview_previous_period_mismatch' });
 });
+
+test('single-day overview accepts proven zero tax without a synthetic zero tax line',()=>{
+  const raw=envelope({
+    periodStart:'2026-09-21',
+    periodEnd:'2026-09-21',
+    beforeTax:'100.0000',
+    selectedBeforeTax:'100.0000',
+    tax:'0.0000',
+    afterTax:'100.0000'
+  });
+
+  raw.lines=raw.lines.filter(
+    line=>line.category_code!=='estimated_usn_tax'
+  );
+
+  const overview=buildFinancialPeriodOverview(raw);
+
+  assert.equal(overview.totals.tax,'0.0000');
+  assert.deepEqual(overview.displayResult,{
+    amount:'100.0000',
+    basis:'after_tax'
+  });
+});
+test('overview still rejects missing tax evidence for a non-zero tax',()=>{
+  const raw=envelope({
+    periodStart:'2026-09-21',
+    periodEnd:'2026-09-21',
+    tax:'6.0000',
+    afterTax:'94.0000'
+  });
+
+  raw.lines=raw.lines.filter(
+    line=>line.category_code!=='estimated_usn_tax'
+  );
+
+  assert.throws(
+    ()=>buildFinancialPeriodOverview(raw),
+    {message:'overview_tax_mismatch'}
+  );
+});
