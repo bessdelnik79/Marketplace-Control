@@ -121,10 +121,33 @@ function operationalBars(operational,metric){
   return`<div class="design-orders-chart" aria-label="${label} по дням"><div class="design-chart-grid">${(operational.dailySeries||[]).map(day=>{const baseline=baselineByDate.get(day.date),currentRaw=day[metric]?.count,baselineRaw=baseline?.[metric]?.count,currentValue=currentRaw===null||currentRaw===undefined?null:Number(currentRaw),baselineValue=baselineRaw===null||baselineRaw===undefined?null:Number(baselineRaw),currentHeight=Number.isFinite(currentValue)?Math.max(4,Math.round(currentValue/maximum*82)):0,baselineHeight=Number.isFinite(baselineValue)?Math.max(4,Math.round(baselineValue/maximum*82)):0;return`<div class="design-chart-day"><div class="design-bar-pair">${Number.isFinite(currentValue)?`<i class="design-bar current" style="height:${currentHeight}%"><b>${esc(exactDecimal(currentRaw,{maximumFractionDigits:4}))}</b></i>`:''}${Number.isFinite(baselineValue)?`<i class="design-bar average" style="height:${baselineHeight}%"><b>${esc(exactDecimal(baselineRaw,{maximumFractionDigits:4}))}</b></i>`:''}</div><small>${esc(overviewDate(day.date).slice(0,5))}</small></div>`;}).join('')}</div></div>`;
 }
 function operationalMetricPanel(operational,metric,hidden=false){const value=operational[metric],comparison=operational.comparison?.[metric],baseline=operational.comparison?.available?`Среднее за 4 периода: ${overviewCount(comparison?.count)} · ${overviewMoney(comparison?.amount)}`:`Сравнение не показано: ${overviewReasonLabels[operational.comparison?.reason]||'нет сопоставимой базы'}.`;return`<div class="design-metric-panel" data-live-metric-panel="${metric}" ${hidden?'hidden':''}><div class="design-current-total"><strong>${overviewCount(value?.count)} · ${overviewMoney(value?.amount)}</strong></div><p class="muted overview-comparison">${esc(baseline)}</p><div class="design-legend"><span><i></i>Текущие</span><span><i></i>Среднее за 4 периода</span></div>${operationalBars(operational,metric)}</div>`;}
+function operationalReturnsPanel(hidden=false){
+  return`<div class="design-metric-panel" data-live-metric-panel="returns" ${hidden?'hidden':''}>
+    <div class="design-current-total">
+      <strong>— шт. · — ₽</strong>
+    </div>
+    <p class="muted overview-comparison">
+      Данные возвратов пока не подключены к оперативному источнику WB.
+    </p>
+  </div>`;
+}
 function operationalOverviewPanel(operational){
   const unavailable=operational?.status!=='available'||!operational.orders;
   if(unavailable)return`<section class="design-panel operational-panel"><div class="design-heading"><h2>СЕЙЧАС</h2>${statusBadge('unavailable','unavailable')}</div><div class="design-period-chip">${icon('calendar')}<span>Период ещё не определён</span></div><div class="design-empty"><strong>Оперативные показатели пока недоступны</strong><p>Они появятся после принятого снимка Sales Funnel.</p></div>${reasonList(operational?.missingReasons)}</section>`;
-  return`<section class="design-panel operational-panel"><div class="design-heading"><h2>СЕЙЧАС</h2>${statusBadge(operational.status,operational.quality)}</div><div class="design-period-chip">${icon('calendar')}<span>${esc(overviewPeriod(operational.period))}</span></div><div class="design-metric-tabs" role="tablist" aria-label="Оперативный показатель"><button type="button" role="tab" aria-selected="true" data-live-metric="orders">Заказы</button><button type="button" role="tab" aria-selected="false" data-live-metric="buyouts">Выкупы</button></div>${operationalMetricPanel(operational,'orders')}${operationalMetricPanel(operational,'buyouts',true)}${reasonList(operational.missingReasons)}<p class="overview-meta">Обновлено: ${esc(overviewFreshness(operational.updatedAt))}</p></section>`;
+  return`<section class="design-panel operational-panel">
+    <div class="design-heading">
+      <h2>СЕЙЧАС</h2>${statusBadge(operational.status,operational.quality)}
+    </div>
+    <div class="design-period-chip">${icon('calendar')}
+      <span>${esc(overviewPeriod(operational.period))}</span>
+    </div>
+    <div class="design-metric-tabs" role="tablist" aria-label="Оперативный показатель">
+      <button type="button" role="tab" aria-selected="true" data-live-metric="orders">Заказы</button>
+      <button type="button" role="tab" aria-selected="false" data-live-metric="buyouts">Выкупы</button>
+      <button type="button" role="tab" aria-selected="false" data-live-metric="returns">Возвраты</button>
+    </div>${operationalMetricPanel(operational,'orders')}${operationalMetricPanel(operational,'buyouts',true)}${operationalReturnsPanel(true)}${reasonList(operational.missingReasons)}
+    <p class="overview-meta">Обновлено: ${esc(overviewFreshness(operational.updatedAt))}</p>
+  </section>`;
 }
 function situationsOverviewPanel(situations){
   const items=Array.isArray(situations?.items)?situations.items:[];
