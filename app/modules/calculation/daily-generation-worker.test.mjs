@@ -46,9 +46,12 @@ test('daily worker retries transient errors and terminates invalid inputs',async
 });
 
 test('daily worker keeps a long build lease alive until completion',async()=>{
-  let heartbeats=0;
-  const jobs={claimJobs:async()=>[job],heartbeatJob:async()=>{heartbeats+=1;return true;},completeJob:async()=>{},failJob:async()=>assert.fail('must not fail')};
-  const worker=createFinancialDailyGenerationWorker({jobs,repository:{build:async()=>{await new Promise(resolve=>setTimeout(resolve,35));return{superseded:false};}}});
-  await worker.runOnce({heartbeatIntervalMs:10});
-  assert.ok(heartbeats>=3);
+  let heartbeats=0,completed=false,finishBuild,watchdog;
+  const failures=[],buildPending=new Promise((resolve,reject)=>{
+    finishBuild=resolve;watchdog=setTimeout(()=>reject(new Error('heartbeat_test_timeout')),5000);
+  });
+  const jobs={claimJobs:async()=>[job],heartbeatJob:async()=>{heartbeats+=1;if(heartbeats===3)finishBuild();return true;},completeJob:async()=>{completed=true;},failJob:async input=>{failures.push(input);}};
+  const worker=createFinancialDailyGenerationWorker({jobs,repository:{build:async()=>{await buildPending;return{superseded:false};}}});
+  try{await worker.runOnce({heartbeatIntervalMs:10});}finally{clearTimeout(watchdog);}
+  assert.equal(heartbeats,3);assert.equal(completed,true);assert.deepEqual(failures,[]);
 });

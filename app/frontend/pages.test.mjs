@@ -1,6 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {emptyOverviewPage,expensesPage,financialSyncView,overviewPage,passwordPage,productsPage,settingsPage,storeOnboardingPage,taxesPage,tariffPage,placeholderPage,uiRoutes} from './pages.mjs';
+test('historical deleted catalog product has an explanation and no WB link or image',()=>{
+  const store={id:'store-history',connected:true},product={id:'deleted',wb_article:'800001',seller_article:'DELETED',historical_deleted:true,image_url:'https://basket-01.wbbasket.ru/old.webp',selected:true};
+  const html=productsPage({id:'owner',display_name:'Owner'},[store],{stream:{},products:[product],selection:{status:'confirmed'},productLimit:3});
+  assert.match(html,/Удалённый товар · добавлен из финансовых отчётов/);
+  assert.doesNotMatch(html,/wildberries\.ru\/catalog\/800001|old\.webp/);
+  assert.match(html,/WB: 800001/);
+});
 const user={id:'test-user',display_name:'<script>alert(1)</script>',email:'" autofocus onfocus="alert(1)'};
 test('settings escapes account data in HTML attributes and text',()=>{const html=settingsPage(user);assert.ok(!html.includes('<script>alert(1)</script>'));assert.ok(html.includes('&lt;script&gt;'));assert.ok(html.includes('&quot; autofocus'));assert.ok(!html.includes('value="" autofocus'));});
 test('every screen link resolves to a supported authenticated route or anchor',()=>{for(const html of [overviewPage(user),settingsPage(user),...Array.from(uiRoutes.keys(),route=>placeholderPage(user,route))]){for(const [,href] of html.matchAll(/href="([^"#]+)"/g)){const p=new URL(href,'http://localhost').pathname;assert.ok(uiRoutes.has(p)||['/favicon.svg','/ui.css'].includes(p),`Unsupported link ${href}`)}for(const match of html.matchAll(/<a[^>]+href="\/overview"[^>]*>/g))assert.match(match[0],/data-overview-home/)}});

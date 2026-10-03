@@ -51,6 +51,15 @@ P03_INTEGRATION_DATABASE_URL=postgresql:///marketplace_control_p03_test node db/
 
 Он фиксирует выбор товаров, нормализацию отчёта, себестоимость, точный результат по доступным данным, причины неполноты и идемпотентную текущую публикацию. Тест также отказывается работать с базой, в имени которой нет `test`.
 
+Восстановление исторического каталога и повторное связывание сохранённых финансовых отчётов проверяются на двух отдельных одноразовых PostgreSQL-БД:
+
+```sh
+HISTORICAL_CATALOG_INTEGRATION_DATABASE_URL=postgresql:///marketplace_control_historical_catalog_test node db/tests/historical-catalog.integration.mjs
+HISTORICAL_RELINK_INTEGRATION_DATABASE_URL=postgresql:///marketplace_control_historical_relink_test node db/tests/historical-relink.integration.mjs
+```
+
+Проверяются общий лимит и конкурентное последнее место, подписка, роль и tenant-контекст, конфликтующие штрихкоды, сохранение старых версий операций, новое связывание и события пересчёта, отсутствие выдуманной себестоимости и идемпотентность.
+
 Хранение оперативных snapshot P0.4 проверяется отдельным сценарием на настоящем PostgreSQL:
 
 ```sh

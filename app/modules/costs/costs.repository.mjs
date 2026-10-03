@@ -3,8 +3,8 @@ export function createCostsRepository({
 }) {
   async function getCostState(userId, storeId) {
     return withOwnedBusinessContext(userId, async(client, businessId) => {
-      const products =(await client.query(`select p.id,p.wb_article,p.seller_article,p.title,p.image_url,
-              v.id as variant_id,v.external_variant_id,v.size_label,v.color_label,
+      const products =(await client.query(`select p.id,p.wb_article,p.seller_article,p.title,p.image_url,p.historical_deleted,
+              v.id as variant_id,coalesce(v.wb_external_variant_id,v.external_variant_id) as external_variant_id,v.size_label,v.color_label,
               barcode.identifier_value as barcode,cv.id as cost_version_id,
               cv.unit_cost::text,c.effective_from
          from mc.product_selection_items i
@@ -37,6 +37,7 @@ export function createCostsRepository({
             seller_article: row.seller_article,
             title: row.title,
             image_url: row.image_url,
+            historical_deleted: row.historical_deleted,
             variants:[]
           };
           grouped.push(product);
@@ -58,6 +59,7 @@ export function createCostsRepository({
           seller_article: product.seller_article,
           title: product.title,
           image_url: product.image_url,
+          historical_deleted: product.historical_deleted,
           ...variant
         });
       }
@@ -123,7 +125,7 @@ export function createCostsRepository({
         fileName: cleanName,
         checksum: cleanChecksum
       })])).rows[0];
-      const variants =(await client.query(`select p.id as product_id,p.wb_article::text,v.id as variant_id,v.external_variant_id,
+      const variants =(await client.query(`select p.id as product_id,p.wb_article::text,v.id as variant_id,coalesce(v.wb_external_variant_id,v.external_variant_id) as external_variant_id,
               array_remove(array_agg(vi.identifier_value),null) as barcodes
          from mc.product_selection_items i
          join mc.products p on (p.business_id,p.store_id,p.id)=(i.business_id,i.store_id,i.product_id)

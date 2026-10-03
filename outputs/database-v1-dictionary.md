@@ -1745,9 +1745,13 @@
 | status | text | нет | 'active'::text |
 | created_at | timestamp with time zone | нет | now() |
 | image_url | text | да | — |
+| historical_deleted | boolean | нет | false |
+| historical_source_row_id | uuid | да | — |
 
 Ограничения и связи:
 
+- `FOREIGN KEY (business_id, store_id, historical_source_row_id) REFERENCES mc.report_rows(business_id, store_id, id)`
+- `CHECK (((NOT historical_deleted) OR (historical_source_row_id IS NOT NULL)))`
 - `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
 - `UNIQUE (business_id, store_id, id)`
 - `PRIMARY KEY (id)`
@@ -1810,14 +1814,16 @@
 | status | text | нет | — |
 | normalized_at | timestamp with time zone | нет | now() |
 | created_at | timestamp with time zone | нет | now() |
+| catalog_revision | bigint | нет | 0 |
 
 Ограничения и связи:
 
 - `UNIQUE (business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id)`
+- `CHECK ((catalog_revision >= 0))`
 - `FOREIGN KEY (method_version_id) REFERENCES mc.method_versions(id)`
 - `PRIMARY KEY (id)`
-- `UNIQUE (report_version_id, method_version_id)`
+- `UNIQUE (report_version_id, method_version_id, catalog_revision)`
 - `CHECK ((status = ANY (ARRAY['succeeded'::text, 'failed'::text])))`
 - `UNIQUE (store_id, normalization_key)`
 - `UNIQUE (business_id, store_id, report_version_id, id)`
@@ -1871,7 +1877,7 @@
 - `UNIQUE (business_id, store_id, report_id, id)`
 - `CHECK (((status = 'accepted'::text) = (accepted_at IS NOT NULL)))`
 - `PRIMARY KEY (id)`
-- `UNIQUE (report_id, checksum)`
+- `UNIQUE (report_id, checksum, parser_version)`
 - `UNIQUE (report_id, version_no)`
 - `CHECK ((status = ANY (ARRAY['received'::text, 'validated'::text, 'accepted'::text, 'rejected'::text])))`
 - `CHECK ((version_no > 0))`
@@ -2036,6 +2042,7 @@
 | name | text | нет | — |
 | status | text | нет | 'paused'::text |
 | created_at | timestamp with time zone | нет | now() |
+| catalog_revision | bigint | нет | 0 |
 
 Ограничения и связи:
 
@@ -2043,6 +2050,7 @@
 - `FOREIGN KEY (business_id) REFERENCES mc.businesses(id)`
 - `UNIQUE (business_id, id)`
 - `UNIQUE (business_id, marketplace_code, external_account_id)`
+- `CHECK ((catalog_revision >= 0))`
 - `PRIMARY KEY (id)`
 - `CHECK ((status = ANY (ARRAY['active'::text, 'paused'::text, 'archived'::text])))`
 
@@ -2341,6 +2349,8 @@
 | attributes | jsonb | нет | '{}'::jsonb |
 | status | text | нет | 'active'::text |
 | created_at | timestamp with time zone | нет | now() |
+| historical_report_only | boolean | нет | false |
+| wb_external_variant_id | text | да | — |
 
 Ограничения и связи:
 

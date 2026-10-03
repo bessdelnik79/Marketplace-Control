@@ -496,7 +496,7 @@ export async function loadCalculationReportCandidates(client,businessId,storeId)
        join mc.source_documents d on d.id=rv.document_id and d.origin='wb_api'
        left join lateral (
          select n.id from mc.report_normalizations n join mc.method_versions m on m.id=n.method_version_id
-          where n.report_version_id=rv.id and n.status='succeeded' and m.implementation_version=any($3::text[])
+          where n.report_version_id=rv.id and n.status='succeeded' and n.catalog_revision=(select catalog_revision from mc.stores where id=r.store_id) and m.implementation_version=any($3::text[])
           order by array_position($3::text[],m.implementation_version),m.version_no desc limit 1
        ) rn on true
       where r.business_id=$1 and r.store_id=$2 and rv.status='accepted'

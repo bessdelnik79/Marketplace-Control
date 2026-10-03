@@ -1,8 +1,8 @@
+import { persistFinancialNormalization,reconcileHistoricalCatalogLinks } from './normalization.repository.mjs';
+import { recoverHistoricalCatalog } from '../catalog/historical-catalog.repository.mjs';
 import { createHash } from 'node:crypto';
 import {
-  financialComponentScope, financialParserVersion, financialReportPeriodMatches,
-  isResolvedNonProductOperation, normalizeFinancialOperation, stableJson,
-  unverifiedFinancialComponents
+  financialParserVersion, financialReportPeriodMatches, stableJson
 } from './finance.mjs';
 import { reconcileBankPayment } from './bank-reconciliation.mjs';
 
@@ -156,10 +156,10 @@ export function createFinancialPipelineRepository({pool}){
         const same=(await client.query(
           `select rv.id,rv.status,(
              select rn.id from mc.report_normalizations rn join mc.method_versions m on m.id=rn.method_version_id
-              where rn.report_version_id=rv.id and rn.status='succeeded' and m.code='wb_finance_import' and m.implementation_version=$3
+              where rn.report_version_id=rv.id and rn.status='succeeded' and rn.catalog_revision=(select catalog_revision from mc.stores where id=rn.store_id) and m.code='wb_finance_import' and m.implementation_version=$3
               order by rn.normalized_at desc limit 1
            ) as normalization_id from mc.report_versions rv
-            where rv.report_id=$1 and rv.checksum=$2 limit 1`,
+            where rv.report_id=$1 and rv.checksum=$2 and rv.parser_version=$3 limit 1`,
           [report.id,source.checksum,financialParserVersion])).rows[0];
         if(same?.normalization_id&&same.status==='accepted'&&report.current_version_id===same.id){
           await markExistingAccepted(client,{coverageId,externalReportId:source.externalReportId,inventoryChecksum:targetInventoryChecksum,versionId:same.id,normalizationId:same.normalization_id});
@@ -211,6 +211,7 @@ export function createFinancialPipelineRepository({pool}){
       // write is rolled back before acceptance.
       await client.query('select (mc.heartbeat_job($1,$2,$3,300)).id',[jobId,leaseToken,workerId]);
       await client.query("select set_config('app.user_id',$1,true)",[context.actor_user_id]);
+      await client.query('select id from mc.businesses where id=$1 for update',[context.business_id]);
       stage='source';
       const source=(await client.query(
         `select rv.id,rv.status,rv.document_id,rv.supersedes_version_id,r.id as report_id,r.external_report_id,
@@ -229,70 +230,25 @@ export function createFinancialPipelineRepository({pool}){
         `select id from mc.method_versions where code='wb_finance_import' and implementation_version=$1 order by version_no desc limit 1`,
         [financialParserVersion])).rows[0];
       if(!method)throw new Error('financial_method_missing');
-      let normalization=(await client.query(
-        `select id from mc.report_normalizations where report_version_id=$1 and method_version_id=$2 and status='succeeded'`,
-        [versionId,method.id])).rows[0];
-      let insertedRows=0,issues=0;
-      if(!normalization){
-        stage='operations';
-        normalization=(await client.query(
-          `insert into mc.report_normalizations(business_id,store_id,report_version_id,method_version_id,normalization_key,status)
-           values($1,$2,$3,$4,$5,'succeeded') returning id`,
-          [context.business_id,context.store_id,versionId,method.id,`${financialParserVersion}:${versionId}`])).rows[0];
-        const rows=(await client.query(
-          `select id,external_row_key,raw_data,row_checksum from mc.report_rows where report_version_id=$1 order by row_number,id`,[versionId])).rows;
-        for(const row of rows){
-          const normalized=normalizeFinancialOperation(row.raw_data);
-          if(normalized.accountingDate<source.period_start||normalized.accountingDate>source.period_end)throw new Error('financial_row_period_mismatch');
-          let product=null,variant=null;
-          if(normalized.wbArticle&&/^\d+$/.test(normalized.wbArticle))product=(await client.query(
-            `select id from mc.products where business_id=$1 and store_id=$2 and wb_article=$3::bigint`,
-            [context.business_id,context.store_id,normalized.wbArticle])).rows[0]??null;
-          if(product&&normalized.variantBarcode)variant=(await client.query(
-            `select v.id from mc.variants v join mc.variant_identifiers i on i.business_id=v.business_id and i.store_id=v.store_id and i.variant_id=v.id
-              where v.business_id=$1 and v.store_id=$2 and v.product_id=$3 and i.identifier_type='barcode' and i.identifier_value=$4 limit 1`,
-            [context.business_id,context.store_id,product.id,normalized.variantBarcode])).rows[0]??null;
-          const addIssue=async(code,severity,details)=>{issues++;await client.query(
-            `insert into mc.data_issues(business_id,store_id,document_id,report_row_id,report_normalization_id,code,severity,details)
-             values($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
-            [context.business_id,context.store_id,source.document_id,row.id,normalization.id,code,severity,JSON.stringify(details)]);};
-          if(normalized.wbArticle&&!product)await addIssue('financial_product_not_in_catalog','warning',{wbArticle:normalized.wbArticle});
-          if(product&&normalized.variantBarcode&&!variant)await addIssue('financial_variant_not_matched','warning',{wbArticle:normalized.wbArticle});
-          const unverified=unverifiedFinancialComponents(row.raw_data,normalized,Boolean(product));
-          if(normalized.operationType==='unclassified'&&!isResolvedNonProductOperation(row.raw_data,normalized,Boolean(product)))await addIssue('financial_operation_unclassified','blocking',{docTypeName:String(row.raw_data.docTypeName??''),sellerOperName:String(row.raw_data.sellerOperName??'')});
-          if(unverified.length)await addIssue('financial_components_unverified','blocking',{sourceFields:unverified});
-          const sourceKey=`${source.external_report_id}/${row.external_row_key}`;
-          let operation=(await client.query(`select id from mc.operations where store_id=$1 and source_code='wb_finance' and source_operation_key=$2`,[context.store_id,sourceKey])).rows[0];
-          if(!operation)operation=(await client.query(
-            `insert into mc.operations(business_id,store_id,source_code,source_operation_key) values($1,$2,'wb_finance',$3) returning id`,
-            [context.business_id,context.store_id,sourceKey])).rows[0];
-          const no=(await client.query('select coalesce(max(version_no),0)+1 as n from mc.operation_versions where operation_id=$1',[operation.id])).rows[0].n;
-          const operationVersion=(await client.query(
-            `insert into mc.operation_versions(business_id,store_id,operation_id,report_row_id,version_no,srid,operation_type,product_id,variant_id,accounting_date,source_occurred_at,quantity,currency,report_normalization_id)
-             values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'RUB',$13) returning id`,
-            [context.business_id,context.store_id,operation.id,row.id,no,normalized.srid,normalized.operationType,product?.id??null,variant?.id??null,normalized.accountingDate,normalized.sourceOccurredAt,normalized.quantity,normalization.id])).rows[0];
-          for(const component of normalized.components)await client.query(
-            `insert into mc.financial_components(business_id,store_id,operation_version_id,component_key,category_code,amount_signed,method_version_id,source_field,result_scope_classification)
-             values($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-            [context.business_id,context.store_id,operationVersion.id,component.componentKey,component.categoryCode,component.amountSigned,method.id,component.sourceField,financialComponentScope(row.raw_data,normalized,component,Boolean(product))]);
-          insertedRows++;
-        }
-      }
-      stage='acceptance';
-      if(source.status==='received'){
-        await client.query(`update mc.report_versions set status='validated' where id=$1`,[versionId]);
-        await client.query(`update mc.report_versions set status='accepted',accepted_at=clock_timestamp() where id=$1`,[versionId]);
-      }
       const pointerCurrent=source.current_version_id;
       const expectedCurrent=payload.expectedCurrentVersionId??null;
       if(String(pointerCurrent??'')!==String(expectedCurrent??'')&&String(pointerCurrent??'')!==versionId){
         await client.query(`update mc.financial_week_inventory set fetch_status='retry',last_error_code='financial_version_superseded'
           where coverage_id=$1 and report_version_id=$2`,[coverageId,versionId]);
         await refreshCoverage(client,coverageId);
-        return{superseded:true,insertedRows,issues};
+        return{superseded:true,insertedRows:0,issues:0};
+      }
+      if(source.status==='received')await client.query(`update mc.report_versions set status='validated' where id=$1`,[versionId]);
+      const recovery=await recoverHistoricalCatalog(client,{businessId:context.business_id,storeId:context.store_id,reportVersionId:versionId});
+      const normalization=await persistFinancialNormalization(client,{businessId:context.business_id,storeId:context.store_id,reportVersionId:versionId,catalogRevision:recovery.catalogRevision});
+      const {insertedRows,issues}=normalization;
+      stage='acceptance';
+      if(source.status==='received'||source.status==='validated'){
+        await client.query(`update mc.report_versions set status='accepted',accepted_at=clock_timestamp() where id=$1`,[versionId]);
       }
       await client.query('update mc.reports set current_version_id=$1 where id=$2',[versionId,source.report_id]);
       await markExistingAccepted(client,{coverageId,externalReportId:source.external_report_id,inventoryChecksum:payload.inventoryChecksum,versionId,normalizationId:normalization.id});
+      await reconcileHistoricalCatalogLinks(client,{businessId:context.business_id,storeId:context.store_id});
 
       const summary=(await client.query(
         `select summary_raw_data from mc.financial_week_inventory where coverage_id=$1 and report_version_id=$2 limit 1`,

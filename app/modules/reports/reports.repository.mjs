@@ -1,6 +1,8 @@
+import { persistFinancialNormalization,reconcileHistoricalCatalogLinks } from './normalization.repository.mjs';
+import { recoverHistoricalCatalog } from '../catalog/historical-catalog.repository.mjs';
 import { createHash } from 'node:crypto';
 import { withOwnedBusinessContext } from '../../infrastructure/database/client.mjs';
-import { financialComponentScope, financialHistoricalWeekRange, financialParserVersion, financialReportPeriodMatches, isResolvedNonProductOperation, normalizeFinancialOperation, stableJson, unverifiedFinancialComponents } from './finance.mjs';
+import { financialHistoricalWeekRange, financialParserVersion, financialReportPeriodMatches, stableJson } from './finance.mjs';
 import { reconcileBankPayment } from './bank-reconciliation.mjs';
 import { buildSellerOffsetReference } from './full-report-credit.mjs';
 
@@ -154,7 +156,7 @@ async function resolveLegacyDataIssues(client,businessId,storeId,reportId,resolv
              from mc.report_normalizations rn
              join mc.method_versions m on m.id=rn.method_version_id
             where rn.business_id=$1 and rn.store_id=$2 and rn.report_version_id=rr.report_version_id and rn.status='succeeded'
-            order by (case when $5 then (rn.id=$4)::int else 0 end),m.version_no desc,rn.normalized_at desc,rn.id desc
+            order by (case when $5 then (rn.id=$4)::int else 0 end),m.version_no desc,rn.catalog_revision desc,rn.normalized_at desc,rn.id desc
             limit 1
          ) selected
         where di.business_id=$1 and di.store_id=$2 and old_version.report_id=$3
@@ -188,6 +190,7 @@ async function resolveLegacyDataIssues(client,businessId,storeId,reportId,resolv
 export async function completeFinancialSync(userId,job,{documentId,reports,summaries=new Map(),summaryError=null,objects=[]}){
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
     if(businessId!==job.business_id)throw new Error('financial_context_mismatch');
+    await client.query('select id from mc.businesses where id=$1 for update',[businessId]);
     // Match beginFinancialSync lock order so an interrupted run cannot commit after its replacement starts.
     const stream=(await client.query(
       `select id from mc.sync_streams where id=$1 and business_id=$2 and store_id=$3 for update`,
@@ -221,10 +224,11 @@ export async function completeFinancialSync(userId,job,{documentId,reports,summa
          values($1,$2,$3,'weekly_realization',$4,$5) returning id,period_start,period_end,current_version_id`,
         [businessId,job.store_id,source.externalReportId,source.periodStart,source.periodEnd]
       )).rows[0];
-      const same=(await client.query(`select id,status from mc.report_versions where report_id=$1 and checksum=$2`,[report.id,source.checksum])).rows[0];
+      const same=(await client.query(`select id,status from mc.report_versions where report_id=$1 and checksum=$2 and parser_version=$3`,[report.id,source.checksum,financialParserVersion])).rows[0];
       let version,reuseRows=false;
       if(same){
-        const existingNormalization=(await client.query(`select id from mc.report_normalizations where report_version_id=$1 and method_version_id=$2`,[same.id,method.id])).rows[0];
+        const recovery=await recoverHistoricalCatalog(client,{businessId,storeId:job.store_id,reportVersionId:same.id});
+        const existingNormalization=(await client.query(`select id from mc.report_normalizations where report_version_id=$1 and method_version_id=$2 and catalog_revision=$3`,[same.id,method.id,recovery.catalogRevision])).rows[0];
         if(existingNormalization){
           if(report.current_version_id===same.id)unchangedReports++;
           else{
@@ -245,66 +249,18 @@ export async function completeFinancialSync(userId,job,{documentId,reports,summa
           [businessId,job.store_id,report.id,documentId,versionNo,source.checksum,financialParserVersion]
         )).rows[0];
       }
-      const normalization=(await client.query(
-        `insert into mc.report_normalizations(business_id,store_id,report_version_id,method_version_id,normalization_key,status)
-         values($1,$2,$3,$4,$5,'succeeded') returning id`,
-        [businessId,job.store_id,version.id,method.id,`${financialParserVersion}:${version.id}`]
-      )).rows[0];
-      await resolveLegacyDataIssues(client,businessId,job.store_id,report.id,normalization.id,true);
-      let rowNumber=0;
-      for(const sourceRow of source.rows){
-        rowNumber++;
-        const reportRow=reuseRows
-          ?(await client.query(`select id,row_checksum from mc.report_rows where report_version_id=$1 and external_row_key=$2`,[version.id,sourceRow.externalRowKey])).rows[0]
-          :(await client.query(
-            `insert into mc.report_rows(business_id,store_id,report_version_id,external_row_key,row_number,raw_data,row_checksum)
-             values($1,$2,$3,$4,$5,$6::jsonb,$7) returning id,row_checksum`,
-            [businessId,job.store_id,version.id,sourceRow.externalRowKey,rowNumber,JSON.stringify(sourceRow.rawData),sourceRow.rowChecksum]
-          )).rows[0];
-        if(!reportRow||reportRow.row_checksum!==sourceRow.rowChecksum)throw new Error('financial_duplicate_row_conflict');
-        const normalized=normalizeFinancialOperation(sourceRow.rawData);
-        if(normalized.accountingDate<source.periodStart||normalized.accountingDate>source.periodEnd)throw new Error('financial_row_period_mismatch');
-        let product=null,variant=null;
-        if(normalized.wbArticle&&/^\d+$/.test(normalized.wbArticle))product=(await client.query(
-          `select id from mc.products where business_id=$1 and store_id=$2 and wb_article=$3::bigint`,
-          [businessId,job.store_id,normalized.wbArticle]
-        )).rows[0]??null;
-        if(product&&normalized.variantBarcode)variant=(await client.query(
-          `select v.id from mc.variants v join mc.variant_identifiers i on i.business_id=v.business_id and i.store_id=v.store_id and i.variant_id=v.id
-            where v.business_id=$1 and v.store_id=$2 and v.product_id=$3 and i.identifier_type='barcode' and i.identifier_value=$4 limit 1`,
-          [businessId,job.store_id,product.id,normalized.variantBarcode]
-        )).rows[0]??null;
-        const addIssue=async(code,severity,details)=>{issues++;await client.query(
-          `insert into mc.data_issues(business_id,store_id,document_id,report_row_id,report_normalization_id,code,severity,details)
-           values($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
-          [businessId,job.store_id,documentId,reportRow.id,normalization.id,code,severity,JSON.stringify(details)]
-        );};
-        if(normalized.wbArticle&&!product)await addIssue('financial_product_not_in_catalog','warning',{wbArticle:normalized.wbArticle});
-        if(product&&normalized.variantBarcode&&!variant)await addIssue('financial_variant_not_matched','warning',{wbArticle:normalized.wbArticle});
-        const unverifiedFields=unverifiedFinancialComponents(sourceRow.rawData,normalized,Boolean(product));
-        if(normalized.operationType==='unclassified'&&!isResolvedNonProductOperation(sourceRow.rawData,normalized,Boolean(product)))await addIssue('financial_operation_unclassified','blocking',{docTypeName:String(sourceRow.rawData.docTypeName??''),sellerOperName:String(sourceRow.rawData.sellerOperName??'')});
-        if(unverifiedFields.length)await addIssue('financial_components_unverified','blocking',{sourceFields:unverifiedFields});
-        const sourceOperationKey=`${source.externalReportId}/${sourceRow.externalRowKey}`;
-        let operation=(await client.query(`select id from mc.operations where store_id=$1 and source_code='wb_finance' and source_operation_key=$2`,[job.store_id,sourceOperationKey])).rows[0];
-        if(!operation)operation=(await client.query(
-          `insert into mc.operations(business_id,store_id,source_code,source_operation_key) values($1,$2,'wb_finance',$3) returning id`,
-          [businessId,job.store_id,sourceOperationKey]
-        )).rows[0];
-        const operationVersionNo=(await client.query(`select coalesce(max(version_no),0)+1 as n from mc.operation_versions where operation_id=$1`,[operation.id])).rows[0].n;
-        const operationVersion=(await client.query(
-          `insert into mc.operation_versions(business_id,store_id,operation_id,report_row_id,version_no,srid,operation_type,product_id,variant_id,accounting_date,source_occurred_at,quantity,currency,report_normalization_id)
-           values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'RUB',$13) returning id`,
-          [businessId,job.store_id,operation.id,reportRow.id,operationVersionNo,normalized.srid,normalized.operationType,product?.id??null,variant?.id??null,normalized.accountingDate,normalized.sourceOccurredAt,normalized.quantity,normalization.id]
-        )).rows[0];
-        for(const component of normalized.components)await client.query(
-          `insert into mc.financial_components(business_id,store_id,operation_version_id,component_key,category_code,amount_signed,method_version_id,source_field,result_scope_classification)
-           values($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-          [businessId,job.store_id,operationVersion.id,component.componentKey,component.categoryCode,component.amountSigned,method.id,component.sourceField,financialComponentScope(sourceRow.rawData,normalized,component,Boolean(product))]
-        );
-        insertedRows++;
-      }
       if(!reuseRows){
+        let rowNumber=0;
+        for(const row of source.rows)await client.query(
+          `insert into mc.report_rows(business_id,store_id,report_version_id,external_row_key,row_number,raw_data,row_checksum) values($1,$2,$3,$4,$5,$6::jsonb,$7)`,
+          [businessId,job.store_id,version.id,row.externalRowKey,++rowNumber,JSON.stringify(row.rawData),row.rowChecksum]);
         await client.query(`update mc.report_versions set status='validated' where id=$1`,[version.id]);
+      }
+      const recovery=await recoverHistoricalCatalog(client,{businessId,storeId:job.store_id,reportVersionId:version.id});
+      const normalization=await persistFinancialNormalization(client,{businessId,storeId:job.store_id,reportVersionId:version.id,catalogRevision:recovery.catalogRevision});
+      insertedRows+=normalization.insertedRows;issues+=normalization.issues;
+      await resolveLegacyDataIssues(client,businessId,job.store_id,report.id,normalization.id,true);
+      if(!reuseRows){
         await client.query(`update mc.report_versions set status='accepted',accepted_at=now() where id=$1`,[version.id]);
         await client.query(`update mc.reports set current_version_id=$1 where id=$2`,[version.id,report.id]);
         insertedReports++;
@@ -318,6 +274,7 @@ export async function completeFinancialSync(userId,job,{documentId,reports,summa
       }
       bankChecks[await recordBankCheck(client,businessId,job,source,version.id,summaries.get(source.externalReportId),summaryError)]++;
     }
+    await reconcileHistoricalCatalogLinks(client,{businessId,storeId:job.store_id});
     await client.query(
       `insert into mc.coverage_intervals(business_id,store_id,stream_id,source_document_id,date_from,date_to,status)
        values($1,$2,$3,$4,$5,$6,'complete')`,
@@ -412,7 +369,7 @@ export async function getFinancialSyncState(userId,storeId){
                   join mc.method_versions newer_method on newer_method.id=newer.method_version_id
                   join mc.method_versions current_method on current_method.id=rn.method_version_id
                   where newer.report_version_id=rn.report_version_id and newer.status='succeeded'
-                    and newer_method.code=current_method.code and newer_method.version_no>current_method.version_no
+                    and newer_method.code=current_method.code and (newer_method.version_no>current_method.version_no or (newer_method.version_no=current_method.version_no and newer.catalog_revision>rn.catalog_revision))
                 )) as issue_count,
             exists(select 1 from mc.product_selections ps where ps.business_id=store.business_id and ps.store_id=store.id and ps.status='confirmed') as selection_ready
        from mc.stores store
