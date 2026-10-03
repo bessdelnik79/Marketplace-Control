@@ -56,9 +56,12 @@ P03_INTEGRATION_DATABASE_URL=postgresql:///marketplace_control_p03_test node db/
 ```sh
 HISTORICAL_CATALOG_INTEGRATION_DATABASE_URL=postgresql:///marketplace_control_historical_catalog_test node db/tests/historical-catalog.integration.mjs
 HISTORICAL_RELINK_INTEGRATION_DATABASE_URL=postgresql:///marketplace_control_historical_relink_test node db/tests/historical-relink.integration.mjs
+FINANCIAL_SCOPE_INTEGRATION_DATABASE_URL=postgresql:///marketplace_control_financial_scope_test node db/tests/financial-scope-recalculation.integration.mjs
 ```
 
 Проверяются общий лимит и конкурентное последнее место, подписка, роль и tenant-контекст, конфликтующие штрихкоды, сохранение старых версий операций, новое связывание и события пересчёта, отсутствие выдуманной себестоимости и идемпотентность.
+
+Сценарий `financial-scope-recalculation` проверяет полную замену текущей публикации при изменении ассортимента, включая дни за пределами отчётов, сохранение исходных границ события и восстановление после неуспешного пересчёта. При неизменном ассортименте узкое событие остаётся инкрементальным; прямое смешивание замороженных наборов товаров по-прежнему запрещено.
 
 Хранение оперативных snapshot P0.4 проверяется отдельным сценарием на настоящем PostgreSQL:
 

@@ -42,9 +42,9 @@
     "semantic_hash": ""
   },
   "db/tests/schema.test.mjs": {
-    "mtime": 1791043547.771107,
-    "seen": 1791043678.631413,
-    "ast_hash": "d03c43d47a5a36f2d31830139a1bf19f",
+    "mtime": 1791044939.7657433,
+    "seen": 1791045573.7018137,
+    "ast_hash": "e962e9cdd0477185462298ad76df3a51",
     "semantic_hash": ""
   },
   "outputs/design/build-editable.mjs": {
@@ -492,9 +492,9 @@
     "semantic_hash": ""
   },
   "db/README.md": {
-    "mtime": 1791041686.5907202,
-    "seen": 1791042521.2065828,
-    "ast_hash": "59a6feda24b70741d96d7c113d3b3099",
+    "mtime": 1791044967.0442615,
+    "seen": 1791045573.7057035,
+    "ast_hash": "d8ea4253f4b3687ea59bb00a0c6ad777",
     "semantic_hash": ""
   },
   "design-qa.md": {
@@ -510,9 +510,9 @@
     "semantic_hash": ""
   },
   "outputs/catalog-sync.md": {
-    "mtime": 1791043548.7229323,
-    "seen": 1791043678.635501,
-    "ast_hash": "2b7af35da5b8ec4618bdc7fcea3d9c65",
+    "mtime": 1791044850.214049,
+    "seen": 1791045573.7059927,
+    "ast_hash": "332148b42e763426396993782db4addf",
     "semantic_hash": ""
   },
   "outputs/cost-import.md": {
@@ -522,8 +522,8 @@
     "semantic_hash": ""
   },
   "outputs/database-v1-dictionary.md": {
-    "mtime": 1791043112.6151047,
-    "seen": 1791043678.635682,
+    "mtime": 1791044098.507236,
+    "seen": 1791045573.7061028,
     "ast_hash": "a5555dc1db10883355b54d7715ed6aeb",
     "semantic_hash": ""
   },
@@ -576,9 +576,9 @@
     "semantic_hash": ""
   },
   "outputs/financial-formulas.md": {
-    "mtime": 1790787376.022347,
-    "seen": 1791036406.5856674,
-    "ast_hash": "26755d282d96de65a8efbdaf843558e9",
+    "mtime": 1791045170.7003503,
+    "seen": 1791045573.7072387,
+    "ast_hash": "5ebc7610cb6b79341d51870f80258a1d",
     "semantic_hash": ""
   },
   "outputs/financial-reports.md": {
@@ -1215,6 +1215,12 @@
     "mtime": 1791042690.952508,
     "seen": 1791043095.3885336,
     "ast_hash": "e1738ed4a9a26b51739a3324136444e5",
+    "semantic_hash": ""
+  },
+  "db/tests/financial-scope-recalculation.integration.mjs": {
+    "mtime": 1791045484.2020166,
+    "seen": 1791045573.7007914,
+    "ast_hash": "4b5bb3e8bcd520fdbaba194f7bc4b545",
     "semantic_hash": ""
   }
 }

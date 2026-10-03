@@ -28,6 +28,14 @@ try {
   const migrations=(await readdir(path.join(root,'db/migrations'))).filter(name=>/^\d+_.+\.sql$/.test(name)).sort();
   for(const migration of migrations)await db.exec(await readFile(path.join(root,'db/migrations',migration),'utf8'));
   pass('all migrations apply atomically to empty PostgreSQL');
+  const scopeDispatch=(await one(`select pg_get_functiondef('mc.emit_financial_input_event(uuid,text,text,date,date,uuid,uuid,uuid,uuid,uuid,uuid,uuid,uuid)'::regprocedure) definition`)).definition;
+  assert.match(scopeDispatch,/financial_publication_selection_changed/);
+  assert.match(scopeDispatch,/least\(queue_from,\(payload/);
+  assert.match(scopeDispatch,/greatest\(queue_to,\(payload/);
+  const selectionDispatch=(await one(`select pg_get_functiondef('mc.emit_financial_selection_event()'::regprocedure) definition`)).definition;
+  assert.match(selectionDispatch,/financial_daily_publication_days/);
+  assert.match(selectionDispatch,/financial_empty_week_evidence_valid/);
+  pass('selection changes recalculate published and proven empty dates without widening immutable event evidence');
   const version = (await one('select version()')).version;
   console.log(version);
   const tables = await q("select table_name from information_schema.tables where table_schema='mc' and table_type='BASE TABLE' order by table_name");
@@ -35,7 +43,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,61);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,62);
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.recover_historical_catalog(uuid,uuid)'::regprocedure"));
   const transportRoundingDefinition=(await one(
   `select pg_get_functiondef(
