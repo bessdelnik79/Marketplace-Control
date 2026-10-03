@@ -9,9 +9,74 @@ import {
   parseScale4Money,
   previousCalendarWeek,
   previousCalendarPeriod,
+  previousFourCalendarPeriods,
   validateCalendarDate,
   validateCalendarPeriod
 } from './financial-overview.mjs';
+
+function medianHistory(current, amounts) {
+  return previousFourCalendarPeriods({start:current.period_start,end:current.period_end}).map((period,index)=>envelope({
+    periodStart:period.start,periodEnd:period.end,revenue:amounts[index],expenseLine:'0.0000',
+    beforeTax:amounts[index],tax:'0.0000',afterTax:amounts[index]
+  }));
+}
+
+test('four previous calendar periods preserve months, quarters and leap years across boundaries',()=>{
+  for(const [start,end,expected] of [
+    ['2026-03-01','2026-03-31',[['2026-02-01','2026-02-28'],['2026-01-01','2026-01-31'],['2025-12-01','2025-12-31'],['2025-11-01','2025-11-30']]],
+    ['2024-03-01','2024-03-31',[['2024-02-01','2024-02-29'],['2024-01-01','2024-01-31'],['2023-12-01','2023-12-31'],['2023-11-01','2023-11-30']]],
+    ['2026-01-01','2026-03-31',[['2025-10-01','2025-12-31'],['2025-07-01','2025-09-30'],['2025-04-01','2025-06-30'],['2025-01-01','2025-03-31']]],
+    ['2025-01-01','2025-12-31',[['2024-01-01','2024-12-31'],['2023-01-01','2023-12-31'],['2022-01-01','2022-12-31'],['2021-01-01','2021-12-31']]]
+  ])assert.deepEqual(previousFourCalendarPeriods({start,end}).map(value=>[value.start,value.end]),expected);
+});
+
+test('custom ranges keep their original duration when a historical range matches a calendar month',()=>{
+  assert.deepEqual(previousFourCalendarPeriods({start:'2026-05-31',end:'2026-06-29'}).map(value=>[value.start,value.end]),[
+    ['2026-05-01','2026-05-30'],['2026-04-01','2026-04-30'],['2026-03-02','2026-03-31'],['2026-01-31','2026-03-01']
+  ]);
+});
+
+test('median comparison uses exactly four periods and ignores an extreme outlier',()=>{
+  const current=envelope();
+  const history=medianHistory(current,['10.0000','20.0000','30.0000','1000.0000']);
+  const comparison=buildFinancialOverview({current,history}).comparison;
+  assert.equal(comparison.baseline,'median_four_periods');
+  assert.equal(comparison.amount,'25.0000');
+  assert.equal(comparison.changeAmount,'69.0000');
+  assert.equal(comparison.changePercent,'276.0000');
+});
+
+test('median comparison keeps negative and zero baselines and exact half-scale precision',()=>{
+  for(const [amounts,expectedPercent,expectedReason] of [
+    [['100.0000','200.0000','300.0000','400.0000'],'-62.4000',null],
+    [['-40.0000','-30.0000','-20.0000','-10.0000'],'476.0000',null],
+    [['-20.0000','-10.0000','10.0000','20.0000'],null,'previous_zero'],
+    [['0.0000','0.0001','0.0002','100.0000'],'62666566.6667',null]
+  ]){
+    const current=envelope();
+    const comparison=buildFinancialOverview({current,history:medianHistory(current,amounts)}).comparison;
+    assert.equal(comparison.changePercent,expectedPercent);
+    assert.equal(comparison.reason,expectedReason);
+  }
+});
+
+test('median comparison fails closed for missing or incompatible history and rejects nonadjacent periods',()=>{
+  const current=envelope();
+  const history=medianHistory(current,['10.0000','20.0000','30.0000','40.0000']);
+  for(const incomplete of [[],history.slice(0,3),[...history.slice(0,3),null]]){
+    const comparison=buildFinancialOverview({current,history:incomplete}).comparison;
+    assert.equal(comparison.reason,'previous_period_unavailable');
+    assert.equal(comparison.changePercent,null);
+  }
+  for(const [change,reason] of [
+    [{publication_id:'other'},'different_publication'],[{method_version:'other'},'different_method_version'],
+    [{scope:'store'},'different_scope'],[{coverage:{comparable:false}},'incomparable_coverage']
+  ]){
+    const values=history.map((value,index)=>index===3?{...value,...change}:value);
+    assert.equal(buildFinancialOverview({current,history:values}).comparison.reason,reason);
+  }
+  assert.throws(()=>buildFinancialOverview({current,history:[history[1],history[0],history[2],history[3]]}),{message:'overview_previous_period_mismatch'});
+});
 
 function envelope({
   publicationId = 'publication-1',

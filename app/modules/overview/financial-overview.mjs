@@ -110,15 +110,52 @@ export function validateCalendarPeriod(period) {
   return { start, end, timezone: timezoneMetadata(period.timezone ?? 'Europe/Moscow') };
 }
 
+function calendarPeriodMonths(normalized) {
+  const start = new Date(`${normalized.start}T00:00:00Z`);
+  const end = new Date(`${normalized.end}T00:00:00Z`);
+  const months = (end.getUTCFullYear() - start.getUTCFullYear()) * 12 + end.getUTCMonth() - start.getUTCMonth() + 1;
+  const calendarMonths = start.getUTCDate() === 1 &&
+    end.getUTCDate() === new Date(Date.UTC(end.getUTCFullYear(), end.getUTCMonth() + 1, 0)).getUTCDate() &&
+    (months === 1 || months === 3 && start.getUTCMonth() % 3 === 0 || months === 12 && start.getUTCMonth() === 0);
+  return calendarMonths ? months : null;
+}
+
 export function previousCalendarPeriod(period) {
   const normalized = validateCalendarPeriod(period);
+  const months = calendarPeriodMonths(normalized);
+  if (months !== null) {
+    const start = new Date(`${normalized.start}T00:00:00Z`);
+    return {
+      start: dateFromDay(Date.UTC(start.getUTCFullYear(), start.getUTCMonth() - months, 1) / DAY_MS),
+      end: dateFromDay(dayNumber(normalized.start) - 1),
+      timezone: normalized.timezone
+    };
+  }
   const durationDays = dayNumber(normalized.end) - dayNumber(normalized.start) + 1;
-  const end = dayNumber(normalized.start) - 1;
+  const previousEnd = dayNumber(normalized.start) - 1;
   return {
-    start: dateFromDay(end - durationDays + 1),
-    end: dateFromDay(end),
+    start: dateFromDay(previousEnd - durationDays + 1),
+    end: dateFromDay(previousEnd),
     timezone: normalized.timezone
   };
+}
+
+export function previousFourCalendarPeriods(period) {
+  const normalized = validateCalendarPeriod(period);
+  const months = calendarPeriodMonths(normalized);
+  const durationDays = dayNumber(normalized.end) - dayNumber(normalized.start) + 1;
+  const periods = [];
+  let previous = normalized;
+  for (let index = 0; index < 4; index += 1) {
+    if (months !== null) {
+      previous = previousCalendarPeriod(previous);
+    } else {
+      const end = dayNumber(previous.start) - 1;
+      previous = { start: dateFromDay(end - durationDays + 1), end: dateFromDay(end), timezone: normalized.timezone };
+    }
+    periods.push(previous);
+  }
+  return periods;
 }
 
 export function validateCalendarWeek(period) {
@@ -353,8 +390,41 @@ export function compareFinancialPeriods(current, previous) {
   };
 }
 
-export function buildFinancialOverview({ current, previous = null, timezone = 'Europe/Moscow' }) {
+export function compareFinancialHistory(current, history) {
+  const periods = previousFourCalendarPeriods(current.period);
+  const unavailable = reason => ({
+    period: periods[0], periods, baseline: 'median_four_periods', quality: 'unavailable',
+    amount: null, changeAmount: null, changePercent: null, comparable: false, reason
+  });
+  if (!Array.isArray(history) || history.length !== 4 || history.some(value => !value)) {
+    return unavailable('previous_period_unavailable');
+  }
+  for (let index = 0; index < 4; index += 1) {
+    if (history[index].period.start !== periods[index].start || history[index].period.end !== periods[index].end) {
+      invalid('overview_previous_period_mismatch');
+    }
+    const reason = comparisonReason(current, history[index]);
+    if (reason) return unavailable(reason);
+  }
+  const amounts = history.map(value => parseScale4Money(value.displayResult.amount)).sort((left, right) => left < right ? -1 : left > right ? 1 : 0);
+  // Keep the median in half-scale units so averaging two middle values never loses precision.
+  const medianTwice = amounts[1] + amounts[2];
+  const changeTwice = parseScale4Money(current.displayResult.amount) * 2n - medianTwice;
+  return {
+    period: periods[0], periods, baseline: 'median_four_periods', quality: history.some(value => value.quality === 'partial') ? 'partial' : 'complete',
+    amount: formatScale4Money(roundedDivide(medianTwice, 2n)),
+    changeAmount: formatScale4Money(roundedDivide(changeTwice, 2n)),
+    changePercent: medianTwice === 0n ? null : formatScale4Money(roundedDivide(changeTwice * 1000000n, medianTwice < 0n ? -medianTwice : medianTwice)),
+    comparable: true, reason: medianTwice === 0n ? 'previous_zero' : null
+  };
+}
+
+export function buildFinancialOverview({ current, previous = null, history, timezone = 'Europe/Moscow' }) {
   const currentOverview = buildFinancialPeriodOverview(current, { timezone });
+  if (history !== undefined) {
+    const historyOverviews = Array.isArray(history) ? history.map(value => value === null ? null : buildFinancialPeriodOverview(value, { timezone })) : history;
+    return { ...currentOverview, comparison: compareFinancialHistory(currentOverview, historyOverviews) };
+  }
   const expectedPrevious = previousCalendarPeriod(currentOverview.period);
   const previousOverview = previous === null ? null : buildFinancialPeriodOverview(previous, { timezone });
   if (previousOverview && (previousOverview.period.start !== expectedPrevious.start || previousOverview.period.end !== expectedPrevious.end)) {

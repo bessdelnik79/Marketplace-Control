@@ -1,6 +1,6 @@
 import { getPublishedFinancialPeriodPair } from '../calculation/calculation.repository.mjs';
 import { getOperationalOverviewData } from '../operational/operational.repository.mjs';
-import { buildFinancialOverview, calendarWeekForDate, previousCalendarPeriod, validateCalendarPeriod } from './financial-overview.mjs';
+import { buildFinancialOverview, calendarWeekForDate, previousCalendarPeriod, previousFourCalendarPeriods, validateCalendarPeriod } from './financial-overview.mjs';
 import { buildOperationalOverview } from './operational-overview.mjs';
 import { buildSituations } from './situations.mjs';
 
@@ -66,10 +66,11 @@ export async function getFinancialOverview(userId, storeId, selectedDate, select
     if(pair?.current){
       period=validateCalendarPeriod({start:pair.current.period_start,end:pair.current.period_end,timezone});
       previousPeriod=previousCalendarPeriod(period);
-      if (!envelopeMatchesPeriod(pair.previous, previousPeriod)) {
+      const comparisonPeriods=previousFourCalendarPeriods(period);
+      if (!comparisonPeriods.every((value,index)=>envelopeMatchesPeriod(pair.history?.[index],value))) {
         pair=await loadPeriodPair(normalizedUserId,normalizedStoreId,{
           periodStart:period.start,periodEnd:period.end,
-          previousPeriodStart:previousPeriod.start,previousPeriodEnd:previousPeriod.end
+          previousPeriodStart:previousPeriod.start,previousPeriodEnd:previousPeriod.end,comparisonPeriods
         });
       }
     }
@@ -80,7 +81,8 @@ export async function getFinancialOverview(userId, storeId, selectedDate, select
     previousPeriod=previousCalendarPeriod(period);
     pair=await loadPeriodPair(normalizedUserId,normalizedStoreId,{
       periodStart:period.start,periodEnd:period.end,
-      previousPeriodStart:previousPeriod.start,previousPeriodEnd:previousPeriod.end
+      previousPeriodStart:previousPeriod.start,previousPeriodEnd:previousPeriod.end,
+      comparisonPeriods:previousFourCalendarPeriods(period)
     });
   }
   if (!pair) return null;
@@ -155,7 +157,7 @@ export async function getFinancialOverview(userId, storeId, selectedDate, select
 
   const overview = buildFinancialOverview({
     current: decoratePeriod(pair.current, pair, scope),
-    previous: decoratePeriod(pair.previous, pair, scope),
+    history: (pair.history??[]).map(value=>decoratePeriod(value,pair,scope)),
     timezone
   });
   return {

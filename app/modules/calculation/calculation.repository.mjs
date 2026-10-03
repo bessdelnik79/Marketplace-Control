@@ -813,7 +813,7 @@ async function getDailyUpdateStatus(client,businessId,storeId,periodStart=null,p
     lastErrorCode:job.last_error_code??null,affectedPeriod:{start:job.affected_from,end:job.affected_to},canRetry};
 }
 
-async function getLegacyPair(client,businessId,storeId,{periodStart,periodEnd,previousPeriodStart,previousPeriodEnd},canRetry=false){
+async function getLegacyPair(client,businessId,storeId,{periodStart,periodEnd,previousPeriodStart,previousPeriodEnd,comparisonPeriods=[]},canRetry=false){
   let publication=await getCurrentPublicationContext(client,businessId,storeId);
   if(!publication)return null;
   if(!periodStart||!periodEnd){
@@ -832,8 +832,13 @@ async function getLegacyPair(client,businessId,storeId,{periodStart,periodEnd,pr
   }
   const previous=current?.quality!=='unavailable'&&previousPeriodStart&&previousPeriodEnd
     ?await getPeriodEnvelope(client,publication.run_id,previousPeriodStart,previousPeriodEnd):null;
+  const history=[];
+  for(const period of comparisonPeriods){
+    history.push(period.start===previousPeriodStart&&period.end===previousPeriodEnd?previous:
+      current?.quality!=='unavailable'?await getPeriodEnvelope(client,publication.run_id,period.start,period.end):null);
+  }
   const update_status=await getDailyUpdateStatus(client,businessId,storeId,periodStart,periodEnd,null,canRetry);
-  return{...publication,publication_source:'legacy',update_status,current,previous};
+  return{...publication,publication_source:'legacy',update_status,current,previous,history};
 }
 
 export async function getPublishedFinancialPeriod(userId,storeId,periodStart,periodEnd){
@@ -854,10 +859,10 @@ export async function getPublishedFinancialPeriod(userId,storeId,periodStart,per
   });
 }
 
-export async function getPublishedFinancialPeriodPair(userId,storeId,{periodStart=null,periodEnd=null,previousPeriodStart=null,previousPeriodEnd=null}={}){
+export async function getPublishedFinancialPeriodPair(userId,storeId,{periodStart=null,periodEnd=null,previousPeriodStart=null,previousPeriodEnd=null,comparisonPeriods=[]}={}){
   return withOwnedBusinessContext(userId,async(client,businessId,role)=>{
     const canRetry=['owner','editor'].includes(role);
-    const requested={periodStart,periodEnd,previousPeriodStart,previousPeriodEnd};
+    const requested={periodStart,periodEnd,previousPeriodStart,previousPeriodEnd,comparisonPeriods};
     const daily=await getCurrentDailyPublicationContext(client,businessId,storeId);
     if(daily){
       if(!periodStart||!periodEnd){
@@ -872,7 +877,12 @@ export async function getPublishedFinancialPeriodPair(userId,storeId,{periodStar
         if(current){
           const previous=previousPeriodStart&&previousPeriodEnd
             ?await getDailyPeriodEnvelope(client,daily,previousPeriodStart,previousPeriodEnd):null;
-          return{...daily,update_status:await getDailyUpdateStatus(client,businessId,storeId,periodStart,periodEnd,daily,canRetry),current,previous};
+          const history=[];
+          for(const period of comparisonPeriods){
+            history.push(period.start===previousPeriodStart&&period.end===previousPeriodEnd?previous:
+              await getDailyPeriodEnvelope(client,daily,period.start,period.end));
+          }
+          return{...daily,update_status:await getDailyUpdateStatus(client,businessId,storeId,periodStart,periodEnd,daily,canRetry),current,previous,history};
         }
       }
       if(blocksLegacyFinancialFallback(daily))return{...daily,

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getFinancialOverview, getOverviewState } from './overview.service.mjs';
+import { previousFourCalendarPeriods } from './financial-overview.mjs';
 
 function period(start, end, { quality = 'complete', missingReasons = [] } = {}) {
   return {
@@ -27,6 +28,7 @@ function period(start, end, { quality = 'complete', missingReasons = [] } = {}) 
 }
 
 function pair(overrides = {}) {
+  const current=overrides.current===undefined?period('2026-09-14','2026-09-20'):overrides.current;
   return {
     publication_id: 'publication-1',
     publication_source: 'daily',
@@ -36,18 +38,21 @@ function pair(overrides = {}) {
     scope: { type: 'selected_products', productIds: ['product-b', 'product-a'] },
     current: period('2026-09-14', '2026-09-20'),
     previous: period('2026-09-07', '2026-09-13'),
+    history:current?previousFourCalendarPeriods({start:current.period_start,end:current.period_end}).map((value,index)=>
+      index===0&&overrides.previous!==undefined?overrides.previous:period(value.start,value.end)):[],
     ...overrides
   };
 }
 
-test('service reads adjacent weeks atomically and exposes publication provenance and exact scope', async () => {
+test('service requests four preceding weeks atomically and exposes publication provenance and exact scope', async () => {
   let request;
   const overview = await getFinancialOverview('user-1', 'store-1', '2026-09-17', {
     loadPeriodPair: async (...args) => { request = args; return pair(); }
   });
   assert.deepEqual(request, ['user-1', 'store-1', {
     periodStart: '2026-09-14', periodEnd: '2026-09-20',
-    previousPeriodStart: '2026-09-07', previousPeriodEnd: '2026-09-13'
+    previousPeriodStart: '2026-09-07', previousPeriodEnd: '2026-09-13',
+    comparisonPeriods:previousFourCalendarPeriods({start:'2026-09-14',end:'2026-09-20'})
   }]);
   assert.equal(overview.status, 'available');
   assert.equal(overview.publicationId, 'publication-1');
@@ -91,7 +96,7 @@ test('service keeps an unmapped period unavailable instead of falling back while
   assert.equal(overview.updateStatus.methodUpgradePending,true);
 });
 
-test('service reads only exact arbitrary published envelopes and compares the immediately preceding equal range', async () => {
+test('service requests four exact preceding arbitrary published ranges', async () => {
   let request;
   const current = period('2026-08-19', '2026-09-25');
   const previous = period('2026-07-12', '2026-08-18');
@@ -100,10 +105,30 @@ test('service reads only exact arbitrary published envelopes and compares the im
   });
   assert.deepEqual(request, ['user-1', 'store-1', {
     periodStart: '2026-08-19', periodEnd: '2026-09-25',
-    previousPeriodStart: '2026-07-12', previousPeriodEnd: '2026-08-18'
+    previousPeriodStart: '2026-07-12', previousPeriodEnd: '2026-08-18',
+    comparisonPeriods:previousFourCalendarPeriods({start:'2026-08-19',end:'2026-09-25'})
   }]);
   assert.deepEqual(overview.period, { start: '2026-08-19', end: '2026-09-25', timezone: 'Europe/Moscow' });
   assert.deepEqual(overview.comparison.period, { start: '2026-07-12', end: '2026-08-18', timezone: 'Europe/Moscow' });
+});
+
+test('service requires all four history periods and suppresses a partial fourth period',async()=>{
+  const data=pair();
+  const positive=await getFinancialOverview('user-1','store-1','2026-09-14',{loadPeriodPair:async()=>data});
+  assert.equal(positive.comparison.baseline,'median_four_periods');
+  assert.equal(positive.comparison.amount,'74.0000');
+  assert.equal(positive.comparison.changePercent,'0.0000');
+  for(const history of [data.history.slice(0,3),[...data.history.slice(0,3),null]]){
+    const overview=await getFinancialOverview('user-1','store-1','2026-09-14',{loadPeriodPair:async()=>pair({history})});
+    assert.equal(overview.comparison.changePercent,null);
+    assert.equal(overview.comparison.reason,'previous_period_unavailable');
+    assert.equal(overview.displayResult.amount,'74.0000');
+  }
+  const history=[...data.history];
+  history[3]=period(history[3].period_start,history[3].period_end,{quality:'partial',missingReasons:['cost_missing']});
+  const overview=await getFinancialOverview('user-1','store-1','2026-09-14',{loadPeriodPair:async()=>pair({history})});
+  assert.equal(overview.comparison.changePercent,null);
+  assert.equal(overview.comparison.reason,'incomparable_coverage');
 });
 
 test('service preserves an uncovered requested range and exposes it as unavailable',async()=>{
@@ -173,13 +198,14 @@ test('latest arbitrary period reloads its exact equal-length predecessor', async
     loadPeriodPair: async (...args) => {
       requests.push(args);
       return requests.length === 1
-        ? pair({ current, previous: period('2026-08-12', '2026-09-18') })
+        ? pair({ current, history:[], previous: period('2026-08-12', '2026-09-18') })
         : pair({ current, previous });
     }
   });
   assert.deepEqual(requests.at(-1), ['user-1', 'store-1', {
     periodStart: '2026-08-19', periodEnd: '2026-09-25',
-    previousPeriodStart: '2026-07-12', previousPeriodEnd: '2026-08-18'
+    previousPeriodStart: '2026-07-12', previousPeriodEnd: '2026-08-18',
+    comparisonPeriods:previousFourCalendarPeriods({start:'2026-08-19',end:'2026-09-25'})
   }]);
   assert.deepEqual(overview.comparison.period, { start: '2026-07-12', end: '2026-08-18', timezone: 'Europe/Moscow' });
 });
