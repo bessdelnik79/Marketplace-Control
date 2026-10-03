@@ -72,6 +72,12 @@ test('historical report catalog recovers only auditable affordable deleted produ
     const count=await context(scope,async client=>(await client.query(`select count(*)::int as n from mc.variant_identifiers where store_id=$1`,[scope.storeId])).rows[0].n);
     assert.equal(count,0);
   });
+  await t.test('WB zero-article service rows do not block a real historical barcode',async()=>{
+    const scope=await fixture({articles:[{nmId:800001,sku:'REAL'},{nmId:0,sku:'REAL'},{nmId:'',sku:'REAL'}]});
+    const result=await recover(scope);assert.equal(result.addedProductIds.length,1);
+    const identifiers=await context(scope,async client=>(await client.query(`select p.wb_article::text,i.identifier_value from mc.variant_identifiers i join mc.variants v on v.id=i.variant_id join mc.products p on p.id=v.product_id where i.store_id=$1`,[scope.storeId])).rows);
+    assert.deepEqual(identifiers,[{wb_article:'800001',identifier_value:'REAL'}]);
+  });
   await t.test('a barcode already owned by a live card is never reassigned',async()=>{
     const scope=await fixture({articles:[{nmId:800001,sku:'70000101'}]});
     const original=await context(scope,async client=>{

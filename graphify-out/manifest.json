@@ -42,9 +42,9 @@
     "semantic_hash": ""
   },
   "db/tests/schema.test.mjs": {
-    "mtime": 1791040680.7444172,
-    "seen": 1791042521.2025719,
-    "ast_hash": "f45f294557d2291b18fddb8d8bd4aaf6",
+    "mtime": 1791043547.771107,
+    "seen": 1791043678.631413,
+    "ast_hash": "d03c43d47a5a36f2d31830139a1bf19f",
     "semantic_hash": ""
   },
   "outputs/design/build-editable.mjs": {
@@ -510,9 +510,9 @@
     "semantic_hash": ""
   },
   "outputs/catalog-sync.md": {
-    "mtime": 1791041685.6374636,
-    "seen": 1791042521.2068777,
-    "ast_hash": "1ce825028705bdf927331fe1d34e0aff",
+    "mtime": 1791043548.7229323,
+    "seen": 1791043678.635501,
+    "ast_hash": "2b7af35da5b8ec4618bdc7fcea3d9c65",
     "semantic_hash": ""
   },
   "outputs/cost-import.md": {
@@ -522,9 +522,9 @@
     "semantic_hash": ""
   },
   "outputs/database-v1-dictionary.md": {
-    "mtime": 1791040704.6480594,
-    "seen": 1791042521.2070284,
-    "ast_hash": "43c2cd54d81ae255fb72b0306e1cbb38",
+    "mtime": 1791043112.6151047,
+    "seen": 1791043678.635682,
+    "ast_hash": "a5555dc1db10883355b54d7715ed6aeb",
     "semantic_hash": ""
   },
   "outputs/database-v1.md": {
@@ -1206,9 +1206,9 @@
     "semantic_hash": ""
   },
   "db/tests/historical-catalog.integration.mjs": {
-    "mtime": 1791041055.5523813,
-    "seen": 1791042521.202113,
-    "ast_hash": "cff0dcd4a78aad5f66df9dc40dcc963a",
+    "mtime": 1791043548.2206936,
+    "seen": 1791043678.63072,
+    "ast_hash": "a6d03544f20ae5cdd726ab6653c2deae",
     "semantic_hash": ""
   },
   "db/tests/historical-relink.integration.mjs": {
