@@ -34,6 +34,16 @@ export async function persistFinancialNormalization(client,{businessId,storeId,r
         `insert into mc.data_issues(business_id,store_id,document_id,report_row_id,report_normalization_id,code,severity,details)
          values($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
         [businessId,storeId,source.document_id,row.id,normalization.id,code,severity,JSON.stringify(details)]);};
+      const sizeLabel=String(row.raw_data.techSize??'').trim();
+      if(product&&!variant&&sizeLabel&&['sale','return'].includes(normalized.operationType)){
+        const sizeVariants=(await client.query(
+          `select id from mc.variants where business_id=$1 and store_id=$2 and product_id=$3 and status='active' and btrim(size_label)=$4 limit 2`,
+          [businessId,storeId,product.id,sizeLabel])).rows;
+        if(sizeVariants.length===1){
+          variant=sizeVariants[0];
+          await addIssue('financial_variant_matched_by_size','warning',{wbArticle:normalized.wbArticle,sourceBarcode:normalized.variantBarcode,sizeLabel,variantId:variant.id});
+        }
+      }
       if(normalized.wbArticle&&!product)await addIssue('financial_product_not_in_catalog','warning',{wbArticle:normalized.wbArticle});
       if(product&&normalized.variantBarcode&&!variant)await addIssue('financial_variant_not_matched','warning',{wbArticle:normalized.wbArticle});
       const unverified=unverifiedFinancialComponents(row.raw_data,normalized,Boolean(product));
@@ -73,11 +83,14 @@ export async function reconcileHistoricalCatalogLinks(client,{businessId,storeId
 }
 
 export async function reconcileHistoricalCatalogs(){
-  const targets=(await pool.query(`select requested_by as user_id,business_id,store_id from mc.operational_sync_targets where status='active' order by store_id`)).rows;
+  const targets=(await pool.query(`select requested_by as user_id,business_id,store_id from mc.operational_sync_targets order by store_id`)).rows;
   for(const target of targets){
     try{
-      await withBusinessContext(target.user_id,target.business_id,(client,businessId,role)=>['owner','editor'].includes(role)
-        ?reconcileHistoricalCatalogLinks(client,{businessId:target.business_id,storeId:target.store_id}):null);
+      await withBusinessContext(target.user_id,target.business_id,async(client,businessId,role)=>{
+        if(!['owner','editor'].includes(role))return null;
+        const active=(await client.query(`select id from mc.stores where business_id=$1 and id=$2 and status='active'`,[businessId,target.store_id])).rows[0];
+        return active?reconcileHistoricalCatalogLinks(client,{businessId,storeId:target.store_id}):null;
+      });
     }catch(error){console.warn('[historical catalog store reconciliation failed]',error?.message??'unknown');}
   }
 }

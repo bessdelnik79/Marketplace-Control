@@ -42,9 +42,9 @@
     "semantic_hash": ""
   },
   "db/tests/schema.test.mjs": {
-    "mtime": 1791050482.4800842,
-    "seen": 1791050721.3280427,
-    "ast_hash": "d888ab7b4fa86d4eea5c78213b464fd6",
+    "mtime": 1791052295.8504102,
+    "seen": 1791052699.110818,
+    "ast_hash": "da31d680d49e2d6dded7ede5dcc754ec",
     "semantic_hash": ""
   },
   "outputs/design/build-editable.mjs": {
@@ -270,9 +270,9 @@
     "semantic_hash": ""
   },
   "app/modules/catalog/catalog.repository.mjs": {
-    "mtime": 1791042320.3764915,
-    "seen": 1791042521.1947148,
-    "ast_hash": "b38eb759200efd54025439aa5fc5f3cd",
+    "mtime": 1791052534.1408987,
+    "seen": 1791052699.103088,
+    "ast_hash": "436f7c4206daf6ee82fae36c26ddcd9c",
     "semantic_hash": ""
   },
   "app/modules/catalog/catalog.test.mjs": {
@@ -510,9 +510,9 @@
     "semantic_hash": ""
   },
   "outputs/catalog-sync.md": {
-    "mtime": 1791044850.214049,
-    "seen": 1791045573.7059927,
-    "ast_hash": "332148b42e763426396993782db4addf",
+    "mtime": 1791052567.6342301,
+    "seen": 1791052699.114432,
+    "ast_hash": "6a3012e3a921b30525d1c38eda098e53",
     "semantic_hash": ""
   },
   "outputs/cost-import.md": {
@@ -1194,15 +1194,15 @@
     "semantic_hash": ""
   },
   "app/modules/reports/normalization.repository.mjs": {
-    "mtime": 1791041962.7601109,
-    "seen": 1791042521.2005317,
-    "ast_hash": "8526dc9e707f33efff0348eced164cdb",
+    "mtime": 1791052534.5431304,
+    "seen": 1791052699.1084278,
+    "ast_hash": "708b2d15cb9107c0a33abc12b7936353",
     "semantic_hash": ""
   },
   "app/modules/reports/normalization.repository.test.mjs": {
-    "mtime": 1791041963.2104762,
-    "seen": 1791042521.2005334,
-    "ast_hash": "e40746493a213661f3a728741b0e92c3",
+    "mtime": 1791052281.578497,
+    "seen": 1791052699.1084301,
+    "ast_hash": "48b7c731b3644d4a33a0849a2174669f",
     "semantic_hash": ""
   },
   "db/tests/historical-catalog.integration.mjs": {
@@ -1224,9 +1224,15 @@
     "semantic_hash": ""
   },
   "db/tests/field-based-expenses.integration.mjs": {
-    "mtime": 1791050603.053746,
-    "seen": 1791050721.3269784,
-    "ast_hash": "bd6238035cca4c13a9494242c2c8b02f",
+    "mtime": 1791050729.4877346,
+    "seen": 1791052699.1098914,
+    "ast_hash": "e98dccf2f0d337b4c92fa6dfb2725337",
+    "semantic_hash": ""
+  },
+  "db/tests/variant-size-relink.integration.mjs": {
+    "mtime": 1791052641.2428625,
+    "seen": 1791052699.11082,
+    "ast_hash": "619f2ca6ea65ce23943c6bd5c59a509a",
     "semantic_hash": ""
   }
 }

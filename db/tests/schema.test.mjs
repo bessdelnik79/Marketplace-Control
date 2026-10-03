@@ -43,7 +43,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,63);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,64);
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.recover_historical_catalog(uuid,uuid)'::regprocedure"));
   const transportRoundingDefinition=(await one(
   `select pg_get_functiondef(
