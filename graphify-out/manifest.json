@@ -36,15 +36,15 @@
     "semantic_hash": "046d962d54c9fcbf381f9a22721660d5"
   },
   "db/tests/p03-app.integration.mjs": {
-    "mtime": 1791042172.069235,
-    "seen": 1791042521.2023494,
-    "ast_hash": "09028d1c1196c2831b3dcd22b379e31f",
+    "mtime": 1791050324.3843522,
+    "seen": 1791050721.3277807,
+    "ast_hash": "f9e3273d158e7da03975a356c32f3d1d",
     "semantic_hash": ""
   },
   "db/tests/schema.test.mjs": {
-    "mtime": 1791044939.7657433,
-    "seen": 1791045573.7018137,
-    "ast_hash": "e962e9cdd0477185462298ad76df3a51",
+    "mtime": 1791050482.4800842,
+    "seen": 1791050721.3280427,
+    "ast_hash": "d888ab7b4fa86d4eea5c78213b464fd6",
     "semantic_hash": ""
   },
   "outputs/design/build-editable.mjs": {
@@ -240,21 +240,21 @@
     "semantic_hash": ""
   },
   "app/modules/calculation/calculation.mjs": {
-    "mtime": 1790787375.9733841,
-    "seen": 1791036406.5783958,
-    "ast_hash": "b24d76f34285ec65b2275954132361f5",
+    "mtime": 1791050145.4213815,
+    "seen": 1791050721.3147397,
+    "ast_hash": "ae505efd08b481aeca71920e45e06a5b",
     "semantic_hash": ""
   },
   "app/modules/calculation/calculation.repository.mjs": {
-    "mtime": 1791041349.9392097,
-    "seen": 1791042521.193286,
-    "ast_hash": "e36c8c0f0a5c1095c2c37eb35645901f",
+    "mtime": 1791050532.1947844,
+    "seen": 1791050721.314742,
+    "ast_hash": "913aaf92ed931a3e6f1d92f759df0a87",
     "semantic_hash": ""
   },
   "app/modules/calculation/calculation.test.mjs": {
-    "mtime": 1790787375.9763134,
-    "seen": 1791036406.5784004,
-    "ast_hash": "7e3f0607e4c71816862c116449b0852a",
+    "mtime": 1791050278.8942935,
+    "seen": 1791050721.3147461,
+    "ast_hash": "ed9f567ea6440ed7d9c816e54322a69d",
     "semantic_hash": ""
   },
   "app/modules/catalog/catalog-sync.mjs": {
@@ -516,14 +516,14 @@
     "semantic_hash": ""
   },
   "outputs/cost-import.md": {
-    "mtime": 1791046918.4808095,
-    "seen": 1791047459.494377,
-    "ast_hash": "529f9ff2b4775d149f65002050da8829",
+    "mtime": 1791047532.868879,
+    "seen": 1791050721.3325117,
+    "ast_hash": "1fb1191e5d834b22b1f9621e7d58834f",
     "semantic_hash": ""
   },
   "outputs/database-v1-dictionary.md": {
-    "mtime": 1791045640.948288,
-    "seen": 1791047459.4943795,
+    "mtime": 1791050628.614452,
+    "seen": 1791050721.3325143,
     "ast_hash": "a5555dc1db10883355b54d7715ed6aeb",
     "semantic_hash": ""
   },
@@ -576,9 +576,9 @@
     "semantic_hash": ""
   },
   "outputs/financial-formulas.md": {
-    "mtime": 1791045170.7003503,
-    "seen": 1791045573.7072387,
-    "ast_hash": "5ebc7610cb6b79341d51870f80258a1d",
+    "mtime": 1791050324.7707229,
+    "seen": 1791050721.333599,
+    "ast_hash": "cbcb3a1f33360ad91afede55092bdff9",
     "semantic_hash": ""
   },
   "outputs/financial-reports.md": {
@@ -852,9 +852,9 @@
     "semantic_hash": ""
   },
   "app/modules/calculation/calculation.repository.test.mjs": {
-    "mtime": 1790787375.9753373,
-    "seen": 1791036406.5783985,
-    "ast_hash": "a8a940f6a722280165eb53af873ed0d1",
+    "mtime": 1791050712.2001133,
+    "seen": 1791050721.314744,
+    "ast_hash": "25c3256dd18886c1af1713e69500bd62",
     "semantic_hash": ""
   },
   "app/modules/calculation/daily-generation-worker.mjs": {
@@ -876,9 +876,9 @@
     "semantic_hash": ""
   },
   "app/modules/calculation/daily-generation.repository.mjs": {
-    "mtime": 1790787375.9782667,
-    "seen": 1791036406.5784051,
-    "ast_hash": "553bf90043e94be85e82525f774d1e9a",
+    "mtime": 1791050173.84744,
+    "seen": 1791050721.3151586,
+    "ast_hash": "b118245c45da8c5d9e6898bb98dff773",
     "semantic_hash": ""
   },
   "app/modules/calculation/daily-generation.repository.test.mjs": {
@@ -936,9 +936,9 @@
     "semantic_hash": ""
   },
   "app/modules/overview/financial-overview.mjs": {
-    "mtime": 1791036218.5724406,
-    "seen": 1791036406.579368,
-    "ast_hash": "732f48bc3eed06d824dd05755c01c5f7",
+    "mtime": 1791050173.8483934,
+    "seen": 1791050721.319095,
+    "ast_hash": "eb8ab2392e42aad9917deb349a401ec6",
     "semantic_hash": ""
   },
   "app/modules/overview/financial-overview.test.mjs": {
@@ -1221,6 +1221,12 @@
     "mtime": 1791045484.2020166,
     "seen": 1791045573.7007914,
     "ast_hash": "4b5bb3e8bcd520fdbaba194f7bc4b545",
+    "semantic_hash": ""
+  },
+  "db/tests/field-based-expenses.integration.mjs": {
+    "mtime": 1791050603.053746,
+    "seen": 1791050721.3269784,
+    "ast_hash": "bd6238035cca4c13a9494242c2c8b02f",
     "semantic_hash": ""
   }
 }

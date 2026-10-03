@@ -18,7 +18,7 @@ function envelope(start,end,{quality='complete',missingReasons=[],amount='10.000
 
 test('current financial parser keeps v12 and v11 as compatibility fallbacks',()=>{
   assert.deepEqual(compatibleFinancialParserVersions.slice(0,3),['wb-finance-v13','wb-finance-v12','wb-finance-v11']);
-  assert.match(prepareFinancialCalculation.toString(),/target\?30:29/);
+  assert.match(prepareFinancialCalculation.toString(),/target\?32:31/);
 });
 
 test('exact-method status keeps loading while v13 inputs are pending but exposes a terminal daily failure when ready',()=>{

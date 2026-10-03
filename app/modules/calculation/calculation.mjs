@@ -22,6 +22,13 @@ const VERIFIED_WB_COMPONENTS = new Map([
   ['penalty', { category: 'penalty', operation: 'adjustment', document: '', names: new Set(['штраф']) }],
   ['deduction', { category: 'deduction', operation: 'adjustment', document: '', names: new Set(['удержание']) }]
 ]);
+const FIELD_BASED_WB_EXPENSES = new Map([
+  ['deliveryService', 'logistics'],
+  ['paidStorage', 'storage'],
+  ['paidAcceptance', 'acceptance'],
+  ['penalty', 'penalty'],
+  ['deduction', 'deduction']
+]);
 const VERIFIED_STORE_COMPONENTS = new Map([
   ['retailAmount', new Set(['revenue','revenue_return'])],
   ['acquiringFee', new Set(['acquiring'])],
@@ -91,18 +98,22 @@ export function normalizeMoney(value) {
   return formatDecimal(money(value));
 }
 
-export function isVerifiedWbResultComponent({ categoryCode, sourceField, operationType, docTypeName, sellerOperName, bonusTypeName, rawValue, scopeCode }) {
+export function isVerifiedWbResultComponent({ categoryCode, sourceField, operationType, docTypeName, sellerOperName, bonusTypeName, rawValue, scopeCode, resultMethodVersion = 'financial-result-v32' }) {
   const value=String(rawValue??'').trim().replace(',', '.');
   if(!/^-?\d+(?:\.\d+)?$/.test(value)||!/[1-9]/.test(value))return false;
+  const fieldBasedMethod=['financial-result-v31','financial-result-v32'].includes(resultMethodVersion);
   if(sourceField==='cashbackDiscount')return false;
   if(scopeCode==='store')return VERIFIED_STORE_COMPONENTS.get(sourceField)?.has(categoryCode)===true;
+  if(fieldBasedMethod&&FIELD_BASED_WB_EXPENSES.has(sourceField)){
+    if(categoryCode!=='promotion')return FIELD_BASED_WB_EXPENSES.get(sourceField)===categoryCode;
+  }
   if(sourceField==='ppvzReward'&&categoryCode==='pickup_reward')return true;
   if(sourceField==='rebillLogisticCost'&&categoryCode==='rebill_logistic_compensation')return false;
   if((sourceField==='vw'&&categoryCode==='wb_reward_without_vat')||(sourceField==='vwNds'&&categoryCode==='wb_reward_vat')){
     const document=String(docTypeName??'').trim();
     const name=String(sellerOperName??'').trim();
-    return(operationType==='sale'&&document==='Продажа'&&name==='Продажа')||
-      (operationType==='return'&&document==='Возврат'&&name==='Возврат')||
+    return(operationType==='sale'&&document==='Продажа'&&(fieldBasedMethod||name==='Продажа'))||
+      (operationType==='return'&&document==='Возврат'&&(fieldBasedMethod||name==='Возврат'))||
       (operationType==='other'&&document==='Продажа'&&name==='Возмещение за выдачу и возврат товаров на ПВЗ');
   }
   if(sourceField==='deliveryService'&&categoryCode==='logistics'
@@ -120,7 +131,7 @@ export function isVerifiedWbResultComponent({ categoryCode, sourceField, operati
   if (!rule || rule.category !== categoryCode || rule.operation !== operationType) return false;
   const document = String(docTypeName ?? '').trim().toLocaleLowerCase('ru-RU');
   const name = String(sellerOperName ?? '').trim().toLocaleLowerCase('ru-RU');
-  return document === rule.document && rule.names.has(name);
+  return document === rule.document && ((fieldBasedMethod&&sourceField==='acquiringFee')||rule.names.has(name));
 }
 
 function validDate(value) {
@@ -592,8 +603,8 @@ export function calculateFinancialResult({
     matches.push(operation);
     operationsById.set(id, matches);
   }
-  const signedReturnExpenseMethod=['financial-result-v25','financial-result-v26','financial-result-v27','financial-result-v28','financial-result-v29','financial-result-v30'].includes(resultMethodVersion);
-  const exactRowResultMethod=['financial-result-v29','financial-result-v30'].includes(resultMethodVersion);
+  const signedReturnExpenseMethod=['financial-result-v25','financial-result-v26','financial-result-v27','financial-result-v28','financial-result-v29','financial-result-v30','financial-result-v31','financial-result-v32'].includes(resultMethodVersion);
+  const exactRowResultMethod=['financial-result-v29','financial-result-v30','financial-result-v31','financial-result-v32'].includes(resultMethodVersion);
   const retainReturnAcquiringMethod=['financial-result-v25','financial-result-v26'].includes(resultMethodVersion);
   const replacedReturnExpenseFields=retainReturnAcquiringMethod?RETURN_REPLACED_EXPENSE_FIELDS:RETURN_WB_EXPENSE_FIELDS;
   const componentsByOperation=new Map();

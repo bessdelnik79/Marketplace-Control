@@ -8,7 +8,7 @@ export const compatibleFinancialParserVersions=Object.freeze([
 ]);
 
 const qualityRank={complete:0,partial:1,unavailable:2};
-const targetResultVersions=new Set(['financial-result-v10','financial-result-v12','financial-result-v14','financial-result-v16','financial-result-v18','financial-result-v20','financial-result-v22','financial-result-v24','financial-result-v26','financial-result-v28','financial-result-v30']);
+const targetResultVersions=new Set(['financial-result-v10','financial-result-v12','financial-result-v14','financial-result-v16','financial-result-v18','financial-result-v20','financial-result-v22','financial-result-v24','financial-result-v26','financial-result-v28','financial-result-v30','financial-result-v32']);
 
 export function methodUpgradeUpdateStatus({job=null,inputsPending=false,publicationId=null,publishedAt=null,
   periodStart=null,periodEnd=null,canRetry=false}={}){
@@ -293,7 +293,7 @@ export async function getFinancialCompatibilityBootstrapState(userId,storeId){
       where business_id=$1 and store_id=$2
         and job_type in ('financial_inventory_refresh','financial_report_fetch','financial_report_normalize')
         and status in ('pending','running') limit 1`,[businessId,storeId])).rows[0]);
-    if(dailyPublication?.implementation_version==='financial-result-v30'||!selection)return{dailyPublished,selectionReady:Boolean(selection),waitingForPipeline:false,targets:[]};
+    if(dailyPublication?.implementation_version==='financial-result-v32'||!selection)return{dailyPublished,selectionReady:Boolean(selection),waitingForPipeline:false,targets:[]};
     const targets=(await client.query(
       `select distinct report.period_start::text as "periodStart",report.period_end::text as "periodEnd"
          from mc.reports report
@@ -338,7 +338,7 @@ export async function getCurrentFinancialResult(userId,storeId){
          from mc.result_lines where run_id=$1
         order by accounting_date,result_scope,product_id nulls last,variant_id nulls last,category_code,id`,[publication.run_id]
     )).rows;
-    if(['financial-result-v4','financial-result-v5','financial-result-v6','financial-result-v7','financial-result-v8','financial-result-v9','financial-result-v10','financial-result-v11','financial-result-v12','financial-result-v13','financial-result-v14','financial-result-v15','financial-result-v16','financial-result-v17','financial-result-v18','financial-result-v19','financial-result-v20','financial-result-v21','financial-result-v22','financial-result-v23','financial-result-v24','financial-result-v25','financial-result-v26','financial-result-v27','financial-result-v28','financial-result-v29','financial-result-v30'].includes(publication.method_version)){
+    if(['financial-result-v4','financial-result-v5','financial-result-v6','financial-result-v7','financial-result-v8','financial-result-v9','financial-result-v10','financial-result-v11','financial-result-v12','financial-result-v13','financial-result-v14','financial-result-v15','financial-result-v16','financial-result-v17','financial-result-v18','financial-result-v19','financial-result-v20','financial-result-v21','financial-result-v22','financial-result-v23','financial-result-v24','financial-result-v25','financial-result-v26','financial-result-v27','financial-result-v28','financial-result-v29','financial-result-v30','financial-result-v31','financial-result-v32'].includes(publication.method_version)){
       const computations=(await client.query(`select id,product_id,taxable_base::text,tax_amount::text from mc.tax_computations where run_id=$1 order by product_id`,[publication.run_id])).rows;
       const taxTotals=(await client.query(`select coalesce(sum(taxable_base),0)::text as taxable_base,coalesce(sum(tax_amount),0)::text as tax_amount from mc.tax_computations where run_id=$1`,[publication.run_id])).rows[0];
       const segments=(await client.query(`select s.tax_computation_id,c.product_id,s.tax_setting_version_id,s.segment_start::text,s.segment_end::text,s.taxable_base::text,s.rate_fraction::text
@@ -537,7 +537,7 @@ export async function getFinancialPeriodRecoveryState(userId,storeId,periodStart
          from mc.calculation_requests q join mc.method_versions m on m.id=q.method_version_id
         where q.business_id=$1 and q.store_id=$2 and q.is_latest`,[businessId,storeId]
     )).rows[0];
-    if(latest?.implementation_version==='financial-result-v30'
+    if(latest?.implementation_version==='financial-result-v32'
       &&latest.period_start===target.periodStart&&latest.period_end===target.periodEnd){
       if(latest.status==='pending')return{status:'queued'};
       if(latest.status==='running')return{status:'running'};
@@ -958,7 +958,7 @@ export async function prepareFinancialCalculation(userId,storeId,{targetPeriod=n
       `select v.id from mc.tax_settings s join mc.tax_setting_versions v on v.id=s.current_version_id
         where s.business_id=$1 and s.effective_from<=$2 order by s.effective_from,v.id`,[businessId,periodEnd]
     )).rows.map(row=>row.id);
-    const methodVersion=target?30:29;
+    const methodVersion=target?32:31;
     const method=(await client.query(`select id,implementation_version from mc.method_versions where code='financial_result' and version_no=$1`,[methodVersion])).rows[0];
     if(!method)throw new Error('calculation_method_missing');
     const operationLinks=await createConfirmedReturnLinks(client,businessId,storeId,normalized.map(row=>row.normalization_id),method.id);
@@ -1014,7 +1014,7 @@ async function executeFinancialCalculation(userId,requestId){
          from mc.operation_versions o join mc.financial_components f on f.operation_version_id=o.id
          join mc.report_rows rr on rr.id=o.report_row_id
         where o.report_normalization_id=any($1::uuid[]) order by f.id`,[normalizationIds]
-    )).rows.map(row=>({id:row.id,operationVersionId:row.operation_version_id,categoryCode:row.category_code,sourceField:row.source_field,rawValue:row.raw_value,amountSigned:row.amount_signed,productId:row.product_id,variantId:row.variant_id,wbArticle:row.wb_article,accountingDate:row.accounting_date,state:row.state,operationType:row.operation_type,docTypeName:row.doc_type_name,sellerOperName:row.seller_oper_name,bonusTypeName:row.bonus_type_name,classificationStatus:isVerifiedWbResultComponent({categoryCode:row.category_code,sourceField:row.source_field,operationType:row.operation_type,docTypeName:row.doc_type_name,sellerOperName:row.seller_oper_name,bonusTypeName:row.bonus_type_name,rawValue:row.raw_value,scopeCode:row.result_scope_classification})?'confirmed':'unclassified',scopeCode:row.result_scope_classification}));
+    )).rows.map(row=>({id:row.id,operationVersionId:row.operation_version_id,categoryCode:row.category_code,sourceField:row.source_field,rawValue:row.raw_value,amountSigned:row.amount_signed,productId:row.product_id,variantId:row.variant_id,wbArticle:row.wb_article,accountingDate:row.accounting_date,state:row.state,operationType:row.operation_type,docTypeName:row.doc_type_name,sellerOperName:row.seller_oper_name,bonusTypeName:row.bonus_type_name,classificationStatus:isVerifiedWbResultComponent({categoryCode:row.category_code,sourceField:row.source_field,operationType:row.operation_type,docTypeName:row.doc_type_name,sellerOperName:row.seller_oper_name,bonusTypeName:row.bonus_type_name,rawValue:row.raw_value,scopeCode:row.result_scope_classification,resultMethodVersion:request.implementation_version})?'confirmed':'unclassified',scopeCode:row.result_scope_classification}));
     const operations=(await client.query(
       `select o.id,o.report_row_id,o.report_normalization_id,o.operation_type,o.product_id,o.variant_id,o.accounting_date::text,o.quantity::text,o.state,
               rr.raw_data->>'docTypeName' as doc_type_name,rr.raw_data->>'sellerOperName' as seller_oper_name,rr.raw_data->>'nmId' as wb_article

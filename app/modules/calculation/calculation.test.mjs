@@ -11,7 +11,8 @@ import {
   periodizeExpense
 } from './calculation.mjs';
 
-test('only verified WB field, operation and document combinations enter the result', () => {
+test('only verified WB field, operation and document combinations enter the legacy result', () => {
+  const verifyLegacy=component=>isVerifiedWbResultComponent({...component,resultMethodVersion:'financial-result-v30'});
   const verified = [
     ['retailAmount', 'revenue', 'sale', 'Продажа', 'Продажа'],
     ['retailAmount', 'revenue_return', 'return', 'Возврат', 'Возврат'],
@@ -28,7 +29,7 @@ test('only verified WB field, operation and document combinations enter the resu
     ['vwNds', 'wb_reward_vat', 'return', 'Возврат', 'Возврат'],
   ];
   for (const [sourceField, categoryCode, operationType, docTypeName, sellerOperName] of verified) {
-    assert.equal(isVerifiedWbResultComponent({ sourceField, categoryCode, operationType, docTypeName, sellerOperName, rawValue: '10' }), true, sourceField);
+    assert.equal(verifyLegacy({ sourceField, categoryCode, operationType, docTypeName, sellerOperName, rawValue: '10' }), true, sourceField);
   }
   const unknown = [
     ['deliveryService', 'logistics', 'service_charge', '', 'Новая услуга'],
@@ -37,26 +38,135 @@ test('only verified WB field, operation and document combinations enter the resu
     ['additionalPayment', 'commission_adjustment', 'adjustment', '', 'Удержание']
   ];
   for (const [sourceField, categoryCode, operationType, docTypeName, sellerOperName] of unknown) {
-    assert.equal(isVerifiedWbResultComponent({ sourceField, categoryCode, operationType, docTypeName, sellerOperName, rawValue: '10' }), false, sourceField);
+    assert.equal(verifyLegacy({ sourceField, categoryCode, operationType, docTypeName, sellerOperName, rawValue: '10' }), false, sourceField);
   }
-  assert.equal(isVerifiedWbResultComponent({sourceField:'acquiringFee',categoryCode:'acquiring',operationType:'sale',docTypeName:'Продажа',sellerOperName:'Продажа',rawValue:'-10'}),false);
-  assert.equal(isVerifiedWbResultComponent({sourceField:'deliveryService',categoryCode:'logistics',operationType:'service_charge',docTypeName:'Изменяемый текст',sellerOperName:'Новое название WB',rawValue:'-10'}),true);
-  assert.equal(isVerifiedWbResultComponent({sourceField:'deliveryService',categoryCode:'deduction',operationType:'service_charge',docTypeName:'',sellerOperName:'',rawValue:'-10'}),false);
-  assert.equal(isVerifiedWbResultComponent({sourceField:'deliveryService',categoryCode:'logistics',operationType:'sale',docTypeName:'Продажа',sellerOperName:'Продажа',rawValue:'-10'}),false);
-  assert.equal(isVerifiedWbResultComponent({sourceField:'deduction',categoryCode:'promotion',operationType:'adjustment',docTypeName:'',sellerOperName:'Удержание',bonusTypeName:'Оказание услуг «WB Продвижение», документ №315213683',rawValue:'304'}),true);
-  assert.equal(isVerifiedWbResultComponent({sourceField:'deduction',categoryCode:'promotion',operationType:'adjustment',docTypeName:'',sellerOperName:'Удержание',bonusTypeName:'Иная услуга',rawValue:'304'}),false);
-  assert.equal(isVerifiedWbResultComponent({sourceField:'deduction',categoryCode:'promotion',operationType:'adjustment',docTypeName:'',sellerOperName:'Удержание',bonusTypeName:'Оказание услуг «WB Продвижение», иной документ',rawValue:'304'}),false);
-  assert.equal(isVerifiedWbResultComponent({sourceField:'ppvzReward',categoryCode:'pickup_reward',operationType:'other',docTypeName:'Продажа',sellerOperName:'Возмещение за выдачу и возврат товаров на ПВЗ',rawValue:'16.29'}),true);
-  assert.equal(isVerifiedWbResultComponent({sourceField:'ppvzReward',categoryCode:'pickup_reward',operationType:'other',docTypeName:'Продажа',sellerOperName:'Возмещение за выдачу и возврат товаров на ПВЗ',rawValue:'-16.29'}),true);
-  assert.equal(isVerifiedWbResultComponent({sourceField:'vw',categoryCode:'wb_reward_without_vat',operationType:'other',docTypeName:'Продажа',sellerOperName:'Возмещение за выдачу и возврат товаров на ПВЗ',rawValue:'-13.3522'}),true);
-  assert.equal(isVerifiedWbResultComponent({sourceField:'vwNds',categoryCode:'wb_reward_vat',operationType:'other',docTypeName:'Продажа',sellerOperName:'Возмещение за выдачу и возврат товаров на ПВЗ',rawValue:'-2.94'}),true);
-  assert.equal(isVerifiedWbResultComponent({sourceField:'rebillLogisticCost',categoryCode:'rebill_logistic_compensation',operationType:'service_charge',docTypeName:'',sellerOperName:'Логистика',rawValue:'10'}),false);
-  assert.equal(isVerifiedWbResultComponent({sourceField:'additionalPayment',categoryCode:'commission_adjustment',operationType:'adjustment',docTypeName:'',sellerOperName:'Любое основание',rawValue:'1458.34',scopeCode:'store'}),true);
-  assert.equal(isVerifiedWbResultComponent({sourceField:'additionalPayment',categoryCode:'commission_adjustment',operationType:'adjustment',docTypeName:'',sellerOperName:'Любое основание',rawValue:'-1458.34',scopeCode:'store'}),true);
-  assert.equal(isVerifiedWbResultComponent({sourceField:'additionalPayment',categoryCode:'deduction',operationType:'adjustment',docTypeName:'',sellerOperName:'Любое основание',rawValue:'1458.34',scopeCode:'store'}),false);
-  assert.equal(isVerifiedWbResultComponent({sourceField:'cashbackDiscount',categoryCode:'loyalty_compensation',operationType:'adjustment',docTypeName:'Продажа',sellerOperName:'Компенсация скидки по программе лояльности',rawValue:'2'}),false);
-  assert.equal(isVerifiedWbResultComponent({sourceField:'cashbackDiscount',categoryCode:'loyalty_compensation',operationType:'adjustment',docTypeName:'Продажа',sellerOperName:'Компенсация скидки по программе лояльности',rawValue:'-2',scopeCode:'store'}),false);
-  assert.equal(isVerifiedWbResultComponent({sourceField:'cashbackDiscount',categoryCode:'loyalty_compensation',operationType:'adjustment',docTypeName:'Продажа',sellerOperName:'Иная компенсация',rawValue:'2'}),false);
+  assert.equal(verifyLegacy({sourceField:'acquiringFee',categoryCode:'acquiring',operationType:'sale',docTypeName:'Продажа',sellerOperName:'Продажа',rawValue:'-10'}),false);
+  assert.equal(verifyLegacy({sourceField:'deliveryService',categoryCode:'logistics',operationType:'service_charge',docTypeName:'Изменяемый текст',sellerOperName:'Новое название WB',rawValue:'-10'}),true);
+  assert.equal(verifyLegacy({sourceField:'deliveryService',categoryCode:'deduction',operationType:'service_charge',docTypeName:'',sellerOperName:'',rawValue:'-10'}),false);
+  assert.equal(verifyLegacy({sourceField:'deliveryService',categoryCode:'logistics',operationType:'sale',docTypeName:'Продажа',sellerOperName:'Продажа',rawValue:'-10'}),false);
+  assert.equal(verifyLegacy({sourceField:'deduction',categoryCode:'promotion',operationType:'adjustment',docTypeName:'',sellerOperName:'Удержание',bonusTypeName:'Оказание услуг «WB Продвижение», документ №315213683',rawValue:'304'}),true);
+  assert.equal(verifyLegacy({sourceField:'deduction',categoryCode:'promotion',operationType:'adjustment',docTypeName:'',sellerOperName:'Удержание',bonusTypeName:'Иная услуга',rawValue:'304'}),false);
+  assert.equal(verifyLegacy({sourceField:'deduction',categoryCode:'promotion',operationType:'adjustment',docTypeName:'',sellerOperName:'Удержание',bonusTypeName:'Оказание услуг «WB Продвижение», иной документ',rawValue:'304'}),false);
+  assert.equal(verifyLegacy({sourceField:'ppvzReward',categoryCode:'pickup_reward',operationType:'other',docTypeName:'Продажа',sellerOperName:'Возмещение за выдачу и возврат товаров на ПВЗ',rawValue:'16.29'}),true);
+  assert.equal(verifyLegacy({sourceField:'ppvzReward',categoryCode:'pickup_reward',operationType:'other',docTypeName:'Продажа',sellerOperName:'Возмещение за выдачу и возврат товаров на ПВЗ',rawValue:'-16.29'}),true);
+  assert.equal(verifyLegacy({sourceField:'vw',categoryCode:'wb_reward_without_vat',operationType:'other',docTypeName:'Продажа',sellerOperName:'Возмещение за выдачу и возврат товаров на ПВЗ',rawValue:'-13.3522'}),true);
+  assert.equal(verifyLegacy({sourceField:'vwNds',categoryCode:'wb_reward_vat',operationType:'other',docTypeName:'Продажа',sellerOperName:'Возмещение за выдачу и возврат товаров на ПВЗ',rawValue:'-2.94'}),true);
+  assert.equal(verifyLegacy({sourceField:'rebillLogisticCost',categoryCode:'rebill_logistic_compensation',operationType:'service_charge',docTypeName:'',sellerOperName:'Логистика',rawValue:'10'}),false);
+  assert.equal(verifyLegacy({sourceField:'additionalPayment',categoryCode:'commission_adjustment',operationType:'adjustment',docTypeName:'',sellerOperName:'Любое основание',rawValue:'1458.34',scopeCode:'store'}),true);
+  assert.equal(verifyLegacy({sourceField:'additionalPayment',categoryCode:'commission_adjustment',operationType:'adjustment',docTypeName:'',sellerOperName:'Любое основание',rawValue:'-1458.34',scopeCode:'store'}),true);
+  assert.equal(verifyLegacy({sourceField:'additionalPayment',categoryCode:'deduction',operationType:'adjustment',docTypeName:'',sellerOperName:'Любое основание',rawValue:'1458.34',scopeCode:'store'}),false);
+  assert.equal(verifyLegacy({sourceField:'cashbackDiscount',categoryCode:'loyalty_compensation',operationType:'adjustment',docTypeName:'Продажа',sellerOperName:'Компенсация скидки по программе лояльности',rawValue:'2'}),false);
+  assert.equal(verifyLegacy({sourceField:'cashbackDiscount',categoryCode:'loyalty_compensation',operationType:'adjustment',docTypeName:'Продажа',sellerOperName:'Компенсация скидки по программе лояльности',rawValue:'-2',scopeCode:'store'}),false);
+  assert.equal(verifyLegacy({sourceField:'cashbackDiscount',categoryCode:'loyalty_compensation',operationType:'adjustment',docTypeName:'Продажа',sellerOperName:'Иная компенсация',rawValue:'2'}),false);
+});
+
+test('v31/v32 verify known expense fields with both signs regardless of WB row labels and operation',()=>{
+  const fields=[['deliveryService','logistics'],['paidStorage','storage'],['paidAcceptance','acceptance'],['penalty','penalty'],['deduction','deduction']];
+  for(const resultMethodVersion of ['financial-result-v31','financial-result-v32']){
+    for(const [sourceField,categoryCode] of fields){
+      for(const operationType of ['sale','return','other','unclassified']){
+        for(const sellerOperName of ['', 'Новое название WB']){
+          for(const rawValue of ['57.98','-14.64']){
+            const component={sourceField,categoryCode,operationType,sellerOperName,docTypeName:'Изменяемый текст',rawValue,resultMethodVersion};
+            assert.equal(isVerifiedWbResultComponent(component),true,JSON.stringify(component));
+            assert.equal(isVerifiedWbResultComponent({...component,categoryCode:'other_adjustment'}),false);
+            assert.equal(isVerifiedWbResultComponent({...component,resultMethodVersion:'financial-result-v30'}),false);
+          }
+        }
+      }
+      for(const rawValue of ['0','-0.0000','','NaN','14x']){
+        assert.equal(isVerifiedWbResultComponent({sourceField,categoryCode,rawValue,resultMethodVersion}),false);
+      }
+    }
+  }
+});
+
+test('field-based methods keep acquiring direction, reward document, PVZ and promotion guards',()=>{
+  for(const sellerOperName of ['', 'Изменённое название']){
+    const acquiring={sourceField:'acquiringFee',categoryCode:'acquiring',operationType:'sale',docTypeName:'Продажа',sellerOperName,rawValue:'57.98'};
+    assert.equal(isVerifiedWbResultComponent(acquiring),true);
+    assert.equal(isVerifiedWbResultComponent({...acquiring,rawValue:'-14.64'}),false);
+    assert.equal(isVerifiedWbResultComponent({...acquiring,operationType:'return'}),false);
+    assert.equal(isVerifiedWbResultComponent({...acquiring,docTypeName:'Возврат'}),false);
+    assert.equal(isVerifiedWbResultComponent({...acquiring,resultMethodVersion:'financial-result-v30'}),false);
+    for(const [sourceField,categoryCode] of [['vw','wb_reward_without_vat'],['vwNds','wb_reward_vat']]){
+      for(const [operationType,docTypeName] of [['sale','Продажа'],['return','Возврат']]){
+        const component={sourceField,categoryCode,operationType,docTypeName,sellerOperName,rawValue:'-14.64'};
+        assert.equal(isVerifiedWbResultComponent(component),true);
+        assert.equal(isVerifiedWbResultComponent({...component,resultMethodVersion:'financial-result-v30'}),false);
+        assert.equal(isVerifiedWbResultComponent({...component,docTypeName:''}),false);
+        assert.equal(isVerifiedWbResultComponent({...component,operationType:'other'}),false);
+      }
+    }
+  }
+  const promotion={sourceField:'deduction',categoryCode:'promotion',operationType:'adjustment',docTypeName:'',sellerOperName:'Удержание',rawValue:'57.98'};
+  assert.equal(isVerifiedWbResultComponent({...promotion,bonusTypeName:'Оказание услуг «WB Продвижение», документ №315213683'}),true);
+  assert.equal(isVerifiedWbResultComponent({...promotion,bonusTypeName:'Иная услуга'}),false);
+  assert.equal(isVerifiedWbResultComponent({...promotion,bonusTypeName:'Оказание услуг «WB Продвижение», документ №315213683',rawValue:'-14.64'}),false);
+  for(const sourceField of ['cashbackDiscount','cashbackCommissionChange','additionalPayment','unknownFee']){
+    assert.equal(isVerifiedWbResultComponent({sourceField,categoryCode:'other_adjustment',operationType:'sale',rawValue:'57.98'}),false);
+  }
+  for(const [sourceField,categoryCode] of [['forPay','payout'],['ppvzSalesCommission','commission'],['rebillLogisticCost','rebill_logistic_compensation']]){
+    assert.equal(isVerifiedWbResultComponent({sourceField,categoryCode,rawValue:'57.98',scopeCode:'reconciliation'}),false);
+  }
+});
+
+test('v32 mixed known fields produce signed net expense 14.06 and unknown fields keep the result partial',()=>{
+  const base={operationVersionId:'mixed',operationType:'other',scopeCode:'selected_product',productId:'product-1',variantId:'variant-1',accountingDate:'2026-09-22',docTypeName:'Изменённый документ',sellerOperName:''};
+  const financialComponents=[
+    ['charge','deliveryService','logistics','57.98','-57.98'],
+    ['delivery-correction','deliveryService','logistics','-14.64','14.64'],
+    ['storage','paidStorage','storage','5','-5'],
+    ['acceptance','paidAcceptance','acceptance','7','-7'],
+    ['penalty-correction','penalty','penalty','-40','40'],
+    ['deduction-correction','deduction','deduction','-1.28','1.28']
+  ].map(([id,sourceField,categoryCode,rawValue,amountSigned])=>{
+    const component={...base,id,sourceField,categoryCode,rawValue,amountSigned};
+    return {...component,classificationStatus:isVerifiedWbResultComponent(component)?'confirmed':'unclassified'};
+  });
+  const input={resultMethodVersion:'financial-result-v32',periodStart:'2026-09-21',periodEnd:'2026-09-27',selectedProductIds:['product-1'],financialComponents};
+  const result=calculateFinancialResult(input);
+  assert.equal(result.totals.availableResultBeforeTax,'-14.0600');
+  assert.equal(result.missingReasons.includes('operation_unclassified'),false);
+  assert.equal(result.lines.reduce((sum,line)=>sum+line.evidence.length,0),6);
+  assert.equal(result.lines.find(line=>line.categoryCode==='logistics').amountSigned,'-43.3400');
+  for(const [sourceField,categoryCode] of [['cashbackCommissionChange','unclassified_financial_field'],['unknownFee','other_adjustment'],['deliveryService','deduction']]){
+    const unknown={...base,id:'unknown',sourceField,categoryCode,rawValue:'57.98',amountSigned:'-57.98'};
+    unknown.classificationStatus=isVerifiedWbResultComponent(unknown)?'confirmed':'unclassified';
+    const partial=calculateFinancialResult({...input,financialComponents:[...financialComponents,unknown]});
+    assert.equal(partial.quality,'partial');
+    assert.ok(partial.missingReasons.includes('operation_unclassified'));
+    assert.equal(partial.totals.availableResultBeforeTax,'-14.0600');
+  }
+});
+
+test('v31/v32 retain exact sale rounding and signed linked-return expense capabilities',()=>{
+  const base={productId:'product-1',variantId:'variant-1',accountingDate:'2026-09-22',scopeCode:'selected_product',classificationStatus:'confirmed'};
+  for(const resultMethodVersion of ['financial-result-v31','financial-result-v32']){
+    const result=calculateFinancialResult({
+      resultMethodVersion,periodStart:'2026-09-21',periodEnd:'2026-09-27',selectedProductIds:['product-1'],
+      financialComponents:[
+        {...base,id:'sale-retail',operationVersionId:'sale',operationType:'sale',sourceField:'retailAmount',categoryCode:'revenue',rawValue:'100',amountSigned:'100'},
+        {...base,id:'sale-vw',operationVersionId:'sale',operationType:'sale',sourceField:'vw',categoryCode:'wb_reward_without_vat',rawValue:'0.0041',amountSigned:'-0.0041'},
+        {...base,id:'sale-payout',operationVersionId:'sale',operationType:'sale',scopeCode:'reconciliation',sourceField:'forPay',categoryCode:'payout',rawValue:'100',amountSigned:'100'},
+        {...base,id:'return-retail',operationVersionId:'return',operationType:'return',sourceField:'retailAmount',categoryCode:'revenue_return',rawValue:'100',amountSigned:'-100'},
+        {...base,id:'return-acquiring',operationVersionId:'return',operationType:'return',sourceField:'acquiringFee',categoryCode:'acquiring',rawValue:'-1',amountSigned:'-1'},
+        {...base,id:'return-payout',operationVersionId:'return',operationType:'return',scopeCode:'reconciliation',sourceField:'forPay',categoryCode:'payout',rawValue:'101',amountSigned:'-101'}
+      ],
+      operations:[
+        {...base,id:'sale',reportRowId:'sale-row',operationType:'sale',quantity:'1'},
+        {...base,id:'original-sale',accountingDate:'2026-09-20',operationType:'sale',quantity:'1'},
+        {...base,id:'return',reportRowId:'return-row',operationType:'return',quantity:'-1'}
+      ],
+      operationLinks:[{id:'link',fromOperationVersionId:'return',toOperationVersionId:'original-sale',linkType:'return_to_original_sale',status:'confirmed'}],
+      costVersions:[{id:'cost',variantId:'variant-1',effectiveFrom:'2026-01-01',unitCost:'0'}]
+    });
+    assert.equal(result.totals.availableResultBeforeTax,'-1.0000');
+    assert.equal(result.lines.find(line=>line.categoryCode==='wb_row_rounding_adjustment').amountSigned,'0.0041');
+    assert.equal(result.lines.find(line=>line.categoryCode==='return_wb_expense_reversal').amountSigned,'-1.0000');
+    assert.equal(result.lines.some(line=>line.categoryCode==='acquiring'),false);
+    assert.equal(result.missingReasons.includes('operation_unclassified'),false);
+  }
 });
 
 test('loyalty compensation is ignored even for legacy product or store classifications',()=>{
