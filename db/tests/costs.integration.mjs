@@ -8,7 +8,7 @@ const databaseName=new URL(integrationUrl).pathname.slice(1);
 if(!databaseName.toLowerCase().includes('test'))throw new Error('Refusing to run costs integration tests outside a database whose name contains "test".');
 process.env.DATABASE_URL=integrationUrl;
 
-const {migrate,pool,getCostState,importVariantCosts}=await import('../../app/db.mjs');
+const {migrate,pool,getCostState,importVariantCosts,saveVariantCost}=await import('../../app/db.mjs');
 const ids={user:randomUUID(),viewer:randomUUID(),business:randomUUID(),store:randomUUID()};
 const foreign={user:randomUUID(),business:randomUUID(),store:randomUUID()};
 test.after(async()=>{await pool.end();});
@@ -113,5 +113,71 @@ test('costs persistence preserves decimals, versions, atomicity and tenant permi
     assert.equal(state.lastImport,null);
     await assert.rejects(importVariantCosts(ids.user,upload([row('10')],foreign.store)),{message:'store_not_found'});
     assert.deepEqual(await versions(foreign),before);
+  });
+
+  const variantId=(await getCostState(ids.user,ids.store)).rows[0].id;
+  const manual=(unitCost,overrides={})=>({storeId:ids.store,variantId,unitCost,effectiveFrom:'2020-01-01',...overrides});
+  await t.test('manual correction stores immutable provenance and skips identical decimal',async()=>{
+    assert.equal((await saveVariantCost(ids.user,manual('12,3401'))).applied,1);
+    const state=await getCostState(ids.user,ids.store);
+    assert.equal(state.canEdit,true);
+    assert.equal(state.rows[0].unit_cost,'12.3401');
+    const records=await context(ids,async client=>(await client.query(`select version_no,origin,changed_by,import_row_id from mc.cost_versions where id=$1`,[state.rows[0].cost_version_id])).rows);
+    assert.deepEqual(records,[{version_no:3,origin:'manual',changed_by:ids.user,import_row_id:null}]);
+    const before=await versions();
+    assert.equal((await saveVariantCost(ids.user,manual('12.3401'))).skipped,1);
+    assert.deepEqual(await versions(),before);
+    await assert.rejects(context(ids,client=>client.query(`update mc.cost_versions set unit_cost=1 where id=$1`,[state.rows[0].cost_version_id])));
+  });
+  await t.test('manual amount and date validation is atomic',async()=>{
+    const before=await versions();
+    for(const unitCost of ['-1','1.23456','1e2','1,2,3','10000000000000000','', ['12']]) {
+      await assert.rejects(saveVariantCost(ids.user,manual(unitCost)),{message:'cost_invalid_amount'});
+    }
+    for(const effectiveFrom of ['2026-02-30','2025-02-29','0000-01-01','2026-1-01','', ['2026-01-01']]) {
+      await assert.rejects(saveVariantCost(ids.user,manual('1',{effectiveFrom})),{message:'cost_invalid_date'});
+    }
+    assert.deepEqual(await versions(),before);
+  });
+  await t.test('manual access requires editor or owner and a selected active variant in the same store',async()=>{
+    const before=await versions();
+    assert.equal((await getCostState(ids.viewer,ids.store)).canEdit,false);
+    await assert.rejects(saveVariantCost(ids.viewer,manual('1')),{message:'cost_write_forbidden'});
+    await assert.rejects(saveVariantCost(ids.user,manual('1',{storeId:foreign.store})),{message:'store_not_found'});
+    const foreignVariant=(await getCostState(foreign.user,foreign.store)).rows[0].id;
+    await assert.rejects(saveVariantCost(ids.user,manual('1',{variantId:foreignVariant})),{message:'cost_variant_not_found'});
+    const unselected=await context(ids,async client=>{
+      const product=(await client.query(`insert into mc.products(business_id,store_id,wb_article,seller_article) values($1,$2,700002,'UNSELECTED') returning id`,[ids.business,ids.store])).rows[0];
+      return (await client.query(`insert into mc.variants(business_id,store_id,product_id,external_variant_id) values($1,$2,$3,'unselected') returning id`,[ids.business,ids.store,product.id])).rows[0].id;
+    });
+    await assert.rejects(saveVariantCost(ids.user,manual('1',{variantId:unselected})),{message:'cost_variant_not_found'});
+    await context(ids,client=>client.query(`update mc.variants set status='archived' where id=$1`,[variantId]));
+    await assert.rejects(saveVariantCost(ids.user,manual('1')),{message:'cost_variant_not_found'});
+    await context(ids,client=>client.query(`update mc.variants set status='active' where id=$1`,[variantId]));
+    assert.deepEqual(await versions(),before);
+  });
+  await t.test('editor can save selected historical product and effective-date history emits local cost events',async()=>{
+    const editor=randomUUID();
+    await context(ids,async client=>{
+      await client.query(`insert into mc.users(id,display_name) values($1,'Costs test editor')`,[editor]);
+      await client.query(`insert into mc.memberships(business_id,user_id,role) values($1,$2,'editor')`,[ids.business,editor]);
+      const document=(await client.query(`insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness) values($1,$2,'wb_api','weekly_realization',$3,'complete') returning id`,[ids.business,ids.store,randomUUID()])).rows[0];
+      const report=(await client.query(`insert into mc.reports(business_id,store_id,external_report_id,period_start,period_end) values($1,$2,$3,'2020-01-01','2020-01-31') returning id`,[ids.business,ids.store,randomUUID()])).rows[0];
+      const version=(await client.query(`insert into mc.report_versions(business_id,store_id,report_id,document_id,version_no,checksum,parser_version) values($1,$2,$3,$4,1,$5,'wb-finance-v13') returning id`,[ids.business,ids.store,report.id,document.id,randomUUID()])).rows[0];
+      const evidence=(await client.query(`insert into mc.report_rows(business_id,store_id,report_version_id,external_row_key,row_number,raw_data,row_checksum) values($1,$2,$3,'1',1,$4::jsonb,$5) returning id`,[ids.business,ids.store,version.id,JSON.stringify({nmId:700001,sku:'default',saName:'COSTS',rrDate:'2020-01-15',docTypeName:'Продажа',sellerOperName:'Продажа',quantity:1,retailAmount:'100',forPay:'100'}),randomUUID()])).rows[0];
+      await client.query(`update mc.report_versions set status='validated' where id=$1`,[version.id]);
+      await client.query(`update mc.report_versions set status='accepted',accepted_at=now() where id=$1`,[version.id]);
+      await client.query(`update mc.reports set current_version_id=$1 where id=$2`,[version.id,report.id]);
+      await client.query(`update mc.products set historical_deleted=true,historical_source_row_id=$1 where id=(select product_id from mc.variants where id=$2)`,[evidence.id,variantId]);
+    });
+    assert.equal((await saveVariantCost(editor,manual('0',{effectiveFrom:'2020-01-15'}))).applied,1);
+    assert.equal((await getCostState(ids.user,ids.store)).rows[0].unit_cost,'0.0000');
+    assert.equal((await saveVariantCost(editor,manual('10'))).applied,1);
+    const events=await context(ids,async client=>(await client.query(`select event_type,affected_from::text,affected_to::text,actor_user_id,allows_wb_api from mc.financial_input_events where business_id=$1 and store_id=$2 and event_type='cost_updated' order by event_generation`,[ids.business,ids.store])).rows);
+    assert.equal(events.length,2);
+    assert.deepEqual(events.map(event=>[event.affected_from,event.affected_to,event.actor_user_id,event.allows_wb_api]),[['2020-01-15','2020-01-31',editor,false],['2020-01-01','2020-01-14',editor,false]]);
+    await saveVariantCost(editor,manual('10'));
+    const count=await context(ids,async client=>(await client.query(`select count(*)::int as n from mc.financial_input_events where business_id=$1 and store_id=$2 and event_type='cost_updated'`,[ids.business,ids.store])).rows[0].n);
+    assert.equal(count,2);
   });
 });

@@ -32,6 +32,8 @@ export function createCostsRoutes({
   listStores,
   getCostState,
   importVariantCosts,
+  saveVariantCost,
+  form,
   costPage,
   send,
   sendBuffer,
@@ -41,9 +43,10 @@ export function createCostsRoutes({
   multipart
 }) {
   async function sendCosts(res, status, current, stores, options = {}) {
-    const store = stores[0],
+    const store = stores.find(item => item.id === (options.storeId || stores[0]?.id)),
       costs = store ? await getCostState(current.user_id, store.id): null;
-    return send(res, status, costPage(current, stores, costs, options));
+    const orderedStores = store ? [store, ...stores.filter(item => item.id !== store.id)]: stores;
+    return send(res, status, costPage(current, orderedStores, costs, options));
   }
   async function dispatch(req, res, url, current) {
     if (req.method === 'GET' && url.pathname === '/costs/template.csv') {
@@ -61,10 +64,43 @@ export function createCostsRoutes({
     if (req.method === 'GET' && url.pathname === '/costs') {
       if (!current) return redirect(res, '/login');
       const stores = await listStores(current.user_id);
-      const notice = url.searchParams.get('imported') === '1' ? 'Себестоимость из файла сохранена.': '';
+      const storeId = url.searchParams.get('storeId');
+      if (storeId && !stores.some(store => store.id === storeId)) return send(res, 404, 'Магазин не найден.');
+      const notice = url.searchParams.get('imported') === '1' ? 'Себестоимость из файла сохранена.': url.searchParams.get('saved') === '1' ? 'Себестоимость сохранена.': url.searchParams.get('skipped') === '1' ? 'Такая себестоимость уже сохранена.': '';
       return sendCosts(res, 200, current, stores, {
-        notice
+        notice, storeId
       });
+    }
+    if (req.method === 'POST' && url.pathname === '/costs/save') {
+      if (!current) return redirect(res, '/login');
+      if (!sameOrigin(req)) return send(res, 403, 'Запрос отклонён.');
+      const stores = await listStores(current.user_id);
+      let values = {};
+      try {
+        const limit = await takeLimit(`cost-save:${current.user_id}`, 60, 15);
+        if (!limit.allowed) return sendCosts(res, 429, current, stores, { error: 'Слишком много сохранений. Повторите через 15 минут.' });
+        const data = await form(req);
+        values = Object.fromEntries(['storeId','variantId','unitCost','effectiveFrom'].map(key => [key, typeof data[key] === 'string' ? data[key]: '']));
+        const store = stores.find(item => item.id === values.storeId);
+        if (!store) throw new Error('store_not_found');
+        const result = await saveVariantCost(current.user_id, values);
+        return redirect(res, `/costs?${result.skipped ? 'skipped': 'saved'}=1&storeId=${encodeURIComponent(store.id)}`);
+      } catch (error) {
+        const messages = {
+          cost_invalid_amount: costImportErrors.cost_invalid_amount,
+          cost_invalid_date: 'Укажите существующую дату в формате ГГГГ-ММ-ДД.',
+          cost_variant_not_found: 'Выбранная вариация товара не найдена.',
+          cost_write_forbidden: 'Недостаточно прав для изменения себестоимости.',
+          store_not_found: 'Магазин не найден.',
+          too_large: 'Форма слишком большая.'
+        };
+        if (!messages[error.message]) throw error;
+        const status = error.message === 'cost_write_forbidden' ? 403: ['store_not_found','cost_variant_not_found'].includes(error.message) ? 404: error.message === 'too_large' ? 413: 422;
+        return sendCosts(res, status, current, stores, {
+          storeId: stores.some(store => store.id === values.storeId) ? values.storeId: undefined,
+          manualError: messages[error.message], manualValues: values
+        });
+      }
     }
     if (req.method === 'POST' && url.pathname === '/costs/import') {
       if (!current) return redirect(res, '/login');
@@ -74,11 +110,13 @@ export function createCostsRoutes({
       if (!limit.allowed) return sendCosts(res, 429, current, stores, {
         error: 'Слишком много загрузок. Повторите через 15 минут.'
       });
+      let storeId;
       try {
         const upload = await multipart(req, costImportMaxBytes + 65536),
           store = stores.find(item => item.id === upload.fields.storeId),
           file = upload.files.file;
         if (!store) throw new Error('store_not_found');
+        storeId = store.id;
         if (!file?.fileName || !file.buffer?.length) throw new Error('cost_file_empty');
         const rows = await parseCostFile(file),
           checksum = createHash('sha256').update(file.buffer).digest('hex');
@@ -89,25 +127,28 @@ export function createCostsRoutes({
           rows
         });
         if (!result.ok) return sendCosts(res, 422, current, stores, {
+          storeId,
           error: 'Файл не применён. Исправьте отмеченные строки и загрузите его снова.',
           importErrors: result.errors
         });
-        return redirect(res, '/costs?imported=1');
+        return redirect(res, `/costs?storeId=${encodeURIComponent(store.id)}&imported=1`);
       } catch (error) {
         if (error.message === 'cost_write_forbidden') return sendCosts(res, 403, current, stores, {
+          storeId,
           error: 'Недостаточно прав для изменения себестоимости.'
         });
         if (error.message === 'store_not_found') return sendCosts(res, 404, current, stores, {
           error: 'Магазин не найден.'
         });
         return sendCosts(res, error.message === 'too_large' || error.message === 'cost_file_too_large' ? 413: 422, current, stores, {
+          storeId,
           error: costImportMessage(error)
         });
       }
     }
   }
   return async function handleCosts(req, res, url, current) {
-    const matches =(req.method === 'GET' &&['/costs', '/costs/template.csv'].includes(url.pathname)) ||(req.method === 'POST' && url.pathname === '/costs/import');
+    const matches =(req.method === 'GET' &&['/costs', '/costs/template.csv'].includes(url.pathname)) ||(req.method === 'POST' && ['/costs/import','/costs/save'].includes(url.pathname));
     if (!matches) return false;
     await dispatch(req, res, url, current);
     return true;

@@ -2,7 +2,7 @@ export function createCostsRepository({
   withOwnedBusinessContext
 }) {
   async function getCostState(userId, storeId) {
-    return withOwnedBusinessContext(userId, async(client, businessId) => {
+    return withOwnedBusinessContext(userId, async(client, businessId, role) => {
       const products =(await client.query(`select p.id,p.wb_article,p.seller_article,p.title,p.image_url,p.historical_deleted,
               v.id as variant_id,coalesce(v.wb_external_variant_id,v.external_variant_id) as external_variant_id,v.size_label,v.color_label,
               barcode.identifier_value as barcode,cv.id as cost_version_id,
@@ -75,6 +75,7 @@ export function createCostsRepository({
         group by b.id,d.external_document_id,b.status,b.created_at,b.applied_at
         order by b.created_at desc limit 1`,[businessId, storeId])).rows[0] ?? null;
       return {
+        canEdit: ['owner', 'editor'].includes(role),
         products: grouped,
         rows: flatRows,
         summary: {
@@ -105,6 +106,35 @@ export function createCostsRepository({
     const parsed = new Date(`${text}T00:00:00Z`);
     return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === text ? text: null;
   };
+  async function saveVariantCost(userId, { storeId, variantId, unitCost, effectiveFrom }) {
+    const uuid = value => typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+    if (!uuid(storeId)) throw new Error('store_not_found');
+    if (!uuid(variantId)) throw new Error('cost_variant_not_found');
+    const amount = typeof unitCost === 'string' ? costAmount(unitCost.replace(',', '.')): null;
+    const date = typeof effectiveFrom === 'string' ? costDate(effectiveFrom): null;
+    if (!amount) throw new Error('cost_invalid_amount');
+    if (!date || date.startsWith('0000-')) throw new Error('cost_invalid_date');
+    return withOwnedBusinessContext(userId, async(client, businessId, role) => {
+      if (!['owner', 'editor'].includes(role)) throw new Error('cost_write_forbidden');
+      const store = (await client.query(`select id from mc.stores where business_id=$1 and id=$2 and status='active' for share`,[businessId, storeId])).rows[0];
+      if (!store) throw new Error('store_not_found');
+      const variant = (await client.query(`select v.id,v.product_id from mc.variants v
+        join mc.product_selection_items i on (i.business_id,i.store_id,i.product_id)=(v.business_id,v.store_id,v.product_id)
+        where v.business_id=$1 and v.store_id=$2 and v.id=$3 and v.status='active' for share of v`,[businessId, storeId, variantId])).rows[0];
+      if (!variant) throw new Error('cost_variant_not_found');
+      await client.query(`insert into mc.variant_costs(business_id,store_id,product_id,variant_id,effective_from)
+        values($1,$2,$3,$4,$5) on conflict(variant_id,effective_from) do nothing`,[businessId, storeId, variant.product_id, variantId, date]);
+      const cost = (await client.query(`select id,current_version_id from mc.variant_costs
+        where business_id=$1 and store_id=$2 and variant_id=$3 and effective_from=$4 for update`,[businessId, storeId, variantId, date])).rows[0];
+      const current = cost.current_version_id ? (await client.query(`select unit_cost::text from mc.cost_versions where id=$1`,[cost.current_version_id])).rows[0]: null;
+      if (current && costAmount(current.unit_cost) === amount) return { ok: true, applied: 0, skipped: 1 };
+      const versionNo = (await client.query(`select coalesce(max(version_no),0)+1 as n from mc.cost_versions where cost_id=$1`,[cost.id])).rows[0].n;
+      const version = (await client.query(`insert into mc.cost_versions(business_id,store_id,cost_id,version_no,unit_cost,origin,changed_by)
+        values($1,$2,$3,$4,$5,'manual',$6) returning id`,[businessId, storeId, cost.id, versionNo, amount, userId])).rows[0];
+      await client.query(`update mc.variant_costs set current_version_id=$1 where id=$2`,[version.id, cost.id]);
+      return { ok: true, applied: 1, skipped: 0 };
+    });
+  }
   async function importVariantCosts(userId, {
     storeId,
     fileName,
@@ -276,6 +306,7 @@ export function createCostsRepository({
   }
   return {
     getCostState,
+    saveVariantCost,
     importVariantCosts
   };
 }

@@ -291,7 +291,7 @@ export function productsPage(user,stores=user.stores,catalog=null,billing=null,{
   return frame({...user,stores},'/products',`<section class="products-page"><a class="back-link" href="/settings#products">← Вернуться к настройкам</a><div class="products-page-title"><div><p class="eyebrow">Настройки магазина</p><h1>ТОВАРЫ ДЛЯ АНАЛИЗА</h1></div><div class="products-title-actions"><a href="/costs">Себестоимость →</a><a href="/tariff">Тариф «${esc(plan.name)}» · до ${limit} товаров →</a></div></div>${feedback}${content}</section>`,stores);
 }
 
-export function costPage(...args) { return createCostPage({ frame, esc, displayDate })(...args); }
+export function costPage(...args) { return createCostPage({ frame, esc, displayDate, dateValue })(...args); }
 
 const expenseCategoryLabels={packaging:'Упаковка',external_promotion:'Внешнее продвижение',agency_services:'Агентские услуги',software_services:'Сервисы и ПО',other_external:'Прочие внешние расходы'};
 const recognitionLabels={on_date:'В указанную дату',evenly_over_period:'Равномерно за период'};

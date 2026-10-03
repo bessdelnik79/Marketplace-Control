@@ -7,6 +7,7 @@ test('historical deleted catalog product has an explanation and no WB link or im
   assert.match(html,/Удалённый товар · добавлен из финансовых отчётов/);
   assert.doesNotMatch(html,/wildberries\.ru\/catalog\/800001|old\.webp/);
   assert.match(html,/WB: 800001/);
+  assert.match(html,/class="catalog-product-image placeholder"/);
 });
 const user={id:'test-user',display_name:'<script>alert(1)</script>',email:'" autofocus onfocus="alert(1)'};
 test('settings escapes account data in HTML attributes and text',()=>{const html=settingsPage(user);assert.ok(!html.includes('<script>alert(1)</script>'));assert.ok(html.includes('&lt;script&gt;'));assert.ok(html.includes('&quot; autofocus'));assert.ok(!html.includes('value="" autofocus'));});

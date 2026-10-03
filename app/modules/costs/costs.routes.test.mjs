@@ -13,6 +13,8 @@ function setup(overrides = {}) {
     listStores: async id => { assert.equal(id, current.user_id); return stores; },
     getCostState: async () => ({ rows: [] }),
     importVariantCosts: async (id, data) => { calls.push(['import', id, data]); return { ok: true }; },
+    saveVariantCost: async (id, data) => { calls.push(['save', id, data]); return { ok: true, skipped: 0 }; },
+    form: async () => ({ storeId: 'store-1', variantId: 'variant-1', unitCost: '12,34', effectiveFrom: '2026-01-01' }),
     costPage: (user, list, state, options) => ({ user, list, state, options }),
     send: (res, status, body, headers) => Object.assign(res, { status, body, headers }),
     sendBuffer: (res, status, body, headers) => Object.assign(res, { status, body, headers }),
@@ -36,12 +38,63 @@ test('cost routes leave unrelated requests unhandled', async () => {
   assert.deepEqual(state.calls, []);
 });
 test('all cost routes require a session', async () => {
-  for (const [method, route] of [['GET', '/costs'], ['GET', '/costs/template.csv'], ['POST', '/costs/import']]) {
+  for (const [method, route] of [['GET', '/costs'], ['GET', '/costs/template.csv'], ['POST', '/costs/import'], ['POST', '/costs/save']]) {
     const state = setup();
     assert.equal(await state.run(method, route, null), true);
     assert.equal(state.response.location, '/login');
     assert.deepEqual(state.calls, []);
   }
+});
+
+test('manual save checks origin and rate limit before reading the form', async () => {
+  for (const overrides of [{ sameOrigin: () => false }, { takeLimit: async () => ({ allowed: false }) }]) {
+    const state = setup({ form: async () => assert.fail('must not read form'), ...overrides });
+    await state.run('POST', '/costs/save');
+    assert.ok([403, 429].includes(state.response.status));
+    assert.deepEqual(state.calls, []);
+  }
+});
+
+test('manual save preserves decimal text, date and selected store', async () => {
+  const state = setup();
+  await state.run('POST', '/costs/save');
+  assert.deepEqual(state.calls[1], ['save', 'user-1', { storeId: 'store-1', variantId: 'variant-1', unitCost: '12,34', effectiveFrom: '2026-01-01' }]);
+  assert.equal(state.response.location, '/costs?saved=1&storeId=store-1');
+  const skipped = setup({ saveVariantCost: async () => ({ skipped: 1 }) });
+  await skipped.run('POST', '/costs/save');
+  assert.equal(skipped.response.location, '/costs?skipped=1&storeId=store-1');
+});
+
+test('manual validation and permission errors retain the edited row', async () => {
+  for (const [message, status] of [['cost_invalid_amount',422],['cost_invalid_date',422],['cost_write_forbidden',403],['cost_variant_not_found',404]]) {
+    const state = setup({ saveVariantCost: async () => { throw new Error(message); } });
+    await state.run('POST', '/costs/save');
+    assert.equal(state.response.status, status);
+    assert.equal(state.response.body.options.manualValues.variantId, 'variant-1');
+    assert.equal(state.response.body.options.manualValues.unitCost, '12,34');
+    assert.ok(state.response.body.options.manualError);
+  }
+});
+
+test('manual save rejects foreign stores and duplicate form fields', async () => {
+  const foreign = setup({ form: async () => ({ storeId: 'foreign' }) });
+  await foreign.run('POST', '/costs/save');
+  assert.equal(foreign.response.status, 404);
+  assert.equal(foreign.calls.some(([name]) => name === 'save'), false);
+  const duplicate = setup({ form: async () => ({ storeId: ['store-1','foreign'] }) });
+  await duplicate.run('POST', '/costs/save');
+  assert.equal(duplicate.response.status, 404);
+});
+
+test('cost page selects the requested owned store and shows manual notices', async () => {
+  const list = [{ id: 'store-1' }, { id: 'store-2' }];
+  const state = setup({ listStores: async () => list, getCostState: async (id, storeId) => { assert.equal(storeId, 'store-2'); return {}; } });
+  await state.run('GET', '/costs?saved=1&storeId=store-2');
+  assert.equal(state.response.body.list[0].id, 'store-2');
+  assert.match(state.response.body.options.notice, /сохранена/);
+  const foreign = setup();
+  await foreign.run('GET', '/costs?storeId=foreign');
+  assert.equal(foreign.response.status, 404);
 });
 test('cross-origin cost upload is rejected before reading a file', async () => {
   const state = setup({ sameOrigin: () => false });
@@ -58,7 +111,7 @@ test('rate-limited upload does not read or import a file', async () => {
 test('successful upload preserves limits, parsed rows and checksum while database events own recalculation', async () => {
   const state = setup();
   await state.run();
-  assert.equal(state.response.location, '/costs?imported=1');
+  assert.equal(state.response.location, '/costs?storeId=store-1&imported=1');
   assert.deepEqual(state.calls[0], ['limit', 'cost-import:user-1', 10, 15]);
   assert.deepEqual(state.calls[1], ['multipart', costImportMaxBytes + 65536]);
   assert.equal(state.calls[2][1], 'user-1');
@@ -105,4 +158,23 @@ test('CSV template is scoped to an owned store and returned as an attachment', a
   const rejected = setup();
   await rejected.run('GET', '/costs/template.csv?storeId=foreign');
   assert.equal(rejected.response.status, 404);
+});
+
+test('upload result and validation errors preserve a secondary store', async () => {
+  const list = [{ id: 'store-1' }, { id: 'store-2' }];
+  const overrides = {
+    listStores: async () => list,
+    multipart: async () => ({ fields: { storeId: 'store-2' }, files: { file: { fileName: 'costs.csv', buffer: csv } } }),
+    getCostState: async (id, storeId) => { assert.equal(storeId, 'store-2'); return {}; },
+  };
+  const saved = setup(overrides);
+  await saved.run();
+  assert.equal(saved.response.location, '/costs?storeId=store-2&imported=1');
+  const invalid = setup({ ...overrides, importVariantCosts: async () => ({ ok: false, errors: [] }) });
+  await invalid.run();
+  assert.equal(invalid.response.body.list[0].id, 'store-2');
+  const forbidden = setup({ ...overrides, importVariantCosts: async () => { throw new Error('cost_write_forbidden'); } });
+  await forbidden.run();
+  assert.equal(forbidden.response.status, 403);
+  assert.equal(forbidden.response.body.list[0].id, 'store-2');
 });
