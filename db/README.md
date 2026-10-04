@@ -172,3 +172,5 @@ OPERATIONAL_BOOTSTRAP_INTEGRATION_DATABASE_URL=postgresql:///marketplace_control
 ```
 
 Сценарии проверяют точные report/version/normalization ссылки, подтверждённые нулевые возвраты, смену исходника и catalog revision, tenant isolation, полный годовой bootstrap, запрет обхода через force и сохранение готовности после Monday refresh.
+
+HTTP-проверка создания и переключения магазинов: запустите отдельный экземпляр `app/server.mjs` с `PORT=3807`, `EMAIL_VERIFICATION_REQUIRED=false` и `DATABASE_URL` отдельной одноразовой БД с суффиксом `_test`. После `/health=ok` выполните `STORE_SWITCH_INTEGRATION_DATABASE_URL=<тот же URL БД> node db/tests/store-switch-http.integration.mjs`; для другого адреса задайте `STORE_SWITCH_HTTP_BASE`. Скрипт создаёт тестовый аккаунт и два магазина, проверяет переход к новому магазину, выбранную форму токена, отказ чужому ID/Origin и отсутствие доступа без сессии. Рабочую БД и рабочий HTTP-сервер использовать нельзя; итоговая проверка выполняется на VM.
