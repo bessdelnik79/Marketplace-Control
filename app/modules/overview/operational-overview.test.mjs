@@ -126,3 +126,10 @@ test('returns beyond Statistics retention explain unknown history while orders r
  assert.ok(model.returnData.missingReasons.includes('operational_returns_history_unavailable'));
  assert.equal(model.returnData.returns,null);
 });
+
+test('financial returns disclose accounting dates and compare only compatible methods',()=>{
+ const rows=[];for(let day=-28;day<7;day++)for(const productId of productIds)rows.push({...row(date(day),productId),return_count:'1',return_amount:'2.50',return_source:'financial_report',return_date_basis:'accounting_date',return_amount_basis:'retail_price_with_discount'});
+ const same=buildOperationalOverview(envelope(rows));assert.equal(same.returnData.comparison.available,true);assert.match(same.returnData.sourceLabel,/по дате учёта WB/);
+ rows[0].return_date_basis='return_event_date';rows[0].return_amount_basis='price_with_discount';rows[0].return_source='statistics_sales';
+ const mixed=buildOperationalOverview(envelope(rows));assert.equal(mixed.returnData.comparison.available,false);assert.equal(mixed.returnData.comparison.reason,'operational_return_methods_differ');
+});

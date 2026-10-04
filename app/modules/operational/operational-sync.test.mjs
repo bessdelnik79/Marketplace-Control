@@ -14,7 +14,7 @@ async function syntheticReturns(_token,options){
   return {rows,missing:[],raw:'{"returns":[]}',rawChecksum:'d'.repeat(64)};
 }
 function runOperationalSync(userId,storeId,options){
-  return executeOperationalSync(userId,storeId,{...options,dependencies:{reserveReturns:async()=>({waitMs:0}),loadReturns:syntheticReturns,...options.dependencies}});
+  return executeOperationalSync(userId,storeId,{...options,dependencies:{cached:async()=>({funnelRows:[],returnsRows:[]}),reserveReturns:async()=>({waitMs:0}),loadReturns:syntheticReturns,...options.dependencies}});
 }
 
 const silentLogger = { info() {}, warn() {} };
@@ -116,7 +116,7 @@ test('sync batches selected products by 1000, waits for every reserved slot and 
   assert.equal(calls.reserve.length, 2);
   assert.deepEqual(calls.waits, [35, 20]);
   assert.deepEqual(calls.stores.map(call => [call.partNumber, call.raw]), [[0, '{"batch":1}'], [1, '{"batch":2}'],[2,'{"returns":[]}']]);
-  assert.deepEqual(calls.progress.map(progress => progress.stage), ['rate_wait','fetching','loading','rate_wait','fetching','loading','fetching','saving']);
+  assert.deepEqual(calls.progress.map(progress => progress.stage), ['checking_cache','rate_wait','fetching','loading','rate_wait','fetching','loading','fetching','saving']);
   assert.equal(calls.progress.filter(progress=>progress.stage==='loading')[1].missing, 1005);
   assert.equal(calls.complete[0].objects.length, 3);
   assert.equal(calls.complete[0].metrics.length, 1005);
@@ -283,6 +283,7 @@ test('local token validation maps invalid, expired, unsafe and mismatched tokens
       logger: silentLogger,
       dependencies: {
         begin: async (_userId, _storeId, range) => jobFor(range),
+        progress:async()=>{},
         decrypt: () => tokenValue,
         load: async () => { loaded = true; },
         fail: async (_userId, _job, code) => { failed = code; }
@@ -315,4 +316,39 @@ test('scheduler deduplicates an active user and store in process', async () => {
   assert.equal(scheduleOperationalSync('dedupe-user', 'dedupe-store', options), false);
   release({ started: false, reason: 'not_due' });
   await new Promise(resolve => setImmediate(resolve));
+});
+
+function cachedGrid(range){
+ const funnelRows=[],returnsRows=[];
+ for(let day=Date.parse(range.dateFrom);day<=Date.parse(range.dateTo);day+=86400000){const date=new Date(day).toISOString().slice(0,10);
+ funnelRows.push({nmId:7400001,date,currency:'RUB',orderCount:2,orderSum:'20',buyoutCount:1,buyoutSum:'10'});
+ returnsRows.push({nmId:7400001,date,returnCount:1,returnSum:'10',returnSource:'financial_report',returnDateBasis:'accounting_date',returnAmountBasis:'retail_price_with_discount',returnSourceRefs:{coverageId:'confirmed-week'}});
+ }
+ return {funnelRows,returnsRows,raw:'{"source":"cache"}',rawChecksum:'c'.repeat(64)};
+}
+test('complete database coverage publishes locally without decrypting or making any WB request',async()=>{
+ let completed,stored=0;
+ const result=await runOperationalSync('user-1','store-1',{clock:fixedClock,logger:silentLogger,dependencies:{
+ begin:async(_u,_s,range)=>jobFor(range),cached:async(_u,job)=>cachedGrid({dateFrom:job.date_from,dateTo:job.date_to}),
+ progress:async()=>{},decrypt:()=>assert.fail('cache must not decrypt'),load:()=>assert.fail('cached funnel'),loadReturns:()=>assert.fail('cached returns'),
+ reserve:()=>assert.fail('cached slots'),reserveReturns:()=>assert.fail('cached slots'),store:async options=>{stored++;return {partNumber:options.partNumber};},
+ randomUUID:ids(),complete:async(_u,_j,payload)=>{completed=payload;return {quality:'complete'};}
+ }});
+ assert.equal(result.status,'completed');assert.equal(stored,1);assert.equal(completed.metrics.length,7);
+ assert.ok(completed.metrics.every(row=>row.returnSource==='financial_report'&&row.returnDateBasis==='accounting_date'));
+});
+test('partial cache fetches only missing funnel and return days without overwriting financial evidence',async()=>{
+ const requests=[],returnRequests=[];let completed;
+ const result=await runOperationalSync('user-1','store-1',{clock:fixedClock,logger:silentLogger,dependencies:{
+ begin:async(_u,_s,range)=>jobFor(range),cached:async(_u,job)=>{const cache=cachedGrid({dateFrom:job.date_from,dateTo:job.date_to});cache.funnelRows.splice(2,1);cache.returnsRows.splice(4,1);return cache;},
+ progress:async()=>{},decrypt:()=>wbToken(),reserve:async()=>({waitMs:0}),reserveReturns:async()=>({waitMs:0}),
+ load:async(_t,options)=>{requests.push(options);return {rows:[{nmId:7400001,date:options.dateFrom,currency:'RUB',orderCount:3,orderSum:'30',buyoutCount:2,buyoutSum:'20'}],missing:[],raw:'{}',rawChecksum:'a'.repeat(64)};},
+ loadReturns:async(_t,options)=>{returnRequests.push(options);return {rows:[{nmId:7400001,date:options.dateFrom,returnCount:2,returnSum:'20'}],missing:[],raw:'[]',rawChecksum:'b'.repeat(64)};},
+ store:async options=>({partNumber:options.partNumber}),randomUUID:ids(),complete:async(_u,_j,payload)=>{completed=payload;return {quality:'complete'};}
+ }});
+ assert.equal(result.status,'completed');assert.equal(requests.length,1);assert.equal(returnRequests.length,1);
+ assert.equal(requests[0].dateFrom,'2026-09-17');assert.equal(requests[0].dateTo,'2026-09-17');
+ assert.equal(returnRequests[0].dateFrom,'2026-09-19');assert.equal(returnRequests[0].dateTo,'2026-09-19');
+ assert.equal(completed.metrics.find(row=>row.date==='2026-09-19').returnSource,'statistics_sales');
+ assert.equal(completed.metrics.filter(row=>row.returnSource==='financial_report').length,6);
 });

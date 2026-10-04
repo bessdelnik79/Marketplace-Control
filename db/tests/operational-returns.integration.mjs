@@ -15,6 +15,7 @@ const {migrate,pool}=await import('../../app/infrastructure/database/client.mjs'
 const {buildOperationalOverview}=await import('../../app/modules/overview/operational-overview.mjs');
 const {storeOperationalSnapshot}=await import('../../app/infrastructure/storage/operational-source-storage.mjs');
 const {saveWbConnection}=await import('../../app/modules/stores/stores.repository.mjs');
+const {claimJobs,completeJob}=await import('../../app/db.mjs');
 const ids={user:randomUUID(),foreignUser:randomUUID(),business:randomUUID(),foreignBusiness:randomUUID(),store:randomUUID(),product:randomUUID()};
 const rawRoot=await mkdtemp(path.join(os.tmpdir(),'mc-p04-integration-'));
 const masterKey=Buffer.alloc(32,11);
@@ -82,8 +83,14 @@ test('first credential factory waits for selection, drains thirty Moscow days an
   const options={periodStart:'2026-01-26',periodEnd:'2026-02-01',now:at};
   let data=await getOperationalOverviewData(ids.user,storeId,options);
   assert.deepEqual([data.updateStatus.factory.start,data.updateStatus.factory.end,data.updateStatus.factory.totalDays],['2026-01-03','2026-02-01',30]);
-  assert.equal(data.updateStatus.factory.status,'waiting_selection');
+  assert.equal(data.updateStatus.factory.status,'waiting_financial');
   assert.equal(data.updateStatus.factory.pendingDays,30);
+  assert.equal((await beginOperationalSync(ids.user,storeId,{force:true,dateFrom:'2026-01-26',dateTo:'2026-02-01'})).reason,'waiting_financial');
+  const worker='operational-factory-finance';
+  const bootstrap=(await claimJobs({workerId:worker,jobTypes:['financial_inventory_refresh'],leaseSeconds:300,limit:100})).find(item=>item.store_id===storeId);
+  assert.ok(bootstrap);
+  await pool.query('select * from mc.apply_financial_inventory($1,$2,$3,$4,$5::jsonb)',[bootstrap.id,Number(bootstrap.payload.credentialGeneration),bootstrap.lease_token,worker,'[]']);
+  await completeJob({jobId:bootstrap.id,leaseToken:bootstrap.lease_token,workerId:worker,outcome:'completed'});
   assert.equal((await beginOperationalSync(ids.user,storeId,{force:true,dateFrom:'2026-01-26',dateTo:'2026-02-01'})).reason,'selection_required');
   await saveWbConnection(ids.user,{...credential,now:new Date('2026-02-02T12:00:00Z')});
   assert.equal((await getOperationalOverviewData(ids.user,storeId,options)).updateStatus.factory.start,'2026-01-03');

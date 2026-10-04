@@ -2,8 +2,9 @@ import { createHash } from 'node:crypto';
 import { pool, withBusinessContext, withOwnedBusinessContext } from '../../infrastructure/database/client.mjs';
 import { verifyOperationalSnapshotObject } from '../../infrastructure/storage/operational-source-storage.mjs';
 import { validateCalendarDate } from '../overview/financial-overview.mjs';
+import { readFinancialReturnsCache } from './financial-returns-cache.mjs';
 
-const parserVersion='wb-operational-funnel-purchased-returns-v3';
+const parserVersion='wb-operational-cache-returns-v4';
 const dayMs=86400000;
 
 function calendarDay(value){
@@ -25,6 +26,58 @@ function decimal(value){
   const text=String(value??'');
   if(!/^\d+(?:\.\d+)?$/.test(text))throw new Error('operational_invalid_metric');
   return text;
+}
+
+async function cachedSources(client,businessId,job,now){
+  const range=period(job.date_from,job.date_to),today=operationalDisplayRange({now}).today;
+  const productIds=job.products.map(product=>product.productId);
+  const rows=(await client.query(`with candidates as (
+    select s.id snapshot_id,a.fetched_at,day::date metric_date,
+      row_number() over(partition by day::date order by a.fetched_at desc,a.created_at desc,a.id desc) rank
+    from mc.operational_snapshots s
+    join mc.operational_snapshot_activations a on a.business_id=s.business_id and a.store_id=s.store_id and a.snapshot_id=s.id
+    join mc.operational_periods p on p.id=s.operational_period_id
+    cross join lateral generate_series(greatest(p.period_start,$4::date),least(p.period_end,$5::date),interval '1 day') day
+    where s.business_id=$1 and s.store_id=$2 and s.status='accepted'
+      and p.period_start<=$5::date and p.period_end>=$4::date
+      and (day::date<$7::date or a.fetched_at>=$6::timestamptz-interval '1 hour')
+      and (select count(*) from mc.operational_snapshot_products sp where sp.snapshot_id=s.id)=cardinality($3::uuid[])
+      and not exists(select 1 from mc.operational_snapshot_products sp where sp.snapshot_id=s.id and not(sp.product_id=any($3::uuid[])))
+      and (select count(*) from mc.operational_daily_metrics m where m.snapshot_id=s.id and m.metric_date=day::date)=cardinality($3::uuid[])
+  ) select m.*,m.metric_date::text metric_day,m.order_count::text orders,m.buyout_count::text buyouts,m.cancel_count::text cancels,
+      m.return_count::text returns,p.wb_article::text nm_id,c.fetched_at
+    from candidates c join mc.operational_daily_metrics m on m.snapshot_id=c.snapshot_id and m.metric_date=c.metric_date
+    join mc.products p on p.business_id=m.business_id and p.store_id=m.store_id and p.id=m.product_id
+    where c.rank=1 order by m.metric_date,m.product_id`,[businessId,job.store_id,productIds,range.dateFrom,range.dateTo,now,today])).rows;
+  const funnelRows=rows.filter(row=>Number.isSafeInteger(Number(row.orders))&&Number.isSafeInteger(Number(row.buyouts))).map(row=>({
+    nmId:Number(row.nm_id),date:row.metric_day,currency:row.currency,orderCount:Number(row.orders),orderSum:row.order_amount,
+    buyoutCount:Number(row.buyouts),buyoutSum:row.buyout_amount,cancelCount:row.cancels==null?null:Number(row.cancels),cancelSum:row.cancel_amount}));
+  const financial=await readFinancialReturnsCache(client,businessId,job.store_id,job.products,{dateFrom:range.dateFrom,dateTo:range.dateTo,today});
+  const financialKeys=new Set(financial.map(row=>`${row.nmId}:${row.date}`));
+  const statistics=rows.filter(row=>row.returns!=null&&row.return_amount!=null&&row.return_source!=='financial_report'
+    &&Number.isSafeInteger(Number(row.returns))&&!financialKeys.has(`${row.nm_id}:${row.metric_day}`)).map(row=>({
+    nmId:Number(row.nm_id),date:row.metric_day,returnCount:Number(row.returns),returnSum:row.return_amount,
+    returnSource:'statistics_sales',returnDateBasis:'return_event_date',returnAmountBasis:'price_with_discount',
+    returnSourceRefs:row.return_source_refs??{snapshotId:row.snapshot_id,rowChecksum:row.row_checksum}}));
+  const returnsRows=[...financial,...statistics];
+  const raw=JSON.stringify({source:'accepted_database_cache',period:range,funnel:rows.map(row=>({snapshotId:row.snapshot_id,
+    productId:row.product_id,date:row.metric_day,rowChecksum:row.row_checksum,fetchedAt:row.fetched_at})),returns:returnsRows});
+  return {funnelRows,returnsRows,raw,rawChecksum:sha(raw)};
+}
+
+export async function getOperationalCachedSources(userId,job,{now=new Date()}={}){
+  return withBusinessContext(userId,job.business_id,async(client,businessId)=>{
+    const store=(await client.query(`select s.id,c.credential_generation from mc.stores s
+      join mc.connections c on c.business_id=s.business_id and c.store_id=s.id and c.status='active'
+      where s.business_id=$1 and s.id=$2 and s.status='active'`,[businessId,job.store_id])).rows[0];
+    if(!store||Number(store.credential_generation)!==job.credential_generation)throw new Error('operational_sync_superseded');
+    const selected=(await client.query(`select p.id product_id,p.wb_article::text nm_id from mc.product_selections s
+      join mc.product_selection_items i on i.selection_id=s.id and i.business_id=s.business_id and i.store_id=s.store_id
+      join mc.products p on p.business_id=i.business_id and p.store_id=i.store_id and p.id=i.product_id
+      where s.business_id=$1 and s.store_id=$2 and s.status='confirmed' order by p.wb_article,p.id`,[businessId,job.store_id])).rows;
+    if(selected.length!==job.products.length||selected.some((row,index)=>`${row.product_id}:${row.nm_id}`!==`${job.products[index].productId}:${job.products[index].nmId}`))throw new Error('operational_selection_changed');
+    return cachedSources(client,businessId,job,now);
+  });
 }
 
 export async function beginOperationalSync(userId,storeId,{force=false,dateFrom,dateTo,businessId:targetBusinessId}={}){
@@ -55,6 +108,7 @@ export async function beginOperationalSync(userId,storeId,{force=false,dateFrom,
     if(!row)throw new Error('operational_connection_unavailable');
     if(!row.scopes.includes('analytics'))return {started:false,reason:'operational_scope_missing'};
     if(!row.scopes.includes('statistics'))return {started:false,reason:'operational_statistics_scope_missing'};
+    if(!(await client.query(`select mc.operational_financial_bootstrap_ready($1) ready`,[storeId])).rows[0].ready)return {started:false,reason:'waiting_financial'};
     const products=(await client.query(
       `select p.id as product_id,p.wb_article::text as nm_id
          from mc.product_selections ps
@@ -158,7 +212,15 @@ export async function completeOperationalSync(userId,job,{documentId,snapshotId,
       seen.add(key);
       if((metric.cancelCount==null)!==(metric.cancelSum==null)||metric.cancelCount!=null&&(!Number.isSafeInteger(metric.cancelCount)||metric.cancelCount<0))throw new Error('operational_invalid_metric');
       if(metric.returnCount==null&&metric.returnSum!=null||metric.returnCount!=null&&(!Number.isSafeInteger(metric.returnCount)||metric.returnCount<0))throw new Error('operational_invalid_metric');
-      const row={productId,date:date.text,currency:'RUB',orderCount:metric.orderCount,orderAmount:decimal(metric.orderSum),buyoutCount:metric.buyoutCount,buyoutAmount:decimal(metric.buyoutSum),cancelCount:metric.cancelCount??null,cancelAmount:metric.cancelSum==null?null:decimal(metric.cancelSum),returnCount:metric.returnCount??null,returnAmount:metric.returnSum==null?null:decimal(metric.returnSum)};
+      const returnSource=metric.returnCount==null?null:metric.returnSource??'statistics_sales';
+      const returnDateBasis=returnSource==='financial_report'?'accounting_date':returnSource?'return_event_date':null;
+      const returnAmountBasis=returnSource==='financial_report'?'retail_price_with_discount':returnSource?'price_with_discount':null;
+      if(returnSource&&!['financial_report','statistics_sales'].includes(returnSource)
+        ||metric.returnDateBasis&&metric.returnDateBasis!==returnDateBasis||metric.returnAmountBasis&&metric.returnAmountBasis!==returnAmountBasis
+        ||returnSource==='financial_report'&&(!metric.returnSourceRefs?.coverageId||!Array.isArray(metric.returnSourceRefs.inventory)))throw new Error('operational_invalid_metric');
+      if(returnSource==='financial_report'&&!(await client.query(`select mc.operational_financial_return_refs_current($1,$2,$3::jsonb) valid`,
+        [businessId,job.store_id,JSON.stringify(metric.returnSourceRefs)])).rows[0].valid)throw new Error('operational_financial_cache_changed');
+      const row={productId,date:date.text,currency:'RUB',orderCount:metric.orderCount,orderAmount:decimal(metric.orderSum),buyoutCount:metric.buyoutCount,buyoutAmount:decimal(metric.buyoutSum),cancelCount:metric.cancelCount??null,cancelAmount:metric.cancelSum==null?null:decimal(metric.cancelSum),returnCount:metric.returnCount??null,returnAmount:metric.returnSum==null?null:decimal(metric.returnSum),returnSource,returnDateBasis,returnAmountBasis,returnSourceRefs:metric.returnSourceRefs??null};
       normalized.push({...row,rowChecksum:sha(JSON.stringify(row))});
     }
     normalized.sort((a,b)=>a.date.localeCompare(b.date)||a.productId.localeCompare(b.productId));
@@ -210,9 +272,9 @@ export async function completeOperationalSync(userId,job,{documentId,snapshotId,
         [businessId,job.store_id,snapshot.id,product.productId,position+1]
       );
       for(const metric of normalized)await client.query(
-        `insert into mc.operational_daily_metrics(business_id,store_id,snapshot_id,product_id,metric_date,currency,order_count,order_amount,buyout_count,buyout_amount,row_checksum,cancel_count,cancel_amount,return_count,return_amount)
-         values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
-        [businessId,job.store_id,snapshot.id,metric.productId,metric.date,metric.currency,metric.orderCount,metric.orderAmount,metric.buyoutCount,metric.buyoutAmount,metric.rowChecksum,metric.cancelCount,metric.cancelAmount,metric.returnCount,metric.returnAmount]
+        `insert into mc.operational_daily_metrics(business_id,store_id,snapshot_id,product_id,metric_date,currency,order_count,order_amount,buyout_count,buyout_amount,row_checksum,cancel_count,cancel_amount,return_count,return_amount,return_source,return_date_basis,return_amount_basis,return_source_refs)
+         values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb)`,
+        [businessId,job.store_id,snapshot.id,metric.productId,metric.date,metric.currency,metric.orderCount,metric.orderAmount,metric.buyoutCount,metric.buyoutAmount,metric.rowChecksum,metric.cancelCount,metric.cancelAmount,metric.returnCount,metric.returnAmount,metric.returnSource,metric.returnDateBasis,metric.returnAmountBasis,metric.returnSourceRefs==null?null:JSON.stringify(metric.returnSourceRefs)]
       );
       await client.query(`update mc.operational_snapshots set status='validated' where id=$1`,[snapshot.id]);
       await client.query(`update mc.operational_snapshots set status='accepted',accepted_at=now() where id=$1`,[snapshot.id]);
@@ -324,7 +386,10 @@ export async function requestOperationalRangeRefresh(userId,storeId,start,end,{n
     const store=(await client.query(`select s.id,c.scopes from mc.stores s join mc.connections c on c.business_id=s.business_id and c.store_id=s.id and c.status='active' where s.business_id=$1 and s.id=$2 and s.status='active' and s.marketplace_code='wb'`,[businessId,storeId])).rows[0];
     if(!store)throw new Error('operational_connection_unavailable');
     if(earliest>range.end)return {queued:0,pendingDays:0,status:'unavailable',errorCode:'operational_history_out_of_range'};
-    const products=(await client.query(`select i.product_id from mc.product_selections ps join mc.product_selection_items i on i.selection_id=ps.id and i.business_id=ps.business_id and i.store_id=ps.store_id where ps.business_id=$1 and ps.store_id=$2 and ps.status='confirmed'`,[businessId,storeId])).rows;
+    const products=(await client.query(`select i.product_id,p.wb_article::text nm_id from mc.product_selections ps
+      join mc.product_selection_items i on i.selection_id=ps.id and i.business_id=ps.business_id and i.store_id=ps.store_id
+      join mc.products p on p.business_id=i.business_id and p.store_id=i.store_id and p.id=i.product_id
+      where ps.business_id=$1 and ps.store_id=$2 and ps.status='confirmed'`,[businessId,storeId])).rows;
     if(!products.length)return {queued:0,status:'unavailable'};
     await client.query(`insert into mc.sync_streams(business_id,store_id,source_type,status,next_run_at) values($1,$2,'operational_sales_funnel','active',now()) on conflict(store_id,source_type) do nothing`,[businessId,storeId]);
     const stream=(await client.query(`select id,status from mc.sync_streams where business_id=$1 and store_id=$2 and source_type='operational_sales_funnel' for update`,[businessId,storeId])).rows[0];
@@ -333,10 +398,20 @@ export async function requestOperationalRangeRefresh(userId,storeId,start,end,{n
       if(lastRun?.status!=='failed'||lastRun.error_code!=='operational_invalid_request'||(!store.scopes?.includes('analytics')||!store.scopes?.includes('statistics')))return {queued:0,status:'blocked',errorCode:lastRun?.error_code??'operational_scope_missing'};
       await client.query(`update mc.sync_streams set status='active',next_run_at=now() where id=$1`,[stream.id]);
     }
+    // A newly confirmed financial report upgrades an existing operational day
+    // locally, including dates older than Statistics' retention window.
+    const financialRows=await readFinancialReturnsCache(client,businessId,storeId,products.map(product=>({nmId:product.nm_id})),
+      {dateFrom:earliest,dateTo:range.end,today:range.today});
+    const financialByDate=new Map();
+    for(const metric of financialRows){const covered=financialByDate.get(metric.date)??new Set();covered.add(String(metric.nmId));financialByDate.set(metric.date,covered);}
+    const financialDates=[...financialByDate].filter(([,covered])=>products.every(product=>covered.has(String(product.nm_id)))).map(([date])=>date);
     const queued=await client.query(`insert into mc.operational_range_requests(business_id,store_id,metric_date,status,requested_at)
       select $1,$2,day::date,'pending',$6::timestamptz from generate_series($3::date,$4::date,interval '1 day') day
-      where (select count(*) from mc.current_operational_daily_metrics m where m.business_id=$1 and m.store_id=$2 and m.metric_date=day::date and m.product_id=any($5::uuid[]) and m.available and (day::date<$7::date-89 or m.return_count is not null and m.return_amount is not null) and m.fetched_at>=$6::timestamptz-case when day::date=$7::date then interval '1 hour' else interval '24 hours' end)<cardinality($5::uuid[])
-      on conflict(store_id,metric_date) do update set status='pending',retryable=false,requested_at=excluded.requested_at where mc.operational_range_requests.status in ('complete','failed')`,[businessId,storeId,earliest,range.end,products.map(row=>row.product_id),now,range.today]);
+      where (select count(*) from mc.current_operational_daily_metrics m where m.business_id=$1 and m.store_id=$2 and m.metric_date=day::date and m.product_id=any($5::uuid[]) and m.available
+        and (case when day::date=any($8::date[]) then m.return_source='financial_report' and m.return_count is not null and m.return_amount is not null
+          else day::date<$7::date-89 or m.return_count is not null and m.return_amount is not null end)
+        and (day::date<$7::date or m.fetched_at>=$6::timestamptz-interval '1 hour'))<cardinality($5::uuid[])
+      on conflict(store_id,metric_date) do update set status='pending',retryable=false,requested_at=excluded.requested_at where mc.operational_range_requests.status in ('complete','failed')`,[businessId,storeId,earliest,range.end,products.map(row=>row.product_id),now,range.today,financialDates]);
     await client.query(`insert into mc.sync_streams(business_id,store_id,source_type,status,next_run_at) values($1,$2,'operational_sales_funnel','active',now()) on conflict(store_id,source_type) do update set next_run_at=case when $3::int>0 then now() else mc.sync_streams.next_run_at end where mc.sync_streams.status='active'`,[businessId,storeId,queued.rowCount]);
     const pendingDays=(await client.query(`select count(*)::int count from mc.operational_range_requests where business_id=$1 and store_id=$2 and status='pending' and metric_date between $3 and $4`,[businessId,storeId,earliest,range.end])).rows[0].count;
     return {queued:queued.rowCount,pendingDays,status:pendingDays?'pending':'current'};
@@ -352,13 +427,13 @@ export function operationalReturnsRequired(date,now=new Date()){
   return calendarDay(date).number>=calendarDay(today).number-89;
 }
 
-export function deriveOperationalProgress({start,end,completeDays=0,pendingDays=0,failedDays=0,retryableDays=0,retryEligible=false,nextRunAt=null,run=null,blocked=false,errorCode=null,selected=true,factory=false,now=new Date()}={}){
+export function deriveOperationalProgress({start,end,completeDays=0,pendingDays=0,failedDays=0,retryableDays=0,retryEligible=false,nextRunAt=null,run=null,blocked=false,waitingFinancial=false,errorCode=null,selected=true,factory=false,now=new Date()}={}){
   const totalDays=calendarDay(end).number-calendarDay(start).number+1;
   const missingDays=Math.max(0,totalDays-completeDays-pendingDays-failedDays);
   const overlaps=run&&String(run.requested_from).slice(0,10)<=end&&String(run.requested_to).slice(0,10)>=start;
   const live=overlaps&&run.status==='running'&&new Date(run.started_at).getTime()>now.getTime()-30*60*1000;
-  const status=blocked?'blocked':factory&&!selected?'waiting_selection':live?'running':pendingDays?'pending':failedDays?'failed':missingDays?'unavailable':'current';
-  const retryScheduled=retryableDays>0&&retryEligible&&!blocked&&selected&&nextRunAt!=null&&Number.isFinite(new Date(nextRunAt).getTime());
+  const status=blocked?'blocked':waitingFinancial?'waiting_financial':factory&&!selected?'waiting_selection':live?'running':pendingDays?'pending':failedDays?'failed':missingDays?'unavailable':'current';
+  const retryScheduled=retryableDays>0&&retryEligible&&!blocked&&!waitingFinancial&&selected&&nextRunAt!=null&&Number.isFinite(new Date(nextRunAt).getTime());
   return {start,end,totalDays,completeDays,pendingDays,failedDays,missingDays,status,retryScheduled,
     runFrom:live?String(run.requested_from).slice(0,10):null,runTo:live?String(run.requested_to).slice(0,10):null,
     startedAt:live?run.started_at:null,finishedAt:overlaps&&!live?run.finished_at??null:null,
@@ -366,6 +441,7 @@ export function deriveOperationalProgress({start,end,completeDays=0,pendingDays=
 }
 
 async function readOperationalProgress(client,businessId,storeId,range,products,rows,now){
+  const waitingFinancial=(await client.query(`select mc.operational_financial_bootstrap_waiting($1) waiting`,[storeId])).rows[0].waiting;
   const returnsStart=new Date((calendarDay(range.today).number-89)*dayMs).toISOString().slice(0,10);
   const clippedStart=operationalRefreshStart(range);
   const outOfRange=clippedStart>range.end;
@@ -396,7 +472,7 @@ async function readOperationalProgress(client,businessId,storeId,range,products,
   const blocked=state?.status==='blocked'||Boolean(state&& (!state.scopes?.includes('analytics')||!state.scopes?.includes('statistics')));
   const errorCode=!state?.scopes?.includes('analytics')?'operational_scope_missing':!state?.scopes?.includes('statistics')?'operational_statistics_scope_missing':state?.error_code;
   const retryEligible=state?.status==='active'&&state?.store_status==='active'&&state?.scopes?.includes('analytics')&&state?.scopes?.includes('statistics');
-  const updateStatus=deriveOperationalProgress({start,end:range.end,completeDays,pendingDays,failedDays,retryableDays,retryEligible,nextRunAt:state?.next_run_at,selected:products.length>0,blocked,errorCode,run:await runFor(start,range.end),now});
+  const updateStatus=deriveOperationalProgress({start,end:range.end,completeDays,pendingDays,failedDays,retryableDays,retryEligible,nextRunAt:state?.next_run_at,selected:products.length>0,blocked,waitingFinancial,errorCode,run:await runFor(start,range.end),now});
   if(outOfRange&&updateStatus.status==='unavailable')updateStatus.errorCode='operational_history_out_of_range';
   const factoryRows=marker&&products.length?(await client.query(`select product_id,metric_date::text,available,return_count,return_amount
     from mc.current_operational_daily_metrics where business_id=$1 and store_id=$2 and metric_date between $3 and $4
@@ -411,7 +487,7 @@ async function readOperationalProgress(client,businessId,storeId,range,products,
     pendingDays:requests.filter(row=>row.metric_date>=marker.start&&row.metric_date<=marker.end&&!factoryComplete(row)&&row.status==='pending').length,
     failedDays:requests.filter(row=>row.metric_date>=marker.start&&row.metric_date<=marker.end&&!factoryComplete(row)&&row.status==='failed').length,
     retryableDays:requests.filter(row=>row.metric_date>=marker.start&&row.metric_date<=marker.end&&!factoryComplete(row)&&row.status==='failed'&&row.retryable).length,
-    retryEligible,nextRunAt:state?.next_run_at,blocked,errorCode,selected:products.length>0,factory:true,run:await runFor(marker.start,marker.end),now}):null;
+    retryEligible,nextRunAt:state?.next_run_at,blocked,waitingFinancial,errorCode,selected:products.length>0,factory:true,run:await runFor(marker.start,marker.end),now}):null;
   return updateStatus;
 }
 
@@ -433,7 +509,8 @@ export async function getOperationalOverviewData(userId,storeId,options={}){
     const rows=(await client.query(
       `select m.product_id,m.metric_date::text,m.snapshot_id,m.currency,m.available,
               m.order_count::text,m.order_amount::text,m.buyout_count::text,m.buyout_amount::text,
-              m.quality,m.missing_reasons,m.fetched_at,m.accepted_at,m.cancel_count::text,m.cancel_amount::text,m.return_count::text,m.return_amount::text
+              m.quality,m.missing_reasons,m.fetched_at,m.accepted_at,m.cancel_count::text,m.cancel_amount::text,m.return_count::text,m.return_amount::text,
+              m.return_source,m.return_date_basis,m.return_amount_basis,m.return_source_refs
          from mc.current_operational_daily_metrics m
         where m.business_id=$1 and m.store_id=$2
           and m.product_id=any($3::uuid[])
@@ -456,7 +533,10 @@ export async function getOperationalOverviewData(userId,storeId,options={}){
           and not exists(select 1 from mc.operational_snapshot_products sp where sp.snapshot_id=s.id and not(sp.product_id=any($3::uuid[])))
       ) select m.product_id,c.metric_date::text,c.snapshot_id,m.currency,true available,
           m.order_count::text,m.order_amount::text,m.buyout_count::text,m.buyout_amount::text,
-          'complete' quality,'[]'::jsonb missing_reasons,c.fetched_at,c.accepted_at,m.cancel_count::text,m.cancel_amount::text,m.return_count::text,m.return_amount::text
+          'complete' quality,'[]'::jsonb missing_reasons,c.fetched_at,c.accepted_at,m.cancel_count::text,m.cancel_amount::text,
+          case when m.return_source='financial_report' and not mc.operational_financial_return_refs_current(m.business_id,m.store_id,m.return_source_refs) then null else m.return_count::text end return_count,
+          case when m.return_source='financial_report' and not mc.operational_financial_return_refs_current(m.business_id,m.store_id,m.return_source_refs) then null else m.return_amount::text end return_amount,
+          m.return_source,m.return_date_basis,m.return_amount_basis,m.return_source_refs
         from candidates c join mc.operational_daily_metrics m on m.business_id=c.business_id and m.store_id=c.store_id and m.snapshot_id=c.snapshot_id and m.metric_date=c.metric_date
         where c.rank=1 order by c.metric_date,m.product_id`,[businessId,storeId,current.product_ids,range.start,range.end]
     )).rows;

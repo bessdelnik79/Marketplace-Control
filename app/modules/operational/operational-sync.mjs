@@ -6,6 +6,7 @@ import {
 } from '../../infrastructure/storage/operational-source-storage.mjs';
 import {
   beginOperationalSync,
+  getOperationalCachedSources,
   reserveOperationalRequestSlot,
   reserveOperationalPurchasedReturnsSlot,
   updateOperationalSyncProgress,
@@ -28,6 +29,7 @@ const knownErrors = new Set([
   'operational_duplicate_nm_id',
   'operational_invalid_request',
   'operational_statistics_scope_missing',
+  'operational_financial_cache_changed',
   'operational_returns_unavailable',
   'operational_returns_invalid_response',
   'operational_returns_duplicate_conflict',
@@ -72,6 +74,7 @@ const knownErrors = new Set([
 
 const defaultOperations = {
   begin: beginOperationalSync,
+  cached: getOperationalCachedSources,
   reserve: reserveOperationalRequestSlot,
   reserveReturns: reserveOperationalPurchasedReturnsSlot,
   progress: updateOperationalSyncProgress,
@@ -176,81 +179,66 @@ export async function runOperationalSync(userId, storeId, {
     range={dateFrom:job.date_from,dateTo:job.date_to};
     if(!job.scopes?.includes('statistics'))throw failure('operational_statistics_scope_missing');
     const products = selectedProducts(job);
-    const token = operationalToken(
-      operations.decrypt({ ciphertext: job.ciphertext, nonce: job.nonce, authTag: job.auth_tag }),
-      job,
-      clock()
-    );
-    const documentId = operations.randomUUID();
-    snapshotId = operations.randomUUID();
-    const productBatches = batches(products), objects = [], metrics = [];
-    let missingCount = 0;
-
-    for (const [partNumber, productBatch] of productBatches.entries()) {
-      const response = await operations.load(token, {
-        nmIds: productBatch.map(product => product.nmId),
-        dateFrom: job.date_from,
-        dateTo: job.date_to,
-        now: clock(),
-        clock,
-        fetchImpl,
-        beforeRequest: async request => {
-          const slot = await operations.reserve(userId, job, rateDelaySeconds);
-          if (!slot || !Number.isFinite(slot.waitMs) || slot.waitMs < 0) throw failure('operational_invalid_rate_slot');
-          const progress={batches:partNumber,batchCount:productBatches.length,rows:metrics.length,requestFrom:request?.dateFrom??job.date_from,requestTo:request?.dateTo??job.date_to};
-          if (slot.waitMs > 0){
-            await operations.progress(userId,job,{...progress,stage:'rate_wait',nextRequestAt:slot.scheduledAt??new Date(clock().getTime()+slot.waitMs).toISOString()});
-            await waitImpl(slot.waitMs);
-          }
+    await operations.progress(userId,job,{stage:'checking_cache',rows:0});
+    const cached=await operations.cached(userId,job,{now:clock()});
+    if(!Array.isArray(cached?.funnelRows)||!Array.isArray(cached?.returnsRows))throw failure('operational_invalid_result');
+    const key=row=>String(row.nmId)+':'+row.date;
+    const funnel=new Map(cached.funnelRows.map(row=>[key(row),row])),returned=new Map(cached.returnsRows.map(row=>[key(row),row]));
+    if(funnel.size!==cached.funnelRows.length||returned.size!==cached.returnsRows.length)throw failure('operational_duplicate_row');
+    const days=[];for(let day=Date.parse(job.date_from);day<=Date.parse(job.date_to);day+=DAY_MS)days.push(new Date(day).toISOString().slice(0,10));
+    const requests=[];
+    if(!funnel.size)for(const productBatch of batches(products))requests.push({products:productBatch,dateFrom:job.date_from,dateTo:job.date_to});
+    else for(const date of days)for(const productBatch of batches(products.filter(product=>!funnel.has(key({nmId:product.nmId,date})))))requests.push({products:productBatch,dateFrom:date,dateTo:date});
+    const today=operationalRollingMoscowRange(clock()).dateTo,retentionFrom=Date.parse(today)-89*DAY_MS;
+    const returnRequests=[];
+    for(const date of days){
+      if(Date.parse(date)<retentionFrom)continue;
+      const missing=products.filter(product=>!returned.has(key({nmId:product.nmId,date}))).map(product=>product.nmId);
+      if(!missing.length)continue;
+      const previous=returnRequests.at(-1);
+      if(previous&&Date.parse(date)-Date.parse(previous.dateTo)===DAY_MS&&JSON.stringify(previous.nmIds)===JSON.stringify(missing))previous.dateTo=date;
+      else returnRequests.push({nmIds:missing,dateFrom:date,dateTo:date});
+    }
+    let token;
+    if(requests.length||returnRequests.length)token=operationalToken(operations.decrypt({ciphertext:job.ciphertext,nonce:job.nonce,authTag:job.auth_tag}),job,clock());
+    const documentId=operations.randomUUID();snapshotId=operations.randomUUID();
+    const objects=[],metrics=[...funnel.values()];let missingCount=0;
+    const storeRaw=async response=>objects.push(await operations.store({businessId:job.business_id,storeId:job.store_id,snapshotId,
+      partNumber:objects.length,raw:response.raw,checksum:response.rawChecksum,...storageOptions(sourceRoot,masterKey)}));
+    if(funnel.size||returned.size)await storeRaw(cached);
+    for(const [index,request] of requests.entries()){
+      const response=await operations.load(token,{
+        nmIds:request.products.map(product=>product.nmId),dateFrom:request.dateFrom,dateTo:request.dateTo,now:clock(),clock,fetchImpl,
+        beforeRequest:async day=>{
+          const slot=await operations.reserve(userId,job,rateDelaySeconds);
+          if(!slot||!Number.isFinite(slot.waitMs)||slot.waitMs<0)throw failure('operational_invalid_rate_slot');
+          const progress={batches:index,batchCount:requests.length,rows:metrics.length,requestFrom:day?.dateFrom??request.dateFrom,requestTo:day?.dateTo??request.dateTo};
+          if(slot.waitMs>0){await operations.progress(userId,job,{...progress,stage:'rate_wait',nextRequestAt:slot.scheduledAt??new Date(clock().getTime()+slot.waitMs).toISOString()});await waitImpl(slot.waitMs);}
           await operations.progress(userId,job,{...progress,stage:'fetching',requestStartedAt:clock().toISOString()});
         }
       });
-      const stored = await operations.store({
-        businessId: job.business_id,
-        storeId: job.store_id,
-        snapshotId,
-        partNumber,
-        raw: response.raw,
-        checksum: response.rawChecksum,
-        ...storageOptions(sourceRoot, masterKey)
-      });
-      objects.push(stored);
-      metrics.push(...response.rows);
-      missingCount += response.missing.length;
-      await operations.progress(userId, job, {
-        stage: 'loading',
-        batches: partNumber + 1,
-        batchCount: productBatches.length,
-        products: Math.min((partNumber + 1) * batchSize, products.length),
-        rows: metrics.length,
-        missing: missingCount
-      });
+      await storeRaw(response);metrics.push(...response.rows);missingCount+=response.missing.length;
+      await operations.progress(userId,job,{stage:'loading',batches:index+1,batchCount:requests.length,products:products.length,rows:metrics.length,missing:missingCount});
     }
-
-    const returns=await operations.loadReturns(token,{
-      nmIds:products.map(product=>product.nmId),dateFrom:job.date_from,dateTo:job.date_to,now:clock(),clock,fetchImpl,
-      beforeRequest:async request=>{
+    for(const request of returnRequests){
+      const response=await operations.loadReturns(token,{...request,now:clock(),clock,fetchImpl,beforeRequest:async day=>{
         const slot=await operations.reserveReturns(userId,job,65);
         if(!slot||!Number.isFinite(slot.waitMs)||slot.waitMs<0)throw failure('operational_invalid_rate_slot');
-        const progress={batches:objects.length,batchCount:productBatches.length+1,rows:metrics.length,source:'purchased_returns',requestFrom:request?.dateFrom??job.date_from,requestTo:request?.dateTo??job.date_to};
-        if(slot.waitMs>0){
-          await operations.progress(userId,job,{...progress,stage:'rate_wait',nextRequestAt:slot.scheduledAt??new Date(clock().getTime()+slot.waitMs).toISOString()});
-          await waitImpl(slot.waitMs);
-        }
+        const progress={batches:objects.length,batchCount:requests.length+returnRequests.length,rows:metrics.length,source:'purchased_returns',requestFrom:day?.dateFrom??request.dateFrom,requestTo:day?.dateTo??request.dateTo};
+        if(slot.waitMs>0){await operations.progress(userId,job,{...progress,stage:'rate_wait',nextRequestAt:slot.scheduledAt??new Date(clock().getTime()+slot.waitMs).toISOString()});await waitImpl(slot.waitMs);}
         await operations.progress(userId,job,{...progress,stage:'fetching',requestStartedAt:clock().toISOString()});
-      }
-    });
-    objects.push(await operations.store({businessId:job.business_id,storeId:job.store_id,snapshotId,
-      partNumber:productBatches.length,raw:returns.raw,checksum:returns.rawChecksum,...storageOptions(sourceRoot,masterKey)}));
-    const byReturn=new Map(returns.rows.map(row=>[`${row.nmId}:${row.date}`,row]));
-    if(byReturn.size!==returns.rows.length)throw failure('operational_duplicate_row');
+      }});
+      await storeRaw(response);
+      for(const row of response.rows){if(returned.has(key(row)))throw failure('operational_duplicate_row');returned.set(key(row),{...row,returnSource:'statistics_sales',returnDateBasis:'return_event_date',returnAmountBasis:'price_with_discount'});}
+    }
     for(const metric of metrics){
-      const returned=byReturn.get(`${metric.nmId}:${metric.date}`);
-      metric.returnCount=returned?.returnCount??null;
-      metric.returnSum=returned?.returnSum??null;
+      const returnedRow=returned.get(key(metric));
+      metric.returnCount=returnedRow?.returnCount??null;metric.returnSum=returnedRow?.returnSum??null;
+      metric.returnSource=returnedRow?.returnSource??null;metric.returnDateBasis=returnedRow?.returnDateBasis??null;
+      metric.returnAmountBasis=returnedRow?.returnAmountBasis??null;metric.returnSourceRefs=returnedRow?.returnSourceRefs??null;
     }
     await operations.progress(userId, job, {
-      stage: 'saving', batches: objects.length, batchCount: productBatches.length,
+      stage: 'saving', batches: objects.length, batchCount: objects.length,
       products: products.length, rows: metrics.length, missing: missingCount
     });
     const completed = await operations.complete(userId, job, {

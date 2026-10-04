@@ -205,3 +205,8 @@ test('initial history status exposes selection waiting, failure and completion w
  assert.equal(operationalLoadStatus({status:'current',totalDays:35,completeDays:35}),'');
  assert.equal(operationalLoadStatus({status:'current',totalDays:30,completeDays:30},{factory:true}),'');
 });
+
+test('operational bootstrap explains waiting for financial data rather than a WB rate pause',()=>{
+ const html=operationalLoadStatus({status:'waiting_financial',totalDays:30});
+ assert.match(html,/Ожидаем финансовых отчётов/);assert.match(html,/Сначала загружаем финансовую историю/);assert.doesNotMatch(html,/Ожидаем лимит/);
+});

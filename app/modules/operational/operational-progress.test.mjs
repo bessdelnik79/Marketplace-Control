@@ -38,6 +38,13 @@ test('day counts, failures and global selection/access waits are explicit',()=>{
   assert.equal(deriveOperationalProgress({...base,factory:true,blocked:true}).status,'blocked');
 });
 
+test('initial financial factory wait precedes selection and retry but never hides blocked access',()=>{
+  assert.equal(deriveOperationalProgress({...base,waitingFinancial:true}).status,'waiting_financial');
+  assert.equal(deriveOperationalProgress({...base,waitingFinancial:true,factory:true,selected:false}).status,'waiting_financial');
+  assert.equal(deriveOperationalProgress({...base,waitingFinancial:true,blocked:true}).status,'blocked');
+  assert.equal(deriveOperationalProgress({...base,waitingFinancial:true,retryableDays:1,retryEligible:true,nextRunAt:now}).retryScheduled,false);
+});
+
 test('unqueued missing days are unavailable and planning/read coverage share year clip',()=>{
   const missing=deriveOperationalProgress({...base,pendingDays:0});
   assert.equal(missing.status,'unavailable');assert.equal(missing.missingDays,5);

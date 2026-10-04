@@ -73,7 +73,7 @@
 
       }catch{if(Date.now()-startedAt<1800000)timer=setTimeout(check,10000);}
     }
-    if(refresh||panel.dataset.operationalRetry==='true'||['pending','running'].includes(panel.dataset.operationalUpdate)||['pending','running'].includes(panel.dataset.operationalFactoryUpdate))timer=setTimeout(check,refresh?0:10000);
+    if(refresh||panel.dataset.operationalRetry==='true'||['pending','running','waiting_financial'].includes(panel.dataset.operationalUpdate)||['pending','running','waiting_financial'].includes(panel.dataset.operationalFactoryUpdate))timer=setTimeout(check,refresh?0:10000);
   }
   initializeRangePickers();
   const financialCalculation=$('[data-financial-update]'),financialPollKey=`mc-financial-poll:${location.pathname}${location.search}`,financialPollStorage={get(){try{return sessionStorage.getItem(financialPollKey)}catch{return null}},set(value){try{sessionStorage.setItem(financialPollKey,value)}catch{}},remove(){try{sessionStorage.removeItem(financialPollKey)}catch{}}};

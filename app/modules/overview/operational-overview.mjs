@@ -138,6 +138,13 @@ export function buildOperationalOverview(data){
       const saved=fresh.length<products.length?rowsForDate(savedReturnRows,date,products):null;
       currentRows.push(...(saved??fresh));
     }
+    const method=row=>String(row.return_date_basis??'return_event_date')+'|'+String(row.return_amount_basis??'price_with_discount');
+    const methods=new Set(currentRows.map(method)),hasFinancial=currentRows.some(row=>row.return_source==='financial_report');
+    if(hasFinancial)result.returnData.sourceLabel=methods.size>1?'Финансовые и оперативные данные · разные даты учёта':'Подтверждено финансовыми отчётами · по дате учёта WB';
+    const baselineRows=returnRows.filter(row=>row.available&&products.includes(row.product_id)&&row.metric_date<start&&dayNumber(row.metric_date)>=dayNumber(start)-4*(dayNumber(end)-dayNumber(start)+1));
+    if(result.returnData.comparison.available&&new Set([...currentRows,...baselineRows].map(method)).size>1){
+      result.returnData.comparison={available:false,periods:0,reason:'operational_return_methods_differ',returns:null,dailySeries:[]};
+    }
     const amountPending=row=>row.available&&row.return_count!=null&&row.return_amount==null;
     const currentPending=currentRows.filter(amountPending);
     const days=dayNumber(end)-dayNumber(start)+1;

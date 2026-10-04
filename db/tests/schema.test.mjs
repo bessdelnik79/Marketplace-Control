@@ -43,7 +43,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,69);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,71);
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.recover_historical_catalog(uuid,uuid)'::regprocedure"));
   const transportRoundingDefinition=(await one(
   `select pg_get_functiondef(
@@ -402,6 +402,9 @@ assert.match(
   }
   await rejects('insert into mc.operational_daily_metrics(business_id,store_id,snapshot_id,product_id,metric_date,currency,order_count,order_amount,buyout_count,buyout_amount,row_checksum,return_amount) select business_id,store_id,snapshot_id,product_id,metric_date,currency,order_count,order_amount,buyout_count,buyout_amount,row_checksum,1 from mc.operational_daily_metrics where snapshot_id=$1 limit 1',[operationalSnapshot.id],/check constraint/,'purchased return amount requires a known event count');
   assert.deepEqual(await one('select return_count::int n,return_amount from mc.operational_daily_metrics where snapshot_id=$1 and return_count=1 limit 1',[operationalSnapshot.id]),{n:1,return_amount:null});
+  await rejects(`insert into mc.operational_daily_metrics(business_id,store_id,snapshot_id,product_id,metric_date,currency,order_count,order_amount,buyout_count,buyout_amount,row_checksum,return_count,return_source,return_date_basis,return_amount_basis)
+    select business_id,store_id,snapshot_id,product_id,metric_date,currency,order_count,order_amount,buyout_count,buyout_amount,row_checksum,1,null,'accounting_date','retail_price_with_discount'
+    from mc.operational_daily_metrics where snapshot_id=$1 limit 1`,[operationalSnapshot.id],/check constraint/,'return date and amount bases require an explicit source');
   await q("update mc.operational_snapshots set status='validated' where id=$1",[operationalSnapshot.id]);
   await q("update mc.operational_snapshots set status='accepted',accepted_at=now() where id=$1",[operationalSnapshot.id]);
   await insert('operational_snapshot_activations',{business_id:b.id,store_id:store.id,operational_period_id:operationalPeriod.id,snapshot_id:operationalSnapshot.id,document_id:operationalDocument.id,fetched_at:new Date()});
@@ -411,6 +414,10 @@ assert.match(
   await rejects('update mc.operational_daily_metrics set order_count=0 where snapshot_id=$1',[operationalSnapshot.id],/immutable/,'accepted operational daily metrics are immutable');
   const legacyReturn=(await one('select return_count,return_amount from mc.current_operational_daily_metrics where snapshot_id=$1 and return_count is null limit 1',[operationalSnapshot.id]));
   assert.deepEqual(legacyReturn,{return_count:null,return_amount:null});
+  const returnColumns=await q(`select column_name from information_schema.columns where table_schema='mc' and table_name='operational_daily_metrics' and column_name like 'return_%'`);
+  for(const column of ['return_source','return_date_basis','return_amount_basis','return_source_refs'])assert.ok(returnColumns.some(row=>row.column_name===column));
+  assert.equal((await one(`select mc.operational_financial_return_refs_current($1,$2,'{}'::jsonb) valid`,[b.id,store.id])).valid,false);
+  pass('operational return source metadata requires current tenant financial evidence');
   await rejects('update mc.operational_daily_metrics set return_count=0,return_amount=0 where snapshot_id=$1',[operationalSnapshot.id],/immutable/,'old accepted snapshots cannot be relabeled as zero purchased returns');
   await rejects('update mc.operational_periods set current_snapshot_id=null where id=$1',[operationalPeriod.id],/cannot be cleared/,'accepted operational current pointer cannot be cleared');
 

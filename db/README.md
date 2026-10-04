@@ -163,3 +163,12 @@ COSTS_INTEGRATION_DATABASE_URL=postgresql:///marketplace_control_costs_test node
 ```
 
 Используйте отдельную одноразовую PostgreSQL-БД с `test` в имени. Сценарий проверяет публичные методы `getCostState` и `importVariantCosts`: точные суммы, версии, повторную загрузку, атомарность ошибочного импорта и права доступа. Он запускается отдельно от `npm --prefix db test`; итоговый прогон выполняется на VM.
+
+Приоритет подтверждённых финансовых возвратов и ожидание финансовой истории нового магазина проверяются в двух отдельных одноразовых PostgreSQL-БД обычной ролью без SUPERUSER/BYPASSRLS:
+
+```sh
+OPERATIONAL_CACHE_INTEGRATION_DATABASE_URL=postgresql:///marketplace_control_operational_cache_test node db/tests/operational-financial-cache.integration.mjs
+OPERATIONAL_BOOTSTRAP_INTEGRATION_DATABASE_URL=postgresql:///marketplace_control_operational_bootstrap_test node db/tests/operational-financial-bootstrap.integration.mjs
+```
+
+Сценарии проверяют точные report/version/normalization ссылки, подтверждённые нулевые возвраты, смену исходника и catalog revision, tenant isolation, полный годовой bootstrap, запрет обхода через force и сохранение готовности после Monday refresh.

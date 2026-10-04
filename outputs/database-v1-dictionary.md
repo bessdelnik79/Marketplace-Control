@@ -1532,6 +1532,10 @@
 | cancel_amount | numeric(20,4) | да | — |
 | return_count | bigint | да | — |
 | return_amount | numeric(20,4) | да | — |
+| return_source | text | да | — |
+| return_date_basis | text | да | — |
+| return_amount_basis | text | да | — |
+| return_source_refs | jsonb | да | — |
 
 Ограничения и связи:
 
@@ -1547,11 +1551,16 @@
 - `CHECK ((order_amount >= (0)::numeric))`
 - `CHECK ((order_count >= 0))`
 - `PRIMARY KEY (id)`
+- `CHECK ((return_amount_basis = ANY (ARRAY['retail_price_with_discount'::text, 'price_with_discount'::text])))`
 - `CHECK ((return_amount >= (0)::numeric))`
 - `CHECK ((return_count >= 0))`
+- `CHECK ((return_date_basis = ANY (ARRAY['accounting_date'::text, 'return_event_date'::text])))`
+- `CHECK ((return_source = ANY (ARRAY['financial_report'::text, 'statistics_sales'::text])))`
+- `CHECK (((return_source_refs IS NULL) OR (jsonb_typeof(return_source_refs) = 'object'::text)))`
 - `CHECK ((row_checksum ~ '^[0-9a-f]{64}$'::text))`
 - `UNIQUE (snapshot_id, product_id, metric_date)`
 - `CHECK (((return_amount IS NULL) OR (return_count IS NOT NULL)))`
+- `CHECK (COALESCE((((return_source IS NULL) AND (return_date_basis IS NULL) AND (return_amount_basis IS NULL) AND (return_source_refs IS NULL)) OR ((return_count IS NOT NULL) AND (return_source = 'statistics_sales'::text) AND (return_date_basis = 'return_event_date'::text) AND (return_amount_basis = 'price_with_discount'::text)) OR ((return_count IS NOT NULL) AND (return_source = 'financial_report'::text) AND (return_date_basis = 'accounting_date'::text) AND (return_amount_basis = 'retail_price_with_discount'::text) AND (return_source_refs IS NOT NULL) AND (return_source_refs ? 'coverageId'::text) AND (jsonb_typeof((return_source_refs -> 'inventory'::text)) = 'array'::text))), false))`
 
 ## operational_history_factories
 
@@ -1562,6 +1571,10 @@
 | period_start | date | нет | — |
 | period_end | date | нет | — |
 | requested_at | timestamp with time zone | нет | now() |
+| financial_ready_at | timestamp with time zone | да | — |
+| financial_bootstrap_generation | bigint | да | — |
+| financial_bootstrap_from | date | да | — |
+| financial_bootstrap_to | date | да | — |
 
 Ограничения и связи:
 
