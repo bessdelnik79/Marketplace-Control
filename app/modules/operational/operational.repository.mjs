@@ -302,13 +302,18 @@ export async function requestOperationalRangeRefresh(userId,storeId,start,end,{n
   return withOwnedBusinessContext(userId,async(client,businessId,role)=>{
     if(!['owner','editor'].includes(role))throw new Error('operational_refresh_forbidden');
     await client.query(`select 1 from mc.businesses where id=$1 for share`,[businessId]);
-    const store=(await client.query(`select s.id from mc.stores s join mc.connections c on c.business_id=s.business_id and c.store_id=s.id and c.status='active' where s.business_id=$1 and s.id=$2 and s.status='active' and s.marketplace_code='wb'`,[businessId,storeId])).rows[0];
+    const store=(await client.query(`select s.id,c.scopes from mc.stores s join mc.connections c on c.business_id=s.business_id and c.store_id=s.id and c.status='active' where s.business_id=$1 and s.id=$2 and s.status='active' and s.marketplace_code='wb'`,[businessId,storeId])).rows[0];
     if(!store)throw new Error('operational_connection_unavailable');
     if(earliest>range.end)return {queued:0,pendingDays:0,status:'unavailable',errorCode:'operational_history_out_of_range'};
     const products=(await client.query(`select i.product_id from mc.product_selections ps join mc.product_selection_items i on i.selection_id=ps.id and i.business_id=ps.business_id and i.store_id=ps.store_id where ps.business_id=$1 and ps.store_id=$2 and ps.status='confirmed'`,[businessId,storeId])).rows;
     if(!products.length)return {queued:0,status:'unavailable'};
     await client.query(`insert into mc.sync_streams(business_id,store_id,source_type,status,next_run_at) values($1,$2,'operational_sales_funnel','active',now()) on conflict(store_id,source_type) do nothing`,[businessId,storeId]);
-    await client.query(`select id from mc.sync_streams where business_id=$1 and store_id=$2 and source_type='operational_sales_funnel' for update`,[businessId,storeId]);
+    const stream=(await client.query(`select id,status from mc.sync_streams where business_id=$1 and store_id=$2 and source_type='operational_sales_funnel' for update`,[businessId,storeId])).rows[0];
+    if(stream.status==='blocked'){
+      const lastRun=(await client.query(`select status,error_code from mc.sync_runs where stream_id=$1 order by created_at desc,id desc limit 1`,[stream.id])).rows[0];
+      if(lastRun?.status!=='failed'||lastRun.error_code!=='operational_invalid_request'||!store.scopes?.includes('analytics'))return {queued:0,status:'blocked',errorCode:lastRun?.error_code??'operational_scope_missing'};
+      await client.query(`update mc.sync_streams set status='active',next_run_at=now() where id=$1`,[stream.id]);
+    }
     const queued=await client.query(`insert into mc.operational_range_requests(business_id,store_id,metric_date,status,requested_at)
       select $1,$2,day::date,'pending',$6::timestamptz from generate_series($3::date,$4::date,interval '1 day') day
       where (select count(*) from mc.current_operational_daily_metrics m where m.business_id=$1 and m.store_id=$2 and m.metric_date=day::date and m.product_id=any($5::uuid[]) and m.available and m.cancel_count is not null and m.cancel_amount is not null and m.fetched_at>=$6::timestamptz-case when day::date=$7::date then interval '1 hour' else interval '24 hours' end)<cardinality($5::uuid[])

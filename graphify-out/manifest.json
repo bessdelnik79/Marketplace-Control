@@ -156,15 +156,15 @@
     "semantic_hash": ""
   },
   "app/frontend/pages.mjs": {
-    "mtime": 1791112440.150905,
-    "seen": 1791112494.9888186,
-    "ast_hash": "15150622666aaad309a8511e58b4e4d0",
+    "mtime": 1791113491.9674826,
+    "seen": 1791113846.8922496,
+    "ast_hash": "4907be6f13d96558872d467ecb02d336",
     "semantic_hash": ""
   },
   "app/frontend/pages.test.mjs": {
-    "mtime": 1791112441.248804,
-    "seen": 1791112494.9888217,
-    "ast_hash": "a384e297a10c70fde74ccfd9debd74c6",
+    "mtime": 1791113492.4226408,
+    "seen": 1791113846.892252,
+    "ast_hash": "4b13862163efbfe6782434299c632a3d",
     "semantic_hash": ""
   },
   "app/frontend/public/ui.js": {
@@ -906,21 +906,21 @@
     "semantic_hash": ""
   },
   "app/modules/operational/operational-sync.mjs": {
-    "mtime": 1791111874.0698478,
-    "seen": 1791112494.9960778,
-    "ast_hash": "a32c1c16deb997939d329202b7017ec2",
+    "mtime": 1791113759.8981085,
+    "seen": 1791113846.898683,
+    "ast_hash": "66c7643b1c580f51ae02e19ff16f9045",
     "semantic_hash": ""
   },
   "app/modules/operational/operational-sync.test.mjs": {
-    "mtime": 1791111874.0708227,
-    "seen": 1791112494.9960802,
-    "ast_hash": "174da68d9fe81bc2f856051321ab1106",
+    "mtime": 1791113760.4159102,
+    "seen": 1791113846.8986857,
+    "ast_hash": "2825f1ce3ea189012de67731c2b49f8d",
     "semantic_hash": ""
   },
   "app/modules/operational/operational.repository.mjs": {
-    "mtime": 1791112456.615581,
-    "seen": 1791112494.996082,
-    "ast_hash": "01e90b5a37756532909b918409c28ec4",
+    "mtime": 1791113546.0537567,
+    "seen": 1791113846.8986876,
+    "ast_hash": "191259b58ea933d3e9110ac8651f6c08",
     "semantic_hash": ""
   },
   "app/modules/operational/wb-sales-funnel.mjs": {
@@ -1164,9 +1164,9 @@
     "semantic_hash": ""
   },
   "outputs/p0.4-operational-contract.md": {
-    "mtime": 1791112334.5492744,
-    "seen": 1791112495.0103838,
-    "ast_hash": "33e9b928da7bf54a668dd3a6d5d8a148",
+    "mtime": 1791113542.5431252,
+    "seen": 1791113846.9143593,
+    "ast_hash": "865840b7b7b1699077c9b1b875179755",
     "semantic_hash": ""
   },
   "outputs/p0.4-plan.md": {
@@ -1260,21 +1260,21 @@
     "semantic_hash": ""
   },
   "app/modules/operational/wb-funnel-products.mjs": {
-    "mtime": 1791111874.0698478,
-    "seen": 1791112494.9960845,
-    "ast_hash": "870cebc40da5f418981bc2687c7d3eb2",
+    "mtime": 1791113784.72298,
+    "seen": 1791113846.8986893,
+    "ast_hash": "bc7c5d094ec74ab2553d4a3cc8e9b6ed",
     "semantic_hash": ""
   },
   "app/modules/operational/wb-funnel-products.test.mjs": {
-    "mtime": 1791110368.8516629,
-    "seen": 1791110533.404109,
-    "ast_hash": "1a0ed61b6e68167ae66417c78e8b4e88",
+    "mtime": 1791113785.1846871,
+    "seen": 1791113846.8986914,
+    "ast_hash": "bb8664dfe0589ff5fe789386f4bf79cb",
     "semantic_hash": ""
   },
   "db/tests/operational-returns.integration.mjs": {
-    "mtime": 1791112575.1874454,
-    "seen": 1791112789.913915,
-    "ast_hash": "615a230315800758f147c56f36754e60",
+    "mtime": 1791113603.2237632,
+    "seen": 1791113846.905344,
+    "ast_hash": "d9d0f8dab61bf0860f952d98427f083e",
     "semantic_hash": ""
   },
   "outputs/financial-workflow-changes-2026-10-04.md": {

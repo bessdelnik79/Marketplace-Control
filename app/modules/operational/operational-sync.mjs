@@ -181,6 +181,7 @@ export async function runOperationalSync(userId, storeId, {
         dateFrom: job.date_from,
         dateTo: job.date_to,
         now: clock(),
+        clock,
         fetchImpl,
         beforeRequest: async request => {
           const slot = await operations.reserve(userId, job, rateDelaySeconds);

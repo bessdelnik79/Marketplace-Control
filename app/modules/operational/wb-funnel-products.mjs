@@ -33,12 +33,23 @@ export function normalizeFunnelProducts(payload,{nmIds,date}){
   return {...result,rows:result.rows.map(row=>({...row,...cancelByNm.get(String(row.nmId))}))};
 }
 
-export async function loadWbFunnelProductsDay(token,{nmIds,date,fetchImpl=fetch,beforeRequest=async()=>{}}={}){
+function moscowDay(now){
+  if(!(now instanceof Date)||Number.isNaN(now.getTime()))throw new Error('operational_invalid_clock');
+  const parts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(now).filter(part=>part.type!=='literal').map(part=>[part.type,part.value]));
+  return Date.parse(`${parts.year}-${parts.month}-${parts.day}T00:00:00Z`);
+}
+
+export async function loadWbFunnelProductsDay(token,{nmIds,date,now=new Date(),clock=()=>now,fetchImpl=fetch,beforeRequest=async()=>{}}={}){
   validateCalendarDate(date);
   if(!Array.isArray(nmIds)||!nmIds.length||nmIds.length>1000||nmIds.some(id=>!Number.isSafeInteger(id)||id<=0)||new Set(nmIds).size!==nmIds.length)throw new Error('operational_invalid_nm_ids');
   const day=Date.parse(`${date}T00:00:00Z`);
-  const pastPeriod={start:new Date(day-364*86400000).toISOString().slice(0,10),end:new Date(day-86400000).toISOString().slice(0,10)};
+  const initialToday=moscowDay(now);
+  if(typeof clock!=='function')throw new Error('operational_invalid_clock');
+  if(day<initialToday-364*86400000||day>initialToday)throw new Error('operational_invalid_period');
   await beforeRequest({endpoint:wbFunnelProductsEndpoint,dateFrom:date,dateTo:date,nmIds});
+  const today=moscowDay(clock());
+  if(day<today-364*86400000||day>today)throw new Error('operational_invalid_period');
+  const pastPeriod={start:new Date(Math.max(day-364*86400000,today-365*86400000)).toISOString().slice(0,10),end:new Date(day-86400000).toISOString().slice(0,10)};
   let response;
   try{response=await fetchImpl(wbFunnelProductsEndpoint,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({selectedPeriod:{start:date,end:date},pastPeriod,nmIds,skipDeletedNm:false,limit:1000,offset:0}),signal:AbortSignal.timeout(30000)});}
   catch{throw new Error('operational_unavailable');}
@@ -54,14 +65,13 @@ export async function loadWbFunnelProductsHistory(token,{nmIds,dateFrom,dateTo,n
   validateCalendarDate(dateFrom);validateCalendarDate(dateTo);
   const start=Date.parse(`${dateFrom}T00:00:00Z`),end=Date.parse(`${dateTo}T00:00:00Z`);
   if(end<start||end-start>6*86400000)throw new Error('operational_invalid_period');
-  if(!(now instanceof Date)||Number.isNaN(now.getTime()))throw new Error('operational_invalid_clock');
-  const parts=Object.fromEntries(new Intl.DateTimeFormat('en-US',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(now).filter(part=>part.type!=='literal').map(part=>[part.type,part.value]));
-  const today=Date.parse(`${parts.year}-${parts.month}-${parts.day}T00:00:00Z`);
+  const today=moscowDay(now);
+  if(start<today-364*86400000||end>today)throw new Error('operational_invalid_period');
   const fallbackStart=Math.max(start,today-6*86400000),fallbackEnd=Math.min(end,today);
   const rows=[],missing=[],pages=[];
   for(let day=start;day<=end;day+=86400000){
     const date=new Date(day).toISOString().slice(0,10);
-    const response=await loadWbFunnelProductsDay(token,{nmIds,date,...options});
+    const response=await loadWbFunnelProductsDay(token,{nmIds,date,now,...options});
     rows.push(...response.rows);missing.push(...response.missing);
     pages.push({date,raw:response.raw,checksum:response.rawChecksum});
   }

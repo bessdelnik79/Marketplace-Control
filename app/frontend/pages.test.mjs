@@ -197,6 +197,7 @@ test('operational status distinguishes queued work, active fetch and WB rate wai
  const waiting=operationalLoadStatus({status:'running',progress:{stage:'rate_wait'}});assert.match(waiting,/Ожидаем лимит WB/);
 });
 test('initial history status exposes selection waiting, failure and completion without fake progress',()=>{
+ const invalidRequest=operationalLoadStatus({status:'blocked',errorCode:'operational_invalid_request'});assert.match(invalidRequest,/WB отклонил параметры запроса/);assert.doesNotMatch(invalidRequest,/токен/);
  assert.match(operationalLoadStatus({status:'failed',retryScheduled:true}),/автоматическая повторная попытка/);
  assert.match(operationalLoadStatus({status:'unavailable',errorCode:'operational_history_out_of_range'}),/за пределами доступной истории WB/);
  assert.match(operationalLoadStatus({status:'waiting_selection',totalDays:30},{factory:true}),/после подтверждения выбранных товаров/);

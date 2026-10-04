@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {loadWbFunnelProductsHistory,normalizeFunnelProducts,parseFunnelProductsJson} from './wb-funnel-products.mjs';
+import {loadWbFunnelProductsDay,loadWbFunnelProductsHistory,normalizeFunnelProducts,parseFunnelProductsJson} from './wb-funnel-products.mjs';
 import {wbSalesFunnelHistoryEndpoint} from './wb-sales-funnel.mjs';
 
 function payload(date,{currency='RUB',cancelCount=2,cancelSum='12.3456',nmId='7400001'}={}){
@@ -42,8 +42,8 @@ test('loader makes one request per exact day and preserves every raw response',a
     return {status:200,ok:true,text:async()=>JSON.stringify(data)};
   }});
   assert.equal(calls.length,2);assert.equal(reserves.length,2);assert.equal(response.rows.length,2);
-  assert.deepEqual(calls[0].body,{selectedPeriod:{start:'2026-10-01',end:'2026-10-01'},pastPeriod:{start:'2025-10-02',end:'2026-09-30'},nmIds:[7400001],skipDeletedNm:false,limit:1000,offset:0});
-  assert.deepEqual(calls[1].body.pastPeriod,{start:'2025-10-03',end:'2026-10-01'});
+  assert.deepEqual(calls[0].body,{selectedPeriod:{start:'2026-10-01',end:'2026-10-01'},pastPeriod:{start:'2025-10-04',end:'2026-09-30'},nmIds:[7400001],skipDeletedNm:false,limit:1000,offset:0});
+  assert.deepEqual(calls[1].body.pastPeriod,{start:'2025-10-04',end:'2026-10-01'});
   const stored=JSON.parse(response.raw);
   assert.equal(stored.pages.length,2);
   assert.equal(parseFunnelProductsJson(stored.pages[0].raw).data.currency,'RUB');
@@ -107,14 +107,56 @@ test('missing days in both sources remain missing without zero rows',async()=>{
   assert.equal(JSON.parse(result.raw).fallbackPages.length,1);
 });
 
-test('fallback never requests dates outside the latest seven Moscow calendar days',async()=>{
-  for(const [dateFrom,dateTo] of [['2026-09-20','2026-09-21'],['2026-10-05','2026-10-06']]){
+test('fallback never requests historical dates outside the latest seven Moscow calendar days',async()=>{
+  for(const [dateFrom,dateTo] of [['2026-09-20','2026-09-21']]){
     const calls=[];
     const result=await loadWbFunnelProductsHistory('token',{nmIds:[7400001],dateFrom,dateTo,now:new Date('2026-10-04T00:00:00Z'),fetchImpl:async(url)=>{
       calls.push(url);return {status:200,ok:true,text:async()=>JSON.stringify({data:{currency:'RUB',products:[]}})};
     }});
     assert.equal(calls.length,2);assert.equal(result.missing.length,2);assert.deepEqual(JSON.parse(result.raw).fallbackPages,[]);
   }
+});
+
+test('daily comparison clips history to WB horizon and ends before the selected day',async()=>{
+  const now=new Date('2026-10-03T21:00:00Z'),calls=[];
+  const fetchImpl=async(url,options)=>{
+    const body=JSON.parse(options.body);calls.push(body);
+    return {status:200,ok:true,text:async()=>JSON.stringify(payload(body.selectedPeriod.start))};
+  };
+  for(const date of ['2026-09-28','2025-10-05','2026-10-04'])await loadWbFunnelProductsDay('token',{nmIds:[7400001],date,now,fetchImpl});
+  assert.deepEqual(calls[0].pastPeriod,{start:'2025-10-04',end:'2026-09-27'});
+  assert.deepEqual(calls[1].pastPeriod,{start:'2025-10-04',end:'2025-10-04'});
+  assert.deepEqual(calls[2].pastPeriod,{start:'2025-10-05',end:'2026-10-03'});
+});
+
+test('day and history reject invalid clocks, old and future selected dates before requests',async()=>{
+  const events=[],options={nmIds:[7400001],now:new Date('2026-10-04T00:00:00Z'),
+    beforeRequest:async()=>events.push('reserve'),fetchImpl:async()=>{events.push('fetch');throw new Error('unexpected_fetch');}};
+  for(const date of ['2025-10-04','2026-10-05'])await assert.rejects(loadWbFunnelProductsDay('token',{...options,date}),/operational_invalid_period/);
+  for(const now of [new Date('invalid'),'2026-10-04'])await assert.rejects(loadWbFunnelProductsDay('token',{...options,date:'2026-10-04',now}),/operational_invalid_clock/);
+  for(const [dateFrom,dateTo] of [['2025-10-04','2025-10-05'],['2026-10-03','2026-10-05']])await assert.rejects(loadWbFunnelProductsHistory('token',{...options,dateFrom,dateTo}),/operational_invalid_period/);
+  await assert.rejects(loadWbFunnelProductsHistory('token',{...options,dateFrom:'2026-10-03',dateTo:'2026-10-04',now:new Date('invalid')}),/operational_invalid_clock/);
+  assert.deepEqual(events,[]);
+});
+
+test('Moscow midnight during rate wait advances comparison horizon before HTTP',async()=>{
+  const now=new Date('2026-10-03T20:59:59Z');let actualNow=now;
+  const calls=[];
+  await loadWbFunnelProductsHistory('token',{nmIds:[7400001],dateFrom:'2026-09-28',dateTo:'2026-09-28',now,clock:()=>actualNow,
+    beforeRequest:async()=>{actualNow=new Date('2026-10-03T21:00:00Z');},fetchImpl:async(url,options)=>{
+      const body=JSON.parse(options.body);calls.push(body);
+      return {status:200,ok:true,text:async()=>JSON.stringify(payload(body.selectedPeriod.start))};
+    }});
+  assert.equal(calls.length,1);
+  assert.deepEqual(calls[0].pastPeriod,{start:'2025-10-04',end:'2026-09-27'});
+});
+
+test('expired selected horizon or invalid clock after rate wait sends no HTTP request',async()=>{
+  const events=[],now=new Date('2026-10-03T20:59:59Z');
+  const options={nmIds:[7400001],now,beforeRequest:async()=>events.push('reserve'),fetchImpl:async()=>{events.push('fetch');throw new Error('unexpected_fetch');}};
+  await assert.rejects(loadWbFunnelProductsDay('token',{...options,date:'2025-10-04',clock:()=>new Date('2026-10-03T21:00:00Z')}),/operational_invalid_period/);
+  await assert.rejects(loadWbFunnelProductsDay('token',{...options,date:'2026-09-28',clock:()=>new Date('invalid')}),/operational_invalid_clock/);
+  assert.deepEqual(events,['reserve','reserve']);
 });
 
 test('fallback clips its period at Moscow midnight and retains older missing days',async()=>{

@@ -77,6 +77,7 @@ test('sync batches selected products by 1000, waits for every reserved slot and 
       decrypt: () => wbToken(),
       load: async (token, options) => {
         calls.loads.push({ token, options });
+        assert.equal(options.clock,fixedClock);
         await options.beforeRequest();
         const raw = JSON.stringify({ batch: calls.loads.length });
         return {

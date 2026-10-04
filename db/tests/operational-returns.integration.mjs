@@ -245,4 +245,22 @@ test('saved fallback rejects alternate scope and foreign tenant',async()=>{
   assert.equal(await getOperationalOverviewData(ids.foreignUser,ids.store,display),null);
 });
 
+test('manual corrected range resumes only parameter blocks and retains access blocks',async()=>{
+  const requested={start:'2026-09-19',end:'2026-09-20'};
+  await requestOperationalRangeRefresh(ids.user,ids.store,requested.start,requested.end,{now:display.now});
+  let job=await beginOperationalSync(ids.user,ids.store,{force:true,dateFrom:requested.start,dateTo:requested.end});
+  await failOperationalSync(ids.user,job,'operational_invalid_request');
+  const streamStatus=()=>context(ids.user,ids.business,async client=>(await client.query(`select status from mc.sync_streams where business_id=$1 and store_id=$2 and source_type='operational_sales_funnel'`,[ids.business,ids.store])).rows[0].status);
+  assert.equal(await streamStatus(),'blocked');
+  await assert.rejects(()=>requestOperationalRangeRefresh(ids.user,ids.store,'2026-09-21','2026-09-20',{now:display.now}),/operational_invalid_period/);
+  assert.equal(await streamStatus(),'blocked');
+  const resumed=await requestOperationalRangeRefresh(ids.user,ids.store,requested.start,requested.end,{now:display.now});
+  assert.equal(resumed.status,'pending');assert.equal(await streamStatus(),'active');
+  job=await beginOperationalSync(ids.user,ids.store,{force:true,dateFrom:requested.start,dateTo:requested.end});
+  await failOperationalSync(ids.user,job,'operational_unauthorized');
+  const denied=await requestOperationalRangeRefresh(ids.user,ids.store,requested.start,requested.end,{now:display.now});
+  assert.equal(denied.status,'blocked');assert.equal(denied.queued,0);assert.equal(denied.errorCode,'operational_unauthorized');
+  assert.equal(await streamStatus(),'blocked');
+});
+
 test.after(async()=>{await pool.end();await rm(rawRoot,{recursive:true,force:true});});
