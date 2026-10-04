@@ -67,3 +67,5 @@
 /* Operational ranges share the financial calendar and comparison palette. */
 .operational-panel{min-width:0}.operational-panel .overview-range-popover{left:auto;right:0}.operational-panel .design-orders-chart{overflow-x:auto;overscroll-behavior-x:contain}.operational-panel .design-chart-grid{min-width:max(100%,calc(var(--chart-days,7)*42px))}.operational-panel[aria-busy="true"] [data-range-trigger]{opacity:.6}.operational-range-error{color:var(--danger)}
 @media(max-width:900px){.operational-panel .overview-range-popover{left:14px;right:14px}}
+
+.operational-load-status{margin:10px 0 14px}.operational-load-status strong{display:block;font-size:12px;line-height:1.5}.operational-load-status p{margin:4px 0}.operational-load-meter{height:5px;border-radius:6px;background:var(--border);overflow:hidden;margin:6px 0}.operational-load-meter i{display:block;height:100%;background:var(--accent);border-radius:inherit;transition:width .25s ease}

@@ -38,7 +38,7 @@ export async function loadWbFunnelProductsDay(token,{nmIds,date,fetchImpl=fetch,
   if(!Array.isArray(nmIds)||!nmIds.length||nmIds.length>1000||nmIds.some(id=>!Number.isSafeInteger(id)||id<=0)||new Set(nmIds).size!==nmIds.length)throw new Error('operational_invalid_nm_ids');
   const day=Date.parse(`${date}T00:00:00Z`);
   const pastPeriod={start:new Date(day-364*86400000).toISOString().slice(0,10),end:new Date(day-86400000).toISOString().slice(0,10)};
-  await beforeRequest();
+  await beforeRequest({endpoint:wbFunnelProductsEndpoint,dateFrom:date,dateTo:date,nmIds});
   let response;
   try{response=await fetchImpl(wbFunnelProductsEndpoint,{method:'POST',headers:{Authorization:`Bearer ${token}`,'Content-Type':'application/json'},body:JSON.stringify({selectedPeriod:{start:date,end:date},pastPeriod,nmIds,skipDeletedNm:false,limit:1000,offset:0}),signal:AbortSignal.timeout(30000)});}
   catch{throw new Error('operational_unavailable');}

@@ -48,6 +48,13 @@ test('new, repeated and changed WB credentials advance generation and enqueue ex
   assert.deepEqual({changed:first.credentialChanged,generation:first.generation},{changed:true,generation:1});
   assert.match(first.jobId,/^[0-9a-f-]{36}$/i);
   assert.equal(Object.hasOwn(first,'fingerprint'),false);
+  const initialFactory=await inContext(async client=>({
+    marker:(await client.query(`select period_start::text,period_end::text from mc.operational_history_factories where store_id=$1`,[ids.store])).rows[0],
+    days:(await client.query(`select metric_date::text,status,initial_status from mc.operational_range_requests where store_id=$1 order by metric_date`,[ids.store])).rows
+  }));
+  assert.deepEqual(initialFactory.marker,{period_start:'2026-08-31',period_end:'2026-09-29'});
+  assert.equal(initialFactory.days.length,30);
+  assert.ok(initialFactory.days.every(day=>day.status==='pending'&&day.initial_status==='pending'));
   const firstCiphertext=await inContext(async client=>(await client.query(
     `select ciphertext from mc.connection_secrets where connection_id=$1`,[first.id]
   )).rows[0].ciphertext);
@@ -59,6 +66,7 @@ test('new, repeated and changed WB credentials advance generation and enqueue ex
   )).rows[0]);
   assert.deepEqual(repeatedState.scopes,['finance','analytics']);
   assert.equal(repeatedState.ciphertext.equals(firstCiphertext),false);
+  assert.equal(await inContext(async client=>Number((await client.query(`select count(*) from mc.operational_range_requests where store_id=$1`,[ids.store])).rows[0].count)),30);
 
   const changed=await save(ids.store,'credential-new','wb-token-two',['finance','analytics']);
   assert.deepEqual({changed:changed.credentialChanged,generation:changed.generation},{changed:true,generation:2});
@@ -122,9 +130,12 @@ test('inventory context and writes require the current lease and latest credenti
   ])).rows[0];
   assert.equal(applied.superseded,false);
   assert.equal(Number(applied.uncovered_weeks),0);
-  assert.equal(await inContext(async client=>Number((await client.query(
-    `select count(*) from mc.financial_week_coverage where store_id=$1 and credential_generation=3 and coverage_status='empty'`,[ids.store]
-  )).rows[0].count)),52);
+  const coverageDistribution=await inContext(async client=>(await client.query(
+    `select count(*)::int total,count(*) filter(where coverage_status='empty')::int empty,
+      count(*) filter(where coverage_status='fetching')::int fetching
+      from mc.financial_week_coverage where store_id=$1 and credential_generation=3`,[ids.store]
+  )).rows[0]);
+  assert.deepEqual(coverageDistribution,{total:52,empty:51,fetching:1});
   assert.equal(await inContext(async client=>Number((await client.query(
     `select count(*) from mc.jobs where store_id=$1 and job_type='financial_report_fetch'`,[ids.store]
   )).rows[0].count)),1);

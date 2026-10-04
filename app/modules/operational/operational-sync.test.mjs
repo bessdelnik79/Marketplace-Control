@@ -104,8 +104,8 @@ test('sync batches selected products by 1000, waits for every reserved slot and 
   assert.equal(calls.reserve.length, 2);
   assert.deepEqual(calls.waits, [35, 20]);
   assert.deepEqual(calls.stores.map(call => [call.partNumber, call.raw]), [[0, '{"batch":1}'], [1, '{"batch":2}']]);
-  assert.deepEqual(calls.progress.map(progress => progress.stage), ['loading', 'loading', 'saving']);
-  assert.equal(calls.progress[1].missing, 1005);
+  assert.deepEqual(calls.progress.map(progress => progress.stage), ['rate_wait','fetching','loading','rate_wait','fetching','loading','saving']);
+  assert.equal(calls.progress.filter(progress=>progress.stage==='loading')[1].missing, 1005);
   assert.equal(calls.complete[0].objects.length, 2);
   assert.equal(calls.complete[0].metrics.length, 1005);
   assert.equal(calls.remove.length, 0);

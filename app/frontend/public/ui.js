@@ -68,12 +68,12 @@
         const next=new DOMParser().parseFromString(html,'text/html').querySelector('[data-operational-panel]');
         if(!next)throw new Error('invalid_response');
         const metric=$('[data-live-metric][aria-selected="true"]',panel)?.dataset.liveMetric||'orders';
-        const pending=['pending','running'].includes(next.dataset.operationalUpdate);
+
         picker.rangeLifecycle.abort();panel.replaceWith(next);initializeRangePickers(next,{refresh:false});initializeLiveMetrics(next);$('[data-live-metric="'+metric+'"]',next)?.click();
 
       }catch{if(Date.now()-startedAt<1800000)timer=setTimeout(check,10000);}
     }
-    if(refresh||['pending','running'].includes(panel.dataset.operationalUpdate))timer=setTimeout(check,refresh?0:10000);
+    if(refresh||panel.dataset.operationalRetry==='true'||['pending','running'].includes(panel.dataset.operationalUpdate)||['pending','running'].includes(panel.dataset.operationalFactoryUpdate))timer=setTimeout(check,refresh?0:10000);
   }
   initializeRangePickers();
   const financialCalculation=$('[data-financial-update]'),financialPollKey=`mc-financial-poll:${location.pathname}${location.search}`,financialPollStorage={get(){try{return sessionStorage.getItem(financialPollKey)}catch{return null}},set(value){try{sessionStorage.setItem(financialPollKey,value)}catch{}},remove(){try{sessionStorage.removeItem(financialPollKey)}catch{}}};

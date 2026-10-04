@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {emptyOverviewPage,expensesPage,financialSyncView,overviewPage,passwordPage,productsPage,settingsPage,storeOnboardingPage,taxesPage,tariffPage,placeholderPage,uiRoutes} from './pages.mjs';
-import { operationalOverviewPanel } from './pages.mjs';
+import { operationalOverviewPanel, operationalLoadStatus } from './pages.mjs';
 test('historical deleted catalog product has an explanation and no WB link or image',()=>{
   const store={id:'store-history',connected:true},product={id:'deleted',wb_article:'800001',seller_article:'DELETED',historical_deleted:true,image_url:'https://basket-01.wbbasket.ru/old.webp',selected:true};
   const html=productsPage({id:'owner',display_name:'Owner'},[store],{stream:{},products:[product],selection:{status:'confirmed'},productLimit:3});
@@ -188,4 +188,18 @@ test('profit row places rounded comparison next to amount with palette signs and
     assert.match(html,/id="profit-comparison-tooltip" role="tooltip">Изменение к четырём предыдущим периодам\./);
     assert.doesNotMatch(html,/Изменение к предыдущему периоду:/);
   }
+});
+
+test('operational status distinguishes queued work, active fetch and WB rate wait',()=>{
+ const queued=operationalLoadStatus({status:'pending',totalDays:30,completeDays:7,pendingDays:23});
+ assert.match(queued,/В очереди/);assert.doesNotMatch(queued,/Идёт загрузка/);assert.match(queued,/Получено 7 из 30 дней/);
+ const fetching=operationalLoadStatus({status:'running',progress:{stage:'fetching'}});assert.match(fetching,/Идёт загрузка/);
+ const waiting=operationalLoadStatus({status:'running',progress:{stage:'rate_wait'}});assert.match(waiting,/Ожидаем лимит WB/);
+});
+test('initial history status exposes selection waiting, failure and completion without fake progress',()=>{
+ assert.match(operationalLoadStatus({status:'failed',retryScheduled:true}),/автоматическая повторная попытка/);
+ assert.match(operationalLoadStatus({status:'unavailable',errorCode:'operational_history_out_of_range'}),/за пределами доступной истории WB/);
+ assert.match(operationalLoadStatus({status:'waiting_selection',totalDays:30},{factory:true}),/после подтверждения выбранных товаров/);
+ const failed=operationalLoadStatus({status:'failed',totalDays:30,completeDays:25,failedDays:5});assert.match(failed,/с ошибками: 5/);assert.match(failed,/aria-valuenow="25"/);
+ assert.match(operationalLoadStatus({status:'current',totalDays:30,completeDays:30},{factory:true}),/История загружена/);
 });

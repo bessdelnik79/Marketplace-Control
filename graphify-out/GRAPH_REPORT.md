@@ -1,17 +1,17 @@
 # Graph Report - Marketplace Control  (2026-10-04)
 
 ## Corpus Check
-- 254 files · ~1,066,012 words
+- 256 files · ~1,067,453 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 13 file(s) not represented in the graph (top: .toml 4, (none) 4, .css 2)
 
 ## Summary
-- 1717 nodes · 3610 edges · 107 communities (82 shown, 25 thin omitted)
+- 1728 nodes · 3637 edges · 112 communities (84 shown, 28 thin omitted)
 - Extraction: 97% EXTRACTED · 3% INFERRED · 0% AMBIGUOUS · INFERRED: 113 edges (avg confidence: 0.87)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `5496dabd`
+- Built from commit: `f9047e9e`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -27,7 +27,7 @@
 - financial-pipeline.repository.mjs
 - importMarketplaceControl
 - importMarketplaceControl
-- financial-detail.mjs
+- normalization.repository.mjs
 - importMarketplaceControl
 - db/package.json
 - figma-import/manifest.json
@@ -47,7 +47,7 @@
 - catalog.repository.mjs
 - operational-sync.mjs
 - financial-pipeline-worker.mjs
-- financial-formulas.md
+- README.md
 - Marketplace Control: инструкции агентам
 - daily-generation-worker.mjs
 - Рабочие части
@@ -81,15 +81,15 @@
 - onboarding-flow.md
 - ref_node_assert
 - auth.mjs
-- README.md
+- app/README.md
 - historical-relink.integration.mjs
 - financial-scope-recalculation.integration.mjs
-- sendSettings
+- withOwnedBusinessContext
 - credentials.integration.mjs
 - unavailable
 - financial-coverage.mjs
 - Marketplace Control — план событийной загрузки и пересчёта финансов
-- ref_node_crypto
+- wb-sales-funnel.mjs
 - bank-reconciliation.mjs
 - schema.test.mjs
 - financial-sync.routes.test.mjs
@@ -100,8 +100,8 @@
 - Целевая цепочка
 - 11. Сверки и доказательства
 - Принятые продуктовые решения
-- recoverHistoricalCatalog
-- stores.repository.mjs
+- operational-source-storage.mjs
+- source-storage.mjs
 - app_db_beginfinancialsync
 - app_db_completefinancialsync
 - { enqueueJob, claimJobs, heartbeatJob, completeJob, failJob }
@@ -111,22 +111,27 @@
 - app_db_updatefinancialsyncprogress
 - Изменения финансового расчёта, каталога и интерфейса за 3–4 октября 2026 года
 - createTaxesRoutes
-- client.mjs
+- ref_node_fs
 - daily-publication.repository.mjs
-- withOwnedBusinessContext
+- reports.repository.mjs
 - Сверка реальных отчётов WB API для P0.3
 - variant-size-relink.integration.mjs
-- operational-range.test.mjs
+- createJobsRepository
 - p04-operational.integration.mjs
-- field-based-expenses.integration.mjs
+- costs.integration.mjs
+- ref_node_crypto
 - Граница этапа
+- operational-overview.test.mjs
+- printed-settlement.test.mjs
+- ui-site.md
+- vm-access.md
 
 ## God Nodes (most connected - your core abstractions)
-1. `Marketplace Control — словарь БД, итерация 1` - 96 edges
+1. `Marketplace Control — словарь БД, итерация 1` - 97 edges
 2. `server` - 63 edges
 3. `withOwnedBusinessContext()` - 54 edges
 4. `calculateFinancialResult()` - 31 edges
-5. `esc()` - 28 edges
+5. `esc()` - 29 edges
 6. `Marketplace Control — формулы финансового расчёта` - 20 edges
 7. `frame()` - 18 edges
 8. `calculateStoreTaxReference()` - 18 edges
@@ -134,8 +139,6 @@
 10. `invalid()` - 17 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `4. Интерфейс и маршруты` --references--> `overviewPage()`  [INFERRED]
-  outputs/p0.4-plan.md → app/frontend/pages.mjs
 - `Запись и версии` --references--> `unavailable()`  [INFERRED]
   db/README.md → app/modules/overview/situations.mjs
 - `Этап 5. Переключение публикации и UI` --references--> `unavailable()`  [INFERRED]
@@ -144,11 +147,13 @@
   outputs/financial-reports.md → app/modules/overview/situations.mjs
 - `P0.4 — реальный «Обзор»` --references--> `unavailable()`  [INFERRED]
   outputs/mvp-status.md → app/modules/overview/situations.mjs
+- `Качество результата` --references--> `unavailable()`  [INFERRED]
+  outputs/p0.3-plan.md → app/modules/overview/situations.mjs
 
 ## Import Cycles
 - None detected.
 
-## Communities (107 total, 25 thin omitted)
+## Communities (112 total, 28 thin omitted)
 
 ### Community 0 - "server.mjs"
 Cohesion: 0.03
@@ -164,22 +169,22 @@ Nodes (27): alertRow(), average, build(), circle(), control(), current, datePick
 
 ### Community 3 - "Marketplace Control — словарь БД, итерация 1"
 Cohesion: 0.02
-Nodes (96): audit_events, auth_identities, auth_oauth_states, auth_password_credentials, auth_rate_limits, auth_registration_challenges, auth_sessions, billing_invoices (+88 more)
+Nodes (97): audit_events, auth_identities, auth_oauth_states, auth_password_credentials, auth_rate_limits, auth_registration_challenges, auth_sessions, billing_invoices (+89 more)
 
 ### Community 4 - "pages.mjs"
 Cohesion: 0.08
-Nodes (67): createCostPage(), bankReconciliationPanel(), calculationPanel(), calculationReasonLabels, catalogProductRows(), catalogSyncErrors, chart(), checkpointsOverviewPanel() (+59 more)
+Nodes (70): dashboardPage(), createCostPage(), bankReconciliationPanel(), calculationPanel(), calculationReasonLabels, catalogProductRows(), catalogSyncErrors, chart() (+62 more)
 
 ### Community 5 - "expense-import.mjs"
-Cohesion: 0.13
-Nodes (30): aliases, categoryAliases, cellValue(), cleanEnum(), cleanHeader(), createExpenseCsvExport(), createExpenseCsvTemplate(), csvCell() (+22 more)
+Cohesion: 0.14
+Nodes (29): aliases, categoryAliases, cellValue(), cleanEnum(), cleanHeader(), createExpenseCsvExport(), createExpenseCsvTemplate(), csvCell() (+21 more)
 
 ### Community 6 - "Концепция продукта — Marketplace Control"
 Cohesion: 0.05
 Nodes (40): 10. «Почему?» и проверка утверждений сотрудников, 11. Контрольные точки и пример сценария, 12. Постепенное подключение, MVP и развитие, 13. Границы, риски и открытые решения, 14. Основания концепции и следующий этап, 1. Суть продукта и позиционирование, 2. Принципы и целевые пользователи, 3. Структура интерфейса (+32 more)
 
 ### Community 7 - "calculation.mjs"
-Cohesion: 0.10
+Cohesion: 0.11
 Nodes (49): scaledMoneyMatches(), addLine(), calculateFinancialResult(), calculateReturnWbExpenseReversal(), calculateStoreTaxReference(), canonicalJson(), compareEvidence(), createInputFingerprint() (+41 more)
 
 ### Community 8 - "financial-pipeline.repository.mjs"
@@ -194,9 +199,9 @@ Nodes (11): importMarketplaceControl(), build(), expose(), collect(), collectIco
 Cohesion: 0.35
 Nodes (10): importMarketplaceControl(), build(), expose(), collect(), collectIcons(), flattenText(), iconKey(), paint() (+2 more)
 
-### Community 11 - "financial-detail.mjs"
-Cohesion: 0.24
-Nodes (11): parseFinancialJson(), apiError(), canonicalPositiveInt64(), exactDate(), financialDetailEndpoint, loadWbFinancialReportDetail(), requestBody(), retryAfterMs() (+3 more)
+### Community 11 - "normalization.repository.mjs"
+Cohesion: 0.21
+Nodes (18): decimal(), financialComponentScope(), hasMoney(), hasRealItemIdentifier(), isResolvedNonProductOperation(), isResultComponent(), isVerifiedLoyaltyCompensationRow(), isVerifiedPromotionRow() (+10 more)
 
 ### Community 12 - "importMarketplaceControl"
 Cohesion: 0.40
@@ -219,12 +224,12 @@ Cohesion: 0.32
 Nodes (5): MC_DESIGN, mcImportV2(), color(), fill(), make()
 
 ### Community 17 - "costs.import.mjs"
-Cohesion: 0.15
-Nodes (25): aliases, cellValue(), cleanHeader(), costImportMaxBytes, costImportMaxRows, createCostCsvTemplate(), csvCell(), delimiterFor() (+17 more)
+Cohesion: 0.14
+Nodes (26): aliases, cellValue(), cleanHeader(), costImportMaxBytes, costImportMaxRows, createCostCsvTemplate(), csvCell(), delimiterFor() (+18 more)
 
 ### Community 18 - "server"
 Cohesion: 0.10
-Nodes (32): withUserContext(), consumeChallenge(), consumeOauthState(), deleteSession(), findOrCreateYandexUser(), findPasswordUser(), findSession(), getPasswordCredential() (+24 more)
+Nodes (33): withUserContext(), consumeChallenge(), consumeOauthState(), deleteSession(), findOrCreateYandexUser(), findPasswordUser(), findSession(), getPasswordCredential() (+25 more)
 
 ### Community 19 - "mcImportV2"
 Cohesion: 0.38
@@ -239,8 +244,8 @@ Cohesion: 0.08
 Nodes (24): For /graphify add and --watch, For /graphify query, For the commit hook and native CLAUDE.md integration, For --update and --cluster-only, /graphify, Honesty Rules, Interpreter guard for subcommands, Part A - Structural extraction for code files (+16 more)
 
 ### Community 26 - "auth-pages.mjs"
-Cohesion: 0.57
-Nodes (6): authPage(), dashboardPage(), escapeHtml(), logo(), shell(), verifyPage()
+Cohesion: 0.73
+Nodes (5): authPage(), escapeHtml(), logo(), shell(), verifyPage()
 
 ### Community 27 - "Уже сделано"
 Cohesion: 0.08
@@ -256,19 +261,19 @@ Nodes (24): 0. Неблокирующее эмпирическое расшир�
 
 ### Community 30 - "financial-overview.mjs"
 Cohesion: 0.07
-Nodes (74): buildFinancialOverview(), buildFinancialPeriodOverview(), buildSituationEvidence(), calendarPeriodMonths(), calendarWeekForDate(), compareFinancialHistory(), compareFinancialPeriods(), comparisonReason() (+66 more)
+Nodes (73): buildFinancialOverview(), buildFinancialPeriodOverview(), buildSituationEvidence(), calendarPeriodMonths(), calendarWeekForDate(), compareFinancialHistory(), compareFinancialPeriods(), comparisonReason() (+65 more)
 
 ### Community 31 - "catalog.repository.mjs"
-Cohesion: 0.14
-Nodes (21): app_db_begincatalogsync, app_db_completecatalogsync, app_db_failcatalogsync, apiError(), colorFrom(), fetchPage(), imageFrom(), loadWbCatalog() (+13 more)
+Cohesion: 0.17
+Nodes (18): app_db_begincatalogsync, app_db_completecatalogsync, app_db_failcatalogsync, apiError(), colorFrom(), fetchPage(), imageFrom(), loadWbCatalog() (+10 more)
 
 ### Community 32 - "operational-sync.mjs"
-Cohesion: 0.06
-Nodes (63): withBusinessContext(), associatedData, dataKey(), failure(), magic, rawBuffer(), readOperationalSnapshot(), removeOperationalSnapshot() (+55 more)
+Cohesion: 0.09
+Nodes (40): withBusinessContext(), base, now, run, beginOperationalSync(), calendarDay(), completeOperationalSync(), decimal() (+32 more)
 
 ### Community 33 - "financial-pipeline-worker.mjs"
-Cohesion: 0.07
-Nodes (48): decryptSecret(), encryptSecret(), fingerprintSecret(), loadBase64Key(), loadEncryptionKey(), loadFingerprintKey(), financialRequestDelaySeconds(), createFinancialInventoryWorker() (+40 more)
+Cohesion: 0.06
+Nodes (55): decryptSecret(), loadWbFinancialSummaries(), financialRequestDelaySeconds(), parseFinancialJson(), apiError(), canonicalPositiveInt64(), exactDate(), financialDetailEndpoint (+47 more)
 
 ### Community 35 - "Marketplace Control: инструкции агентам"
 Cohesion: 0.15
@@ -283,12 +288,12 @@ Cohesion: 0.18
 Nodes (10): 1. Контракт и база данных, 2. Дополнительные расходы, 3. Налоговые настройки, 4. Интерфейс и маршруты, 5. Документация и приёмка, Marketplace Control — план P0.2, Граница P0.3, Принятые решения (+2 more)
 
 ### Community 38 - "db.mjs"
-Cohesion: 0.17
-Nodes (12): financialDailyGenerationRepository, financialInventoryRepository, financialPipelineRepository, getCostState, importVariantCosts, jobsRepository, saveVariantCost, scheduleDue (+4 more)
+Cohesion: 0.16
+Nodes (13): financialDailyGenerationRepository, financialInventoryRepository, financialPipelineRepository, getCostState, importVariantCosts, jobsRepository, saveVariantCost, scheduleDue (+5 more)
 
 ### Community 39 - "Marketplace Control — первая итерация базы данных"
-Cohesion: 0.22
-Nodes (9): Marketplace Control — первая итерация базы данных, Доступ, тарифы и закрепление товаров, Импорт и пользовательские затраты, Источники и финансовые операции, Платежи и фоновые процессы, Пользовательский сценарий, Проверки и границы готовности, Расчёт и происхождение каждой суммы (+1 more)
+Cohesion: 0.20
+Nodes (10): Marketplace Control — первая итерация базы данных, Доступ, тарифы и закрепление товаров, Импорт и пользовательские затраты, Источники и финансовые операции, Платежи и фоновые процессы, Пользовательский сценарий, Проверки и границы готовности, Расчёт и происхождение каждой суммы (+2 more)
 
 ### Community 40 - "Marketplace Control — финансовые отчёты Wildberries"
 Cohesion: 0.20
@@ -296,7 +301,7 @@ Nodes (10): Marketplace Control — финансовые отчёты Wildberrie
 
 ### Community 41 - "calculation.repository.mjs"
 Cohesion: 0.05
-Nodes (85): app_db_acknowledgefinancialcalculationinvalidation, app_db_getfinancialcompatibilitybootstrapstate, app_db_listfinancialcalculationinvalidations, app_db_runfinancialcalculation, app_db_wakefinancialdailyaftercompatibility, isVerifiedWbResultComponent(), acknowledgeFinancialCalculationInvalidation(), aggregateDailyPublicationPeriod() (+77 more)
+Nodes (86): app_db_acknowledgefinancialcalculationinvalidation, app_db_getfinancialcompatibilitybootstrapstate, app_db_listfinancialcalculationinvalidations, app_db_runfinancialcalculation, app_db_wakefinancialdailyaftercompatibility, isVerifiedWbResultComponent(), acknowledgeFinancialCalculationInvalidation(), aggregateDailyPublicationPeriod() (+78 more)
 
 ### Community 42 - "graphify reference: extra exports and benchmark"
 Cohesion: 0.22
@@ -331,8 +336,8 @@ Cohesion: 0.40
 Nodes (5): Marketplace Control, Подключение Wildberries, Регистрация и вход, Среда MVP, Структура кода
 
 ### Community 50 - "finance.mjs"
-Cohesion: 0.11
-Nodes (36): apiError(), compareDecimalIds(), dateValue(), decimal(), decimalId(), fetchPage(), financialComponentScope(), financialDateRange() (+28 more)
+Cohesion: 0.13
+Nodes (21): apiError(), compareDecimalIds(), dateValue(), decimalId(), fetchPage(), financialDateRange(), financialParserVersion, financialReportsEndpoint (+13 more)
 
 ### Community 51 - "graphify reference: add a URL and watch a folder"
 Cohesion: 0.50
@@ -351,36 +356,36 @@ Cohesion: 0.50
 Nodes (4): Диагностика, Подключение Wildberries API, Требования к токену, Хранение
 
 ### Community 55 - "expenses.repository.mjs"
-Cohesion: 0.19
-Nodes (18): cleanText(), exactDate(), uuidPattern, exactPositiveAmount(), expenseCategories, expenseComparable(), expenseRowError(), importExpenses() (+10 more)
+Cohesion: 0.21
+Nodes (16): cleanText(), exactDate(), uuidPattern, exactPositiveAmount(), expenseCategories, expenseComparable(), expenseRowError(), importExpenses() (+8 more)
 
 ### Community 66 - "ref_node_assert"
 Cohesion: 0.10
-Nodes (12): user, date(), productIds, cents(), printedSellerSettlement(), ranges, databaseName, fixture (+4 more)
+Nodes (12): user, loadOperationalRange(), refreshOperationalRange(), fixture, ranges, databaseName, fixture, databaseName (+4 more)
 
 ### Community 67 - "auth.mjs"
-Cohesion: 0.33
-Nodes (10): createSessionToken(), createVerificationCode(), hashPassword(), hashToken(), normalizeEmail(), requiresEmailVerification(), scrypt, validatePasswordChange() (+2 more)
+Cohesion: 0.36
+Nodes (9): createSessionToken(), createVerificationCode(), hashPassword(), hashToken(), normalizeEmail(), scrypt, validatePasswordChange(), validateRegistration() (+1 more)
 
 ### Community 69 - "historical-relink.integration.mjs"
 Cohesion: 0.67
 Nodes (3): context(), fixture(), sale
 
 ### Community 70 - "financial-scope-recalculation.integration.mjs"
-Cohesion: 0.48
-Nodes (6): addProduct(), context(), emitNarrow(), fixture(), queuedRange(), reportEvidence()
+Cohesion: 0.26
+Nodes (10): recoverHistoricalCatalog(), addProduct(), context(), emitNarrow(), fixture(), queuedRange(), reportEvidence(), context() (+2 more)
 
-### Community 71 - "sendSettings"
-Cohesion: 0.24
-Nodes (11): getCurrentFinancialResult(), getFinancialCalculationState(), getCatalogState(), getExpenseState(), getOperationalSyncState(), getBillingSummary(), send(), sendExpenses() (+3 more)
+### Community 71 - "withOwnedBusinessContext"
+Cohesion: 0.14
+Nodes (23): withOwnedBusinessContext(), getCurrentFinancialResult(), getFinancialCalculationInvalidation(), getFinancialCalculationState(), getCatalogState(), getExpenseState(), getOperationalSyncState(), getFinancialBankReconciliationState() (+15 more)
 
 ### Community 72 - "credentials.integration.mjs"
-Cohesion: 0.11
-Nodes (18): createJobsRepository(), claimJobs(), completeJob(), enqueueJob(), failJob(), heartbeatJob(), integer(), optionalTimestamp() (+10 more)
+Cohesion: 0.13
+Nodes (7): createFinancialInventoryRepository(), at, databaseName, encryptionKey, fingerprintKey, ids, inventoryRepository
 
 ### Community 73 - "unavailable"
-Cohesion: 0.16
-Nodes (14): unavailable(), 13. Сравнение периодов, 14. Первые ситуации P0.4, Обозначения, Marketplace Control — план P0.4, Блок «Сейчас» — реализация 4 октября 2026, Внешние контракты для проверки перед реализацией, Критерии готовности (+6 more)
+Cohesion: 0.15
+Nodes (15): unavailable(), 13. Сравнение периодов, 14. Первые ситуации P0.4, Обозначения, Marketplace Control — план P0.4, Блок «Сейчас» — реализация 4 октября 2026, Внешние контракты для проверки перед реализацией, Критерии готовности (+7 more)
 
 ### Community 74 - "financial-coverage.mjs"
 Cohesion: 0.49
@@ -390,17 +395,17 @@ Nodes (9): addDays(), annualFinancialWeeks(), dateOnly(), mondayOnOrBefore(), mo
 Cohesion: 0.18
 Nodes (11): Marketplace Control — план событийной загрузки и пересчёта финансов, Атомарная публикация и интерфейс, Год после подключения ключа, Дневной финансовый слой, Зафиксированные продуктовые правила, Когда разрешён WB API, Критерии приёмки, Первый конкретный шаг (+3 more)
 
-### Community 76 - "ref_node_crypto"
-Cohesion: 0.12
-Nodes (26): loadWbFunnelProductsDay(), loadWbFunnelProductsHistory(), normalizeFunnelProducts(), parseFunnelProductsJson(), wbFunnelProductsEndpoint, calendarDate(), dateFromDay(), dayNumber() (+18 more)
+### Community 76 - "wb-sales-funnel.mjs"
+Cohesion: 0.19
+Nodes (19): loadWbFunnelProductsDay(), loadWbFunnelProductsHistory(), normalizeFunnelProducts(), parseFunnelProductsJson(), wbFunnelProductsEndpoint, calendarDate(), dateFromDay(), dayNumber() (+11 more)
 
 ### Community 77 - "bank-reconciliation.mjs"
 Cohesion: 0.18
-Nodes (15): cents(), checkedFields, expenseFields, financialReportListEndpoint, loadWbFinancialSummaries(), money(), normalizeFinancialSummaries(), notCheckable() (+7 more)
+Nodes (14): cents(), checkedFields, expenseFields, financialReportListEndpoint, money(), normalizeFinancialSummaries(), notCheckable(), reconcileBankPayment() (+6 more)
 
 ### Community 78 - "schema.test.mjs"
-Cohesion: 0.29
-Nodes (8): context(), db, insert(), one(), pass(), q(), rejects(), root
+Cohesion: 0.15
+Nodes (14): context(), db, insert(), one(), pass(), q(), rejects(), root (+6 more)
 
 ### Community 79 - "financial-sync.routes.test.mjs"
 Cohesion: 0.47
@@ -415,12 +420,12 @@ Cohesion: 0.29
 Nodes (7): Порядок реализации, Этап 1. Контракты и очередь, Этап 2. Credential generation и расписание, Этап 3. Конвейер отчёта, Этап 4. Локальные события и дневная generation, Этап 5. Переключение публикации и UI, Этап 6. Приёмка и развёртывание
 
 ### Community 82 - "P0.4 — контракт оперативных заказов и выкупов WB"
-Cohesion: 0.25
-Nodes (7): P0.4 — контракт оперативных заказов и выкупов WB, Исправление полноты 4 октября 2026, Календарь и сравнение, Основной источник, Реализованное хранение и загрузка, Резервный источник, Результат pilot probe
+Cohesion: 0.22
+Nodes (8): P0.4 — контракт оперативных заказов и выкупов WB, Исправление полноты 4 октября 2026, Календарь и сравнение, Основной источник, Первичная фабрика и статус загрузки, Реализованное хранение и загрузка, Резервный источник, Результат pilot probe
 
 ### Community 83 - "Рабочие части"
-Cohesion: 0.29
-Nodes (7): 0. Закрыть входной контракт, 1. Read-модель финансового обзора, 2. Оперативные заказы и выкупы, 3. Сервис обзора и ситуации, 4. Интерфейс и маршруты, 5. Документация и приёмка, Рабочие части
+Cohesion: 0.33
+Nodes (6): 0. Закрыть входной контракт, 1. Read-модель финансового обзора, 2. Оперативные заказы и выкупы, 3. Сервис обзора и ситуации, 5. Документация и приёмка, Рабочие части
 
 ### Community 84 - "Целевая цепочка"
 Cohesion: 0.33
@@ -434,29 +439,29 @@ Nodes (6): 11. Сверки и доказательства, Fingerprint вхо�
 Cohesion: 0.33
 Nodes (6): Магазин и период, Оперативный блок «Сейчас», Принятые продуктовые решения, Ситуации, Сравнение финансовых периодов, Финансовые показатели
 
-### Community 87 - "recoverHistoricalCatalog"
-Cohesion: 0.52
-Nodes (4): recoverHistoricalCatalog(), context(), fixture(), recover()
+### Community 87 - "operational-source-storage.mjs"
+Cohesion: 0.23
+Nodes (18): associatedData, dataKey(), failure(), magic, rawBuffer(), readOperationalSnapshot(), removeOperationalSnapshot(), rootPath() (+10 more)
 
-### Community 88 - "stores.repository.mjs"
-Cohesion: 0.28
-Nodes (7): pool, createPendingStore(), deferFinancialCredentialBackfill(), listFinancialCredentialBackfill(), listStores(), saveWbConnection(), backfillFinancialCredentials()
+### Community 88 - "source-storage.mjs"
+Cohesion: 0.29
+Nodes (11): ids, dataKey(), magic, readFinancialPage(), removeFinancialDocument(), rootPath(), safeId(), storeFinancialPages() (+3 more)
 
 ### Community 96 - "Изменения финансового расчёта, каталога и интерфейса за 3–4 октября 2026 года"
 Cohesion: 0.33
 Nodes (6): Изменения финансового расчёта, каталога и интерфейса за 3–4 октября 2026 года, Индивидуальная себестоимость, Исторические товары и товарные связи, Классификация расходов, округление и сверка, Проверка результата на VM, Финансовая карточка и сравнение периодов
 
-### Community 98 - "client.mjs"
-Cohesion: 0.12
-Nodes (13): fixture, display, ids, masterKey, storage, ref_node_child_process, ref_node_fs, ref_node_os (+5 more)
+### Community 98 - "ref_node_fs"
+Cohesion: 0.17
+Nodes (8): context(), corrections, fixture(), display, ids, masterKey, storage, ref_node_fs
 
 ### Community 99 - "daily-publication.repository.mjs"
 Cohesion: 0.80
 Nodes (3): createFinancialDailyPublicationRepository(), publishFinancialDailyGeneration(), required()
 
-### Community 100 - "withOwnedBusinessContext"
-Cohesion: 0.16
-Nodes (21): withOwnedBusinessContext(), getFinancialCalculationInvalidation(), financialHistoricalWeekRange(), buildSellerOffsetReference(), formatted(), sellerOffsetLines, units(), beginFinancialSync() (+13 more)
+### Community 100 - "reports.repository.mjs"
+Cohesion: 0.17
+Nodes (16): financialHistoricalWeekRange(), buildSellerOffsetReference(), formatted(), sellerOffsetLines, units(), beginFinancialSync(), completeFinancialSync(), exactDate() (+8 more)
 
 ### Community 101 - "Сверка реальных отчётов WB API для P0.3"
 Cohesion: 0.50
@@ -466,37 +471,45 @@ Nodes (4): Матрица фактически встреченных опера
 Cohesion: 0.53
 Nodes (4): assertCurrentVariant(), context(), fixture(), sync()
 
+### Community 103 - "createJobsRepository"
+Cohesion: 0.36
+Nodes (11): createJobsRepository(), claimJobs(), completeJob(), enqueueJob(), failJob(), heartbeatJob(), integer(), optionalTimestamp() (+3 more)
+
 ### Community 104 - "p04-operational.integration.mjs"
 Cohesion: 0.25
 Nodes (4): ids, masterKey, storage, week
 
-### Community 105 - "field-based-expenses.integration.mjs"
+### Community 105 - "costs.integration.mjs"
+Cohesion: 0.28
+Nodes (6): context(), databaseName, fixture(), foreign, ids, versions()
+
+### Community 106 - "ref_node_crypto"
 Cohesion: 0.50
-Nodes (3): context(), corrections, fixture()
+Nodes (6): encryptSecret(), fingerprintSecret(), loadBase64Key(), loadEncryptionKey(), loadFingerprintKey(), ref_node_crypto
 
 ### Community 107 - "Граница этапа"
 Cohesion: 0.67
 Nodes (3): Входит в P0.4, Граница этапа, Не входит в P0.4
 
 ## Knowledge Gaps
-- **553 isolated node(s):** `scheduleDue`, `user`, `paths`, `nav`, `overviewReasonLabels` (+548 more)
-  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 715 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
-- **25 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **558 isolated node(s):** `scheduleDue`, `user`, `paths`, `nav`, `overviewReasonLabels` (+553 more)
+  These have ≤1 connection - possible missing edges or undocumented components. (Counts symbols only; 720 node(s) total have ≤1 connection when file, concept and rationale nodes are included.)
+- **28 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
+- **Why does `unavailable()` connect `unavailable` to `Marketplace Control — финансовые отчёты Wildberries`, `Marketplace Control — план событийной загрузки и пересчёта финансов`, `База данных`, `Порядок реализации`, `Рабочие части`, `Принятые продуктовые решения`, `Уже сделано`, `Marketplace Control — план P0.3`, `financial-overview.mjs`?**
+  _High betweenness centrality (0.118) - this node is a cross-community bridge._
 - **Why does `Marketplace Control — словарь БД, итерация 1` connect `Marketplace Control — словарь БД, итерация 1` to `README.md`?**
-  _High betweenness centrality (0.117) - this node is a cross-community bridge._
+  _High betweenness centrality (0.109) - this node is a cross-community bridge._
 - **Why does `База данных` connect `База данных` to `createCostsRepository`, `README.md`?**
-  _High betweenness centrality (0.117) - this node is a cross-community bridge._
-- **Why does `Регрессия финансового сравнения P0.4` connect `База данных` to `calculation.repository.mjs`, `financial-overview.mjs`?**
   _High betweenness centrality (0.109) - this node is a cross-community bridge._
 - **What connects `scheduleDue`, `user`, `paths` to the rest of the system?**
-  _553 weakly-connected nodes found - possible documentation gaps or missing edges._
+  _558 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `server.mjs` be split into smaller, more focused modules?**
   _Cohesion score 0.03413461538461538 - nodes in this community are weakly interconnected._
 - **Should `build-editable.mjs` be split into smaller, more focused modules?**
   _Cohesion score 0.10676532769556026 - nodes in this community are weakly interconnected._
 - **Should `Marketplace Control — словарь БД, итерация 1` be split into smaller, more focused modules?**
-  _Cohesion score 0.020833333333333332 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.020618556701030927 - nodes in this community are weakly interconnected._

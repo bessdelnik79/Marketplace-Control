@@ -56,6 +56,7 @@ export async function saveWbConnection(userId, {storeId,sellerId,scopes,encrypte
   if(!FINGERPRINT_PATTERN.test(String(fingerprint??'')))throw new TypeError('invalid_credential_fingerprint');
   return withOwnedBusinessContext(userId, async (client, businessId, role) => {
     if (!['owner','editor'].includes(role)) throw new Error('connection_write_forbidden');
+    await client.query(`select 1 from mc.businesses where id=$1 for update`,[businessId]);
     const store=(await client.query(
       `select id,external_account_id from mc.stores
         where business_id=$1 and id=$2 and marketplace_code='wb' and status<>'archived'
@@ -89,10 +90,31 @@ export async function saveWbConnection(userId, {storeId,sellerId,scopes,encrypte
        on conflict(connection_id) do update set ciphertext=excluded.ciphertext,nonce=excluded.nonce,auth_tag=excluded.auth_tag,key_version=excluded.key_version,credential_fingerprint=excluded.credential_fingerprint,updated_at=now()`,
       [businessId,connection.id,encrypted.ciphertext,encrypted.nonce,encrypted.authTag,encrypted.keyVersion,fingerprint]
     );
+    const factory=(await client.query(
+      `insert into mc.operational_history_factories(business_id,store_id,period_start,period_end,requested_at)
+       values($1,$2,($3::timestamptz at time zone 'Europe/Moscow')::date-29,
+         ($3::timestamptz at time zone 'Europe/Moscow')::date,$3)
+       on conflict(store_id) do nothing returning period_start,period_end`,[businessId,storeId,now]
+    )).rows[0];
+    if(factory)await client.query(
+      `insert into mc.operational_range_requests(business_id,store_id,metric_date,status,initial_status,requested_at)
+       select $1,$2,day::date,'pending','pending',$5 from generate_series($3::date,$4::date,interval '1 day') day
+       on conflict(store_id,metric_date) do update set initial_status=coalesce(mc.operational_range_requests.initial_status,'pending'),status='pending',retryable=false`,
+      [businessId,storeId,factory.period_start,factory.period_end,now]
+    );
+    if(credentialChanged)await client.query(
+      `update mc.sync_runs r set status='failed',finished_at=now(),error_code='operational_credentials_changed',
+         progress=jsonb_set(progress,'{stage}','"failed"')
+       from mc.sync_streams ss where r.stream_id=ss.id and ss.business_id=$1 and ss.store_id=$2
+         and ss.source_type='operational_sales_funnel' and r.status='running'`,[businessId,storeId]
+    );
     for(const sourceType of ['catalog','financial_reports','operational_sales_funnel'])await client.query(
       `insert into mc.sync_streams(business_id,store_id,source_type,next_run_at,status)
        values($1,$2,$3,now(),'active') on conflict(store_id,source_type) do update set status='active',next_run_at=now()`,
       [businessId,storeId,sourceType]
+    );
+    if(!scopes.includes('analytics'))await client.query(
+      `update mc.sync_streams set status='blocked',next_run_at=null where business_id=$1 and store_id=$2 and source_type='operational_sales_funnel'`,[businessId,storeId]
     );
     let jobId=null;
     if(credentialChanged){

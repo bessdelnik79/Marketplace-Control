@@ -1548,6 +1548,24 @@
 - `CHECK ((row_checksum ~ '^[0-9a-f]{64}$'::text))`
 - `UNIQUE (snapshot_id, product_id, metric_date)`
 
+## operational_history_factories
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| period_start | date | нет | — |
+| period_end | date | нет | — |
+| requested_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `CHECK ((period_end = (period_start + 29)))`
+- `CHECK (isfinite(period_end))`
+- `CHECK (isfinite(period_start))`
+- `PRIMARY KEY (store_id)`
+
 ## operational_periods
 
 | Поле | Тип | NULL | По умолчанию |
@@ -1582,10 +1600,13 @@
 | metric_date | date | нет | — |
 | status | text | нет | 'pending'::text |
 | requested_at | timestamp with time zone | нет | now() |
+| initial_status | text | да | — |
+| retryable | boolean | нет | false |
 
 Ограничения и связи:
 
 - `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `CHECK ((initial_status = ANY (ARRAY['pending'::text, 'complete'::text, 'failed'::text])))`
 - `CHECK (isfinite(metric_date))`
 - `PRIMARY KEY (store_id, metric_date)`
 - `CHECK ((status = ANY (ARRAY['pending'::text, 'complete'::text, 'failed'::text])))`

@@ -182,10 +182,15 @@ export async function runOperationalSync(userId, storeId, {
         dateTo: job.date_to,
         now: clock(),
         fetchImpl,
-        beforeRequest: async () => {
+        beforeRequest: async request => {
           const slot = await operations.reserve(userId, job, rateDelaySeconds);
           if (!slot || !Number.isFinite(slot.waitMs) || slot.waitMs < 0) throw failure('operational_invalid_rate_slot');
-          if (slot.waitMs > 0) await waitImpl(slot.waitMs);
+          const progress={batches:partNumber,batchCount:productBatches.length,rows:metrics.length,requestFrom:request?.dateFrom??job.date_from,requestTo:request?.dateTo??job.date_to};
+          if (slot.waitMs > 0){
+            await operations.progress(userId,job,{...progress,stage:'rate_wait',nextRequestAt:slot.scheduledAt??new Date(clock().getTime()+slot.waitMs).toISOString()});
+            await waitImpl(slot.waitMs);
+          }
+          await operations.progress(userId,job,{...progress,stage:'fetching',requestStartedAt:clock().toISOString()});
         }
       });
       const stored = await operations.store({
