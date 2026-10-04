@@ -18,9 +18,9 @@
     "semantic_hash": ""
   },
   "app/server.mjs": {
-    "mtime": 1791102791.9054458,
-    "seen": 1791103560.2751122,
-    "ast_hash": "2b9d23e3de4a86d077d4cf6f0fa1598b",
+    "mtime": 1791124256.3719275,
+    "seen": 1791124524.1572406,
+    "ast_hash": "b71a01bb8efbd6697f7147f1713557ff",
     "semantic_hash": ""
   },
   "db/package.json": {
@@ -906,21 +906,21 @@
     "semantic_hash": ""
   },
   "app/modules/operational/operational-sync.mjs": {
-    "mtime": 1791122157.7366338,
-    "seen": 1791123130.6595228,
-    "ast_hash": "ce4791f03e9aab05a8fb31a3b877055f",
+    "mtime": 1791124447.795366,
+    "seen": 1791124524.151547,
+    "ast_hash": "0f9f805761a46650b103faca6c6ad103",
     "semantic_hash": ""
   },
   "app/modules/operational/operational-sync.test.mjs": {
-    "mtime": 1791121905.800924,
-    "seen": 1791123130.6595244,
-    "ast_hash": "8399e90c4a299ba5829f1fc000ffa81d",
+    "mtime": 1791124484.5186286,
+    "seen": 1791124524.1515496,
+    "ast_hash": "8c689984988e6db7bbc6a3f8b7f3a457",
     "semantic_hash": ""
   },
   "app/modules/operational/operational.repository.mjs": {
-    "mtime": 1791122649.992679,
-    "seen": 1791123130.6595266,
-    "ast_hash": "9fe1678abd82355e1aa334ad3aa41086",
+    "mtime": 1791124447.035258,
+    "seen": 1791124524.1515515,
+    "ast_hash": "f8f06dc6ead7518b790fcfb80ba8cef8",
     "semantic_hash": ""
   },
   "app/modules/operational/wb-sales-funnel.mjs": {
@@ -1164,9 +1164,9 @@
     "semantic_hash": ""
   },
   "outputs/p0.4-operational-contract.md": {
-    "mtime": 1791122557.5550287,
-    "seen": 1791123130.672895,
-    "ast_hash": "2f9b56077e7623f8a6811e9c64c83d50",
+    "mtime": 1791124515.2163527,
+    "seen": 1791124524.1649857,
+    "ast_hash": "09e9746809c708c7685e06eee19db637",
     "semantic_hash": ""
   },
   "outputs/p0.4-plan.md": {
@@ -1272,9 +1272,9 @@
     "semantic_hash": ""
   },
   "db/tests/operational-returns.integration.mjs": {
-    "mtime": 1791122032.3723423,
-    "seen": 1791123130.6664617,
-    "ast_hash": "42d870f6c2dc95f2579e906ed50763b2",
+    "mtime": 1791124447.4534535,
+    "seen": 1791124524.1585696,
+    "ast_hash": "f36f8dff704f2c4fc4927ee91aff7fd6",
     "semantic_hash": ""
   },
   "outputs/financial-workflow-changes-2026-10-04.md": {

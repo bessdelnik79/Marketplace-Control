@@ -10,7 +10,7 @@ if(!integrationUrl)throw new Error('Set OPERATIONAL_INTEGRATION_DATABASE_URL to 
 if(!new URL(integrationUrl).pathname.slice(1).toLowerCase().includes('test'))throw new Error('Refusing to run P0.4 integration tests outside a database whose name contains "test".');
 process.env.DATABASE_URL=integrationUrl;
 
-const {beginOperationalSync,completeOperationalSync,failOperationalSync,getOperationalOverviewData,getOperationalSyncState,reserveOperationalRequestSlot,requestOperationalRangeRefresh,operationalDisplayRange}=await import('../../app/modules/operational/operational.repository.mjs');
+const {acquireOperationalSyncLease,closeOperationalSyncLeases,beginOperationalSync,completeOperationalSync,failOperationalSync,getOperationalOverviewData,getOperationalSyncState,reserveOperationalRequestSlot,requestOperationalRangeRefresh,operationalDisplayRange}=await import('../../app/modules/operational/operational.repository.mjs');
 const {migrate,pool}=await import('../../app/infrastructure/database/client.mjs');
 const {buildOperationalOverview}=await import('../../app/modules/overview/operational-overview.mjs');
 const {storeOperationalSnapshot}=await import('../../app/infrastructure/storage/operational-source-storage.mjs');
@@ -320,4 +320,30 @@ test('manual corrected range resumes only parameter blocks and retains access bl
   assert.equal(await streamStatus(),'blocked');
 });
 
-test.after(async()=>{await pool.end();await rm(rawRoot,{recursive:true,force:true});});
+test('session store lease is exclusive and only a verified active lease can recover a recent orphan',async()=>{
+  // Previous access-block regression deliberately leaves this test store blocked.
+  await context(ids.user,ids.business,client=>client.query(`update mc.sync_streams set status='active',next_run_at=clock_timestamp()
+    where business_id=$1 and store_id=$2 and source_type='operational_sales_funnel'`,[ids.business,ids.store]));
+  const first=await acquireOperationalSyncLease(ids.user,ids.store);
+  first.assertActive();
+  assert.ok(first);assert.equal(await acquireOperationalSyncLease(ids.user,ids.store),null);
+  try{
+    const range={dateFrom:'2026-09-14',dateTo:'2026-09-20'};
+    const orphan=await beginOperationalSync(ids.user,ids.store,{force:true,...range});
+    assert.equal(orphan.started,true);
+    assert.equal((await beginOperationalSync(ids.user,ids.store,{force:true,...range})).reason,'running');
+    await assert.rejects(()=>beginOperationalSync(ids.user,ids.store,{force:true,...range,runtimeLease:{release:async()=>{}}}),/operational_invalid_runtime_lease/);
+    const recovered=await beginOperationalSync(ids.user,ids.store,{force:true,...range,runtimeLease:first});
+    assert.equal(recovered.started,true);assert.notEqual(recovered.run_id,orphan.run_id);
+    const old=await context(ids.user,ids.business,async client=>(await client.query(`select status,error_code from mc.sync_runs where id=$1`,[orphan.run_id])).rows[0]);
+    assert.deepEqual(old,{status:'failed',error_code:'operational_interrupted'});
+    await failOperationalSync(ids.user,recovered,'test_cleanup');
+  }finally{await first.release();await first.release();}
+  assert.throws(()=>first.assertActive(),/operational_invalid_runtime_lease/);
+  await assert.rejects(()=>beginOperationalSync(ids.user,ids.store,{force:true,dateFrom:'2026-09-14',dateTo:'2026-09-20',runtimeLease:first}),/operational_invalid_runtime_lease/);
+  const next=await acquireOperationalSyncLease(ids.user,ids.store);
+  assert.ok(next);await next.release();
+  await assert.rejects(()=>acquireOperationalSyncLease(ids.foreignUser,ids.store),/operational_connection_unavailable/);
+});
+
+test.after(async()=>{await closeOperationalSyncLeases();await pool.end();await rm(rawRoot,{recursive:true,force:true});});

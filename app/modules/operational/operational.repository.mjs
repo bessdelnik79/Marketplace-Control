@@ -3,9 +3,15 @@ import { pool, withBusinessContext, withOwnedBusinessContext } from '../../infra
 import { verifyOperationalSnapshotObject } from '../../infrastructure/storage/operational-source-storage.mjs';
 import { validateCalendarDate } from '../overview/financial-overview.mjs';
 import { readFinancialReturnsCache } from './financial-returns-cache.mjs';
+import pg from 'pg';
 
 const parserVersion='wb-operational-cache-returns-v4';
 const dayMs=86400000;
+const runtimeLeases=new WeakMap();
+const leasePool=new pg.Pool({connectionString:process.env.DATABASE_URL??'postgres://marketplace_control:marketplace_control_local@127.0.0.1:5432/marketplace_control',
+  max:4,allowExitOnIdle:true,idleTimeoutMillis:1000,connectionTimeoutMillis:5000});
+
+export async function closeOperationalSyncLeases(){await leasePool.end();}
 
 function calendarDay(value){
   const text=String(value??'');
@@ -80,13 +86,47 @@ export async function getOperationalCachedSources(userId,job,{now=new Date()}={}
   });
 }
 
-export async function beginOperationalSync(userId,storeId,{force=false,dateFrom,dateTo,businessId:targetBusinessId}={}){
+export async function acquireOperationalSyncLease(userId,storeId,{businessId:targetBusinessId}={}){
+  const inContext=targetBusinessId?action=>withBusinessContext(userId,targetBusinessId,action):action=>withOwnedBusinessContext(userId,action);
+  const businessId=await inContext(async(client,businessId,role)=>{
+    if(!['owner','editor'].includes(role))throw new Error('operational_refresh_forbidden');
+    if(!(await client.query(`select 1 from mc.stores where business_id=$1 and id=$2 and status='active'`,[businessId,storeId])).rowCount)throw new Error('operational_connection_unavailable');
+    return businessId;
+  });
+  const client=await leasePool.connect(),key=`operational:${businessId}:${storeId}`;
+  let lease,connectionError;
+  const onError=error=>{connectionError=error;if(lease)runtimeLeases.delete(lease);};
+  client.on('error',onError);
+  try{
+    const locked=(await client.query(`select pg_try_advisory_lock(hashtextextended($1,0)) locked`,[key])).rows[0].locked;
+    if(!locked){client.removeListener('error',onError);client.release();return null;}
+    let released=false;
+    lease={assertActive:()=>{
+      if(!runtimeLeases.has(lease))throw new Error('operational_invalid_runtime_lease');
+    },release:async()=>{
+      if(released)return;
+      released=true;runtimeLeases.delete(lease);
+      let failure=connectionError;
+      try{
+        if(!failure&&(await client.query(`select pg_advisory_unlock(hashtextextended($1,0)) unlocked`,[key])).rows[0].unlocked!==true)failure=new Error('operational_lease_lost');
+      }catch(error){failure=error;}
+      finally{client.removeListener('error',onError);client.release(failure);}
+      if(failure&&!connectionError)throw failure;
+    }};
+    runtimeLeases.set(lease,{businessId,storeId,userId});
+    return lease;
+  }catch(error){client.removeListener('error',onError);client.release(error);throw error;}
+}
+
+export async function beginOperationalSync(userId,storeId,{force=false,dateFrom,dateTo,businessId:targetBusinessId,runtimeLease}={}){
   let range=period(dateFrom,dateTo);
   const inContext=targetBusinessId
     ? action=>withBusinessContext(userId,targetBusinessId,action)
     : action=>withOwnedBusinessContext(userId,action);
   return inContext(async(client,businessId,role)=>{
     if(!['owner','editor'].includes(role))throw new Error('operational_refresh_forbidden');
+    const leaseContext=runtimeLease&&runtimeLeases.get(runtimeLease);
+    if(runtimeLease&&(!leaseContext||leaseContext.businessId!==businessId||leaseContext.storeId!==storeId||leaseContext.userId!==userId))throw new Error('operational_invalid_runtime_lease');
     await client.query(`select 1 from mc.businesses where id=$1 for update`,[businessId]);
     await client.query(
       `insert into mc.sync_streams(business_id,store_id,source_type,next_run_at,status)
@@ -121,7 +161,8 @@ export async function beginOperationalSync(userId,storeId,{force=false,dateFrom,
     if(products.some(item=>!Number.isSafeInteger(Number(item.nm_id))||Number(item.nm_id)<=0))throw new Error('operational_invalid_nm_id');
     if(!force&&row.next_run_at&&new Date(row.next_run_at)>new Date())return {started:false,reason:'not_due'};
     const running=(await client.query(`select id,started_at from mc.sync_runs where stream_id=$1 and status='running'`,[row.stream_id])).rows[0];
-    if(running&&new Date(running.started_at)>new Date(Date.now()-30*60*1000))return {started:false,reason:'running'};
+    if(runtimeLease&&runtimeLeases.get(runtimeLease)!==leaseContext)throw new Error('operational_invalid_runtime_lease');
+    if(running&&!leaseContext&&new Date(running.started_at)>new Date(Date.now()-30*60*1000))return {started:false,reason:'running'};
     if(running)await client.query(`update mc.sync_runs set status='failed',finished_at=now(),error_code='operational_interrupted',progress=jsonb_set(progress,'{stage}','"failed"') where id=$1`,[running.id]);
     const pending=(await client.query(`select metric_date::text from mc.operational_range_requests where business_id=$1 and store_id=$2 and (status='pending' or status='failed' and retryable) order by case status when 'pending' then 0 else 1 end,metric_date desc limit 1`,[businessId,storeId])).rows[0];
     if(pending){

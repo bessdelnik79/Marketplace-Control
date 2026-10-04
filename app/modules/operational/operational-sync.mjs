@@ -6,6 +6,7 @@ import {
 } from '../../infrastructure/storage/operational-source-storage.mjs';
 import {
   beginOperationalSync,
+  acquireOperationalSyncLease,
   getOperationalCachedSources,
   reserveOperationalRequestSlot,
   reserveOperationalPurchasedReturnsSlot,
@@ -73,6 +74,7 @@ const knownErrors = new Set([
 ]);
 
 const defaultOperations = {
+  lease: acquireOperationalSyncLease,
   begin: beginOperationalSync,
   cached: getOperationalCachedSources,
   reserve: reserveOperationalRequestSlot,
@@ -171,11 +173,14 @@ export async function runOperationalSync(userId, storeId, {
 } = {}) {
   const operations = { ...defaultOperations, ...dependencies };
   const log = safeLogger(logger);
-  let job, snapshotId, range, published = false;
+  let job, snapshotId, range, runtimeLease, published = false;
   try {
     range = operationalRollingMoscowRange(clock());
-    job = await operations.begin(userId, storeId, { force, ...(businessId ? { businessId } : {}), ...range });
+    runtimeLease=await operations.lease(userId,storeId,{businessId});
+    if(runtimeLease===null)return {status:'not_started',reason:'running',range};
+    job = await operations.begin(userId, storeId, { force, ...(runtimeLease ? {runtimeLease} : {}), ...(businessId ? { businessId } : {}), ...range });
     if (!job?.started) return { status: 'not_started', reason: job?.reason ?? 'unknown', range };
+    runtimeLease?.assertActive?.();
     range={dateFrom:job.date_from,dateTo:job.date_to};
     if(!job.scopes?.includes('statistics'))throw failure('operational_statistics_scope_missing');
     const products = selectedProducts(job);
@@ -207,6 +212,7 @@ export async function runOperationalSync(userId, storeId, {
       partNumber:objects.length,raw:response.raw,checksum:response.rawChecksum,...storageOptions(sourceRoot,masterKey)}));
     if(funnel.size||returned.size)await storeRaw(cached);
     for(const [index,request] of requests.entries()){
+      runtimeLease?.assertActive?.();
       const response=await operations.load(token,{
         nmIds:request.products.map(product=>product.nmId),dateFrom:request.dateFrom,dateTo:request.dateTo,now:clock(),clock,fetchImpl,
         beforeRequest:async day=>{
@@ -214,6 +220,7 @@ export async function runOperationalSync(userId, storeId, {
           if(!slot||!Number.isFinite(slot.waitMs)||slot.waitMs<0)throw failure('operational_invalid_rate_slot');
           const progress={batches:index,batchCount:requests.length,rows:metrics.length,requestFrom:day?.dateFrom??request.dateFrom,requestTo:day?.dateTo??request.dateTo};
           if(slot.waitMs>0){await operations.progress(userId,job,{...progress,stage:'rate_wait',nextRequestAt:slot.scheduledAt??new Date(clock().getTime()+slot.waitMs).toISOString()});await waitImpl(slot.waitMs);}
+          runtimeLease?.assertActive?.();
           await operations.progress(userId,job,{...progress,stage:'fetching',requestStartedAt:clock().toISOString()});
         }
       });
@@ -221,11 +228,13 @@ export async function runOperationalSync(userId, storeId, {
       await operations.progress(userId,job,{stage:'loading',batches:index+1,batchCount:requests.length,products:products.length,rows:metrics.length,missing:missingCount});
     }
     for(const request of returnRequests){
+      runtimeLease?.assertActive?.();
       const response=await operations.loadReturns(token,{...request,now:clock(),clock,fetchImpl,beforeRequest:async day=>{
         const slot=await operations.reserveReturns(userId,job,65);
         if(!slot||!Number.isFinite(slot.waitMs)||slot.waitMs<0)throw failure('operational_invalid_rate_slot');
         const progress={batches:objects.length,batchCount:requests.length+returnRequests.length,rows:metrics.length,source:'purchased_returns',requestFrom:day?.dateFrom??request.dateFrom,requestTo:day?.dateTo??request.dateTo};
         if(slot.waitMs>0){await operations.progress(userId,job,{...progress,stage:'rate_wait',nextRequestAt:slot.scheduledAt??new Date(clock().getTime()+slot.waitMs).toISOString()});await waitImpl(slot.waitMs);}
+        runtimeLease?.assertActive?.();
         await operations.progress(userId,job,{...progress,stage:'fetching',requestStartedAt:clock().toISOString()});
       }});
       await storeRaw(response);
@@ -241,6 +250,7 @@ export async function runOperationalSync(userId, storeId, {
       stage: 'saving', batches: objects.length, batchCount: objects.length,
       products: products.length, rows: metrics.length, missing: missingCount
     });
+    runtimeLease?.assertActive?.();
     const completed = await operations.complete(userId, job, {
       documentId,
       snapshotId,
@@ -267,6 +277,8 @@ export async function runOperationalSync(userId, storeId, {
     }
     try { log.warn('[WB operational sync failed]', { userId, storeId, error: code, status: error?.status, endpoint: error?.endpoint }); } catch {}
     return { status: 'failed', range, errorCode: code };
+  } finally {
+    if(runtimeLease)await runtimeLease.release().catch(()=>{try{log.warn('[WB operational lease release failed]');}catch{}});
   }
 }
 

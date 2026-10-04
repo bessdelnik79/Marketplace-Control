@@ -14,7 +14,7 @@ async function syntheticReturns(_token,options){
   return {rows,missing:[],raw:'{"returns":[]}',rawChecksum:'d'.repeat(64)};
 }
 function runOperationalSync(userId,storeId,options){
-  return executeOperationalSync(userId,storeId,{...options,dependencies:{cached:async()=>({funnelRows:[],returnsRows:[]}),reserveReturns:async()=>({waitMs:0}),loadReturns:syntheticReturns,...options.dependencies}});
+  return executeOperationalSync(userId,storeId,{...options,dependencies:{lease:async()=>undefined,cached:async()=>({funnelRows:[],returnsRows:[]}),reserveReturns:async()=>({waitMs:0}),loadReturns:syntheticReturns,...options.dependencies}});
 }
 
 const silentLogger = { info() {}, warn() {} };
@@ -310,7 +310,7 @@ test('scheduler deduplicates an active user and store in process', async () => {
   const options = {
     clock: fixedClock,
     logger: silentLogger,
-    dependencies: { begin: async () => gate }
+    dependencies: { lease:async()=>undefined,begin: async () => gate }
   };
   assert.equal(scheduleOperationalSync('dedupe-user', 'dedupe-store', options), true);
   assert.equal(scheduleOperationalSync('dedupe-user', 'dedupe-store', options), false);
@@ -327,15 +327,38 @@ function cachedGrid(range){
  return {funnelRows,returnsRows,raw:'{"source":"cache"}',rawChecksum:'c'.repeat(64)};
 }
 test('complete database coverage publishes locally without decrypting or making any WB request',async()=>{
- let completed,stored=0;
+ let completed,stored=0,released=0;const lease={release:async()=>{released++;}};
  const result=await runOperationalSync('user-1','store-1',{clock:fixedClock,logger:silentLogger,dependencies:{
- begin:async(_u,_s,range)=>jobFor(range),cached:async(_u,job)=>cachedGrid({dateFrom:job.date_from,dateTo:job.date_to}),
+ lease:async()=>lease,begin:async(_u,_s,range)=>{assert.equal(range.runtimeLease,lease);return jobFor(range);},cached:async(_u,job)=>cachedGrid({dateFrom:job.date_from,dateTo:job.date_to}),
  progress:async()=>{},decrypt:()=>assert.fail('cache must not decrypt'),load:()=>assert.fail('cached funnel'),loadReturns:()=>assert.fail('cached returns'),
  reserve:()=>assert.fail('cached slots'),reserveReturns:()=>assert.fail('cached slots'),store:async options=>{stored++;return {partNumber:options.partNumber};},
  randomUUID:ids(),complete:async(_u,_j,payload)=>{completed=payload;return {quality:'complete'};}
  }});
  assert.equal(result.status,'completed');assert.equal(stored,1);assert.equal(completed.metrics.length,7);
+ assert.equal(released,1);
  assert.ok(completed.metrics.every(row=>row.returnSource==='financial_report'&&row.returnDateBasis==='accounting_date'));
+});
+
+test('another process holding the runtime lease prevents starting or requesting WB',async()=>{
+ const result=await runOperationalSync('busy-user','busy-store',{clock:fixedClock,logger:silentLogger,dependencies:{lease:async()=>null,begin:()=>assert.fail('must not start'),decrypt:()=>assert.fail('must not decrypt')}});
+ assert.equal(result.status,'not_started');assert.equal(result.reason,'running');
+});
+
+test('runtime lease is released when begin fails',async()=>{
+ let released=0;
+ const result=await runOperationalSync('failed-user','failed-store',{clock:fixedClock,logger:silentLogger,dependencies:{lease:async()=>({release:async()=>{released++;}}),begin:async()=>{throw new Error('operational_connection_unavailable');}}});
+ assert.equal(result.status,'failed');assert.equal(released,1);
+});
+
+test('lost runtime lease prevents publishing cached results',async()=>{
+ let active=true,released=0;
+ const result=await runOperationalSync('user-1','store-1',{clock:fixedClock,logger:silentLogger,dependencies:{
+ lease:async()=>({assertActive:()=>{if(!active)throw new Error('operational_invalid_runtime_lease');},release:async()=>{released++;}}),
+ begin:async(_u,_s,range)=>jobFor(range),cached:async(_u,job)=>cachedGrid({dateFrom:job.date_from,dateTo:job.date_to}),
+ progress:async(_u,_j,progress)=>{if(progress.stage==='saving')active=false;},store:async options=>({partNumber:options.partNumber}),randomUUID:ids(),
+ complete:()=>assert.fail('lost lease must not publish'),remove:async()=>{},fail:async()=>{}
+ }});
+ assert.equal(result.status,'failed');assert.equal(released,1);
 });
 test('partial cache fetches only missing funnel and return days without overwriting financial evidence',async()=>{
  const requests=[],returnRequests=[];let completed;
