@@ -1,4 +1,5 @@
 import { acknowledgeFinancialCalculationInvalidation, getFinancialCompatibilityBootstrapState, listFinancialCalculationInvalidations, runFinancialCalculation, wakeFinancialDailyAfterCompatibility } from '../../db.mjs';
+import { refreshFinancialBankChecks } from '../reports/reports.repository.mjs';
 
 const expectedUnavailable = new Set([
   'calculation_store_unavailable',
@@ -12,14 +13,16 @@ export function createFinancialCalculationWorker({
   list=listFinancialCalculationInvalidations,
   bootstrap=getFinancialCompatibilityBootstrapState,
   run=runFinancialCalculation,
+  refreshBankChecks=refreshFinancialBankChecks,
   wakeDaily=wakeFinancialDailyAfterCompatibility,
   acknowledge=acknowledgeFinancialCalculationInvalidation
 }={}){
-  if(typeof list!=='function'||typeof bootstrap!=='function'||typeof run!=='function'||typeof wakeDaily!=='function'||typeof acknowledge!=='function')throw new TypeError('financial calculation worker dependencies are required');
+  if(typeof list!=='function'||typeof bootstrap!=='function'||typeof run!=='function'||typeof refreshBankChecks!=='function'||typeof wakeDaily!=='function'||typeof acknowledge!=='function')throw new TypeError('financial calculation worker dependencies are required');
   async function runOnce(){
     const pendingItems=await list();
     for(const pending of pendingItems){
       try{
+        await refreshBankChecks(pending.requested_by,pending.store_id);
         const state=await bootstrap(pending.requested_by,pending.store_id);
         if(!state.selectionReady)throw new Error('calculation_selection_missing');
         if(state.waitingForPipeline&&!state.targets?.length)continue;

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { decimal, parseFinancialJson, stableJson } from './finance.mjs';
+import { scaledMoneyMatches } from '../../infrastructure/finance/money-comparison.mjs';
 
 export const financialReportListEndpoint = 'https://finance-api.wildberries.ru/api/finance/v1/sales-reports/list';
 const scale = 1000000000000n;
@@ -71,15 +72,16 @@ export function reconcileBankPayment(report, summary) {
       }
       for (const field of expenseFields) totals[field] += amounts[field];
     }
-    if(checkedFields.some(field => cents(totals[field]) !== cents(summaryAmounts[field])))return notCheckable('summary_detail_mismatch');
+    if(checkedFields.some(field => cents(totals[field]) !== cents(summaryAmounts[field]) && !scaledMoneyMatches(totals[field],summaryAmounts[field],12)))return notCheckable('summary_detail_mismatch');
     const expected = totals.forPay - expenseFields.reduce((sum, field) => sum + totals[field], 0n);
     if (expected < 0n || expected >= numeric20x4Limit) return notCheckable('payment_amount_unverified');
     const expectedCents = cents(expected), actualCents = cents(bank);
+    const matched = expectedCents === actualCents || scaledMoneyMatches(expected,bank,12);
     if(expectedCents >= 1000000000000000000n || actualCents >= 1000000000000000000n)return notCheckable('payment_amount_unverified');
     return {
-      status: expectedCents === actualCents ? 'passed' : 'failed',
+      status: matched ? 'passed' : 'failed',
       expectedAmount: money(expectedCents), actualAmount: money(actualCents),
-      reason: expectedCents === actualCents ? null : 'bank_payment_mismatch'
+      reason: matched ? null : 'bank_payment_mismatch'
     };
   } catch {
     return notCheckable('invalid_amount');

@@ -11,6 +11,7 @@ process.env.DATABASE_URL=integrationUrl;
 const {migrate,pool,completeFinancialSync,runFinancialCalculation,getPublishedFinancialPeriod,jobsRepository,financialDailyGenerationRepository}=await import('../../app/db.mjs');
 const {persistFinancialNormalization}=await import('../../app/modules/reports/normalization.repository.mjs');
 const {financialParserVersion}=await import('../../app/modules/reports/finance.mjs');
+const {refreshFinancialBankChecks,getFinancialBankReconciliationState}=await import('../../app/modules/reports/reports.repository.mjs');
 test.after(async()=>{await pool.end();});
 
 async function context(scope,action){
@@ -113,7 +114,7 @@ test('migration 063 queues every tenant existing week for v32 without WB fetch',
       jobs:(await client.query(`select payload->>'allowsWbApi' allows_wb_api from mc.jobs where store_id=$1 and job_type='financial_dates_recalculate' and status='pending'`,[scope.store])).rows
     }));
     assert.deepEqual(saved.events,[{affected_from:periodStart,affected_to:periodEnd,implementation_version:'financial-result-v32'}]);
-    assert.equal(saved.invalidation.reason,'field_based_wb_expenses_v32');
+    assert.equal(saved.invalidation.reason,'financial_half_kopeck_tolerance');
     assert.equal(saved.fetches,0);
     assert.ok(saved.jobs.length>0);
     assert.ok(saved.jobs.every(job=>job.allows_wb_api==='false'));
@@ -155,7 +156,7 @@ test('mixed sale expenses retain exact sources and rounded evidence through v31 
       where line.run_id=$1 and line.category_code='logistics'`,[calculated.runId])).rows,
     categories:(await client.query(`select category_code from mc.result_lines where run_id=$1 order by category_code`,[calculated.runId])).rows.map(row=>row.category_code)
   }));
-  assert.equal(persisted.method,'financial-result-v31');
+  assert.equal(persisted.method,'financial-result-v33');
   assert.deepEqual(persisted.logistics,[{source_amount:'-1.23456',result_amount:'-1.2346',evidence_amount:'-1.2346'}]);
   for(const category of ['logistics','storage','acceptance','penalty','deduction','acquiring','wb_reward_without_vat','wb_reward_vat','wb_row_rounding_adjustment']){
     assert.ok(persisted.categories.includes(category),category);
@@ -163,7 +164,7 @@ test('mixed sale expenses retain exact sources and rounded evidence through v31 
   await context(scope,client=>client.query(`select e.id from mc.method_versions method
     cross join lateral mc.emit_financial_input_event($1,$2,'result_method_updated',$3,$4,
       p_source_result_method_version_id=>method.id) e
-    where method.code='financial_result' and method.version_no=32`,
+    where method.code='financial_result' and method.version_no=34`,
     [scope.store,`field-expenses-mixed:${scope.store}`,periodStart,periodEnd]));
   await drainDaily();
   const published=await getPublishedFinancialPeriod(scope.user,scope.store,periodStart,periodEnd);
@@ -178,5 +179,65 @@ test('mixed sale expenses retain exact sources and rounded evidence through v31 
     join mc.financial_daily_results line on line.generation_id=generation.id and line.accounting_date=day.accounting_date
     join mc.financial_daily_evidence e on e.daily_result_id=line.id
     where current.store_id=$1 and line.category_code='logistics'`,[scope.store])).rows);
-  assert.deepEqual(daily,[{implementation_version:'financial-result-v32',amount_signed:'-1.2346',contribution_amount:'-1.2346'}]);
+  assert.deepEqual(daily,[{implementation_version:'financial-result-v34',amount_signed:'-1.2346',contribution_amount:'-1.2346'}]);
+});
+
+test('half-kopeck controls persist exact WB amounts through weekly and daily evidence',async()=>{
+  for(const [expense,payout,expectedQuality] of [['1.775','98.23','complete'],['1.77500000000000000001','98.23','partial']]){
+    const scope=await fixture([
+      {docTypeName:'Продажа',sellerOperName:'Продажа',quantity:1,retailAmount:'100',forPay:payout,deliveryService:expense},
+      {docTypeName:'',sellerOperName:'Возмещение издержек по перевозке/по складским операциям с товаром',rebillLogisticCost:'2.13',vw:'-1.775',vwNds:'-0.36'}
+    ]);
+    const calculated=await runFinancialCalculation(scope.user,scope.store);
+    assert.equal(calculated.quality,expectedQuality);
+    if(expectedQuality==='complete'){
+      assert.equal(calculated.totals.availableResultBeforeTax,'98.2300');
+      await context(scope,client=>client.query(`select e.id from mc.method_versions method
+        cross join lateral mc.emit_financial_input_event($1,$2,'result_method_updated',$3,$4,
+          p_source_result_method_version_id=>method.id) e
+        where method.code='financial_result' and method.version_no=34`,
+        [scope.store,`half-kopeck:${scope.store}`,periodStart,periodEnd]));
+      await drainDaily();
+      const published=await getPublishedFinancialPeriod(scope.user,scope.store,periodStart,periodEnd);
+      assert.equal(published.quality,'complete');
+      assert.equal(published.totals.availableResultBeforeTax,'98.2300');
+      const amounts=await context(scope,async client=>(await client.query(`select component.amount_signed::text amount
+        from mc.financial_components component join mc.operation_versions operation on operation.id=component.operation_version_id
+        where operation.store_id=$1 and component.source_field='deliveryService'`,[scope.store])).rows);
+      assert.deepEqual(amounts,[{amount:'-1.775'}]);
+    }
+  }
+});
+
+test('saved bank boundary failures receive a fresh check without rewriting history',async()=>{
+  for(const source of ['summary_versions','inventory']){
+  const scope=await fixture([{docTypeName:'Продажа',sellerOperName:'Продажа',quantity:1,retailAmount:'100',forPay:'60',acquiringFee:'40'}]);
+  await context(scope,async client=>{
+    const report=(await client.query(`select current_version_id,external_report_id,period_start::text,period_end::text from mc.reports where store_id=$1`,[scope.store])).rows[0];
+    const run=(await client.query(`select id from mc.sync_runs where store_id=$1 limit 1`,[scope.store])).rows[0];
+    const summary={reportId:report.external_report_id,reportType:1,dateFrom:report.period_start,dateTo:report.period_end,currency:'RUB',
+      forPaySum:'60',deliveryServiceSum:'0',paidStorageSum:'0',paidAcceptanceSum:'0',deductionSum:'0',penaltySum:'0',additionalPaymentSum:'0',
+      cashbackAmountSum:'0',cashbackCommissionChangeSum:'0',bankPaymentSum:'60.005'};
+    if(source==='summary_versions')await client.query(`insert into mc.financial_report_summary_versions(business_id,store_id,report_version_id,sync_run_id,checksum,raw_data)
+      values($1,$2,$3,$4,'half-kopeck-summary',$5::jsonb)`,[scope.business,scope.store,report.current_version_id,run.id,JSON.stringify(summary)]);
+    if(source==='inventory'){
+      const coverage=(await client.query(`insert into mc.financial_week_coverage(business_id,store_id,credential_generation,week_start,week_end,check_reasons)
+        values($1,$2,1,$3,$4,ARRAY['test']) returning id`,[scope.business,scope.store,periodStart,periodEnd])).rows[0];
+      const normalization=(await client.query(`select id from mc.report_normalizations where report_version_id=$1 and status='succeeded' order by normalized_at desc limit 1`,[report.current_version_id])).rows[0];
+      await client.query(`insert into mc.financial_week_inventory(business_id,store_id,coverage_id,external_report_id,inventory_checksum,period_start,period_end,
+        summary_raw_data,report_version_id,accepted_normalization_id,accepted_inventory_checksum,accepted_at,fetch_status)
+        values($1,$2,$3,$4,$5,$6,$7,$8::jsonb,$9,$10,$5,clock_timestamp(),'accepted')`,
+        [scope.business,scope.store,coverage.id,report.external_report_id,'a'.repeat(64),periodStart,periodEnd,JSON.stringify(summary),report.current_version_id,normalization.id]);
+    }
+    await client.query(`insert into mc.reconciliation_checks(business_id,store_id,report_version_id,check_code,expected_amount,actual_amount,status,details,created_at)
+      values($1,$2,$3,'wb_bank_payment_sum_v1',60,60.01,'failed','{"reason":"bank_payment_mismatch"}',clock_timestamp())`,[scope.business,scope.store,report.current_version_id]);
+  });
+  assert.equal((await getFinancialBankReconciliationState(scope.user,scope.store)).failed,1);
+  await refreshFinancialBankChecks(scope.user,scope.store);
+  assert.equal((await getFinancialBankReconciliationState(scope.user,scope.store)).passed,1);
+  await refreshFinancialBankChecks(scope.user,scope.store);
+  const checks=await context(scope,async client=>(await client.query(`select status,count(*)::int n from mc.reconciliation_checks
+    where store_id=$1 and (details->>'reason'='bank_payment_mismatch' or status='passed') group by status order by status`,[scope.store])).rows);
+  assert.deepEqual(checks,[{status:'failed',n:1},{status:'passed',n:1}]);
+  }
 });

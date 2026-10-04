@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { scaledMoneyMatches } from '../../infrastructure/finance/money-comparison.mjs';
 
 const MONEY_SCALE = 4;
 const RESULT_CATEGORIES = new Set([
@@ -101,7 +102,7 @@ export function normalizeMoney(value) {
 export function isVerifiedWbResultComponent({ categoryCode, sourceField, operationType, docTypeName, sellerOperName, bonusTypeName, rawValue, scopeCode, resultMethodVersion = 'financial-result-v32' }) {
   const value=String(rawValue??'').trim().replace(',', '.');
   if(!/^-?\d+(?:\.\d+)?$/.test(value)||!/[1-9]/.test(value))return false;
-  const fieldBasedMethod=['financial-result-v31','financial-result-v32'].includes(resultMethodVersion);
+  const fieldBasedMethod=['financial-result-v31','financial-result-v32','financial-result-v33','financial-result-v34'].includes(resultMethodVersion);
   if(sourceField==='cashbackDiscount')return false;
   if(scopeCode==='store')return VERIFIED_STORE_COMPONENTS.get(sourceField)?.has(categoryCode)===true;
   if(fieldBasedMethod&&FIELD_BASED_WB_EXPENSES.has(sourceField)){
@@ -492,7 +493,8 @@ function verifiedTransportReimbursementReferenceIds(components){
     if(group.length!==3||fields.size!==3
       ||!fields.has('rebillLogisticCost')||!fields.has('vw')||!fields.has('vwNds'))continue;
     const net=group.reduce((sum,component)=>sum+rawReturnAmount(component.amountSigned),0n);
-    if(roundExactToKopecksScale4(net)!==0n)continue;
+    // WB rounds these reference fields separately; half a kopeck is an accepted residual.
+    if(!scaledMoneyMatches(net,0n,RETURN_RAW_SCALE))continue;
     for(const component of group){
       if(component.sourceField==='vw'||component.sourceField==='vwNds')verified.add(String(component.id));
     }
@@ -537,7 +539,9 @@ function exactReturnWbExpenseReversal(components){
   }
   if(!fields.has('retailAmount')||!fields.has('forPay'))return null;
   const expense=[...RETURN_WB_EXPENSE_FIELDS].reduce((sum,field)=>sum+(fields.get(field)??0n),0n);
-  return roundReturnAmountToMoney(expense)===roundReturnAmountToMoney(fields.get('retailAmount')-fields.get('forPay'))?expense:null;
+  const control=fields.get('retailAmount')-fields.get('forPay');
+  return roundReturnAmountToMoney(expense)===roundReturnAmountToMoney(control)
+    ||scaledMoneyMatches(expense,control,RETURN_RAW_SCALE)?expense:null;
 }
 
 export function calculateReturnWbExpenseReversal(components){
@@ -552,7 +556,8 @@ export function calculateReturnWbExpenseReversal(components){
   const expense=[...RETURN_WB_EXPENSE_FIELDS].reduce((sum,field)=>sum+(fields.get(field)??0n),0n);
   const control=fields.get('retailAmount')-fields.get('forPay');
   const rounded=roundReturnAmountToMoney(expense);
-  return rounded===roundReturnAmountToMoney(control)?rounded:null;
+  return rounded===roundReturnAmountToMoney(control)
+    ||scaledMoneyMatches(expense,control,RETURN_RAW_SCALE)?rounded:null;
 }
 
 function totalsFor(lines,taxUsable=false) {
@@ -603,8 +608,8 @@ export function calculateFinancialResult({
     matches.push(operation);
     operationsById.set(id, matches);
   }
-  const signedReturnExpenseMethod=['financial-result-v25','financial-result-v26','financial-result-v27','financial-result-v28','financial-result-v29','financial-result-v30','financial-result-v31','financial-result-v32'].includes(resultMethodVersion);
-  const exactRowResultMethod=['financial-result-v29','financial-result-v30','financial-result-v31','financial-result-v32'].includes(resultMethodVersion);
+  const signedReturnExpenseMethod=['financial-result-v25','financial-result-v26','financial-result-v27','financial-result-v28','financial-result-v29','financial-result-v30','financial-result-v31','financial-result-v32','financial-result-v33','financial-result-v34'].includes(resultMethodVersion);
+  const exactRowResultMethod=['financial-result-v29','financial-result-v30','financial-result-v31','financial-result-v32','financial-result-v33','financial-result-v34'].includes(resultMethodVersion);
   const retainReturnAcquiringMethod=['financial-result-v25','financial-result-v26'].includes(resultMethodVersion);
   const replacedReturnExpenseFields=retainReturnAcquiringMethod?RETURN_REPLACED_EXPENSE_FIELDS:RETURN_WB_EXPENSE_FIELDS;
   const componentsByOperation=new Map();
@@ -673,9 +678,10 @@ export function calculateFinancialResult({
     const roundedTarget=roundExactToKopecksScale4(exactSum);
     const payout=valid?rawReturnAmount(payouts[0].amountSigned):0n;
     const payoutEqualsTarget=payout===roundedTarget*10n**BigInt(RETURN_RAW_SCALE-MONEY_SCALE);
-    if(!valid||!payoutEqualsTarget){invalidExactRows.add(operationId);continue;}
+    if(!valid||(!payoutEqualsTarget&&!scaledMoneyMatches(payout,exactSum,RETURN_RAW_SCALE))){invalidExactRows.add(operationId);continue;}
+    const reconciledTarget=payoutEqualsTarget?roundedTarget:roundExactToScale4(payout);
     exactRowPlans.set(operationId,{
-      adjustment:roundedTarget-roundedCategorySum,reversalAmount,reportRowId:operation.reportRowId,
+      adjustment:reconciledTarget-roundedCategorySum,reversalAmount,reportRowId:operation.reportRowId,
       operationLinkId:confirmed?.link?.id??null
     });
   }

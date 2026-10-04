@@ -21,6 +21,19 @@ test('bank control checks covered sale-minus-return and expense rows exactly', (
   assert.equal(reconcileBankPayment(report, { ...summary, forPaySum: '81' }).reason, 'summary_detail_mismatch');
 });
 
+test('bank and summary money controls accept half a kopeck and retain reported amounts', () => {
+  for(const bankPaymentSum of ['60.005','59.995']){
+    assert.equal(reconcileBankPayment(report,{...summary,bankPaymentSum}).status,'passed');
+  }
+  for(const bankPaymentSum of ['60.005000000001','59.994999999999']){
+    assert.equal(reconcileBankPayment(report,{...summary,bankPaymentSum}).status,'failed');
+  }
+  assert.equal(reconcileBankPayment(report,{...summary,forPaySum:'80.005'}).status,'passed');
+  assert.equal(reconcileBankPayment(report,{...summary,forPaySum:'80.005000000001'}).reason,'summary_detail_mismatch');
+  assert.equal(reconcileBankPayment(report,{...summary,bankPaymentSum:'60.005'}).actualAmount,'60.01');
+  assert.equal(reconcileBankPayment(report,{...summary,cashbackAmountSum:'0.005'}).reason,'cashback_unverified');
+});
+
 test('informational cashback discount does not block the bank control', () => {
   const withReference = {
     ...report,

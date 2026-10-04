@@ -36,15 +36,15 @@
     "semantic_hash": "046d962d54c9fcbf381f9a22721660d5"
   },
   "db/tests/p03-app.integration.mjs": {
-    "mtime": 1791050324.3843522,
-    "seen": 1791050721.3277807,
-    "ast_hash": "f9e3273d158e7da03975a356c32f3d1d",
+    "mtime": 1791091644.7579968,
+    "seen": 1791091758.1509402,
+    "ast_hash": "a6fec18ebd7cf0f0639420ff4faf1e29",
     "semantic_hash": ""
   },
   "db/tests/schema.test.mjs": {
-    "mtime": 1791052295.8504102,
-    "seen": 1791052699.110818,
-    "ast_hash": "da31d680d49e2d6dded7ede5dcc754ec",
+    "mtime": 1791091570.5758176,
+    "seen": 1791091758.1511545,
+    "ast_hash": "8b2272a1fe6f23e3371c21a0c16cc58e",
     "semantic_hash": ""
   },
   "outputs/design/build-editable.mjs": {
@@ -234,27 +234,27 @@
     "semantic_hash": ""
   },
   "app/modules/calculation/calculation-sync.mjs": {
-    "mtime": 1790787375.9724085,
-    "seen": 1791036406.5783923,
-    "ast_hash": "e688b6bb6a8eb48e80d4d30389ef5e8c",
+    "mtime": 1791091445.9206786,
+    "seen": 1791091758.140476,
+    "ast_hash": "44c56acdc8e02824b8ede555f133b69a",
     "semantic_hash": ""
   },
   "app/modules/calculation/calculation.mjs": {
-    "mtime": 1791050145.4213815,
-    "seen": 1791050721.3147397,
-    "ast_hash": "ae505efd08b481aeca71920e45e06a5b",
+    "mtime": 1791091538.043958,
+    "seen": 1791091758.1404815,
+    "ast_hash": "a7fe3e9724663c15d8653f63d17078cb",
     "semantic_hash": ""
   },
   "app/modules/calculation/calculation.repository.mjs": {
-    "mtime": 1791050532.1947844,
-    "seen": 1791050721.314742,
-    "ast_hash": "913aaf92ed931a3e6f1d92f759df0a87",
+    "mtime": 1791091715.0727174,
+    "seen": 1791091758.1404836,
+    "ast_hash": "9609f831cd9864c8896df0873f27f094",
     "semantic_hash": ""
   },
   "app/modules/calculation/calculation.test.mjs": {
-    "mtime": 1791050278.8942935,
-    "seen": 1791050721.3147461,
-    "ast_hash": "ed9f567ea6440ed7d9c816e54322a69d",
+    "mtime": 1791091033.8911448,
+    "seen": 1791091092.4382362,
+    "ast_hash": "8807a7f4d055a57255c7ab7d81cae514",
     "semantic_hash": ""
   },
   "app/modules/catalog/catalog-sync.mjs": {
@@ -354,9 +354,9 @@
     "semantic_hash": ""
   },
   "app/modules/reports/reports.repository.mjs": {
-    "mtime": 1791042655.0946214,
-    "seen": 1791043095.3870485,
-    "ast_hash": "64250430a4a8b24cb640f5c2137c73a0",
+    "mtime": 1791091479.0480127,
+    "seen": 1791091758.1489418,
+    "ast_hash": "842c73cfab4856b75cc88a3c987e065b",
     "semantic_hash": ""
   },
   "app/modules/stores/stores.repository.mjs": {
@@ -522,8 +522,8 @@
     "semantic_hash": ""
   },
   "outputs/database-v1-dictionary.md": {
-    "mtime": 1791050628.614452,
-    "seen": 1791050721.3325143,
+    "mtime": 1791091587.9946036,
+    "seen": 1791091758.155032,
     "ast_hash": "a5555dc1db10883355b54d7715ed6aeb",
     "semantic_hash": ""
   },
@@ -576,9 +576,9 @@
     "semantic_hash": ""
   },
   "outputs/financial-formulas.md": {
-    "mtime": 1791050324.7707229,
-    "seen": 1791050721.333599,
-    "ast_hash": "cbcb3a1f33360ad91afede55092bdff9",
+    "mtime": 1791091679.1649165,
+    "seen": 1791091758.1560824,
+    "ast_hash": "8406167478807acb148fe72690f59028",
     "semantic_hash": ""
   },
   "outputs/financial-reports.md": {
@@ -846,15 +846,15 @@
     "semantic_hash": ""
   },
   "app/modules/calculation/calculation-sync.test.mjs": {
-    "mtime": 1790787375.9724085,
-    "seen": 1791036406.578394,
-    "ast_hash": "ad195621f695d93fdab695c0327eec7a",
+    "mtime": 1791091570.5777695,
+    "seen": 1791091758.1404796,
+    "ast_hash": "580be8c7d069cc09ecf2d40d2521cf16",
     "semantic_hash": ""
   },
   "app/modules/calculation/calculation.repository.test.mjs": {
-    "mtime": 1791050712.2001133,
-    "seen": 1791050721.314744,
-    "ast_hash": "25c3256dd18886c1af1713e69500bd62",
+    "mtime": 1791091644.7560437,
+    "seen": 1791091758.1404853,
+    "ast_hash": "325edc9e0dc1d47d280d067eb1bf3a04",
     "semantic_hash": ""
   },
   "app/modules/calculation/daily-generation-worker.mjs": {
@@ -876,9 +876,9 @@
     "semantic_hash": ""
   },
   "app/modules/calculation/daily-generation.repository.mjs": {
-    "mtime": 1791050173.84744,
-    "seen": 1791050721.3151586,
-    "ast_hash": "b118245c45da8c5d9e6898bb98dff773",
+    "mtime": 1791091538.0478637,
+    "seen": 1791091758.1409862,
+    "ast_hash": "33493dbcb2d69bd8ca94b735b9017402",
     "semantic_hash": ""
   },
   "app/modules/calculation/daily-generation.repository.test.mjs": {
@@ -936,9 +936,9 @@
     "semantic_hash": ""
   },
   "app/modules/overview/financial-overview.mjs": {
-    "mtime": 1791050173.8483934,
-    "seen": 1791050721.319095,
-    "ast_hash": "eb8ab2392e42aad9917deb349a401ec6",
+    "mtime": 1791091538.0468879,
+    "seen": 1791091758.144493,
+    "ast_hash": "fecc778864ffd4e730695f924c2b9599",
     "semantic_hash": ""
   },
   "app/modules/overview/financial-overview.test.mjs": {
@@ -996,15 +996,15 @@
     "semantic_hash": ""
   },
   "app/modules/reports/bank-reconciliation.mjs": {
-    "mtime": 1790787375.9876132,
-    "seen": 1791036406.5793798,
-    "ast_hash": "b4caf3b620cccc4965051af5ce1a3cf6",
+    "mtime": 1791090919.266079,
+    "seen": 1791091092.4446492,
+    "ast_hash": "4f35c4e934f69d038cb7f2ec3500b8b2",
     "semantic_hash": ""
   },
   "app/modules/reports/bank-reconciliation.test.mjs": {
-    "mtime": 1790787375.9885898,
-    "seen": 1791036406.5793808,
-    "ast_hash": "9e24f6ed1193f1bde9f47f46827732a6",
+    "mtime": 1791090934.8222258,
+    "seen": 1791091092.4446535,
+    "ast_hash": "e9677c31a709ad9cf5290b6ec576e8e2",
     "semantic_hash": ""
   },
   "app/modules/reports/financial-coverage.mjs": {
@@ -1224,15 +1224,27 @@
     "semantic_hash": ""
   },
   "db/tests/field-based-expenses.integration.mjs": {
-    "mtime": 1791050729.4877346,
-    "seen": 1791052699.1098914,
-    "ast_hash": "e98dccf2f0d337b4c92fa6dfb2725337",
+    "mtime": 1791091644.773883,
+    "seen": 1791091758.1502657,
+    "ast_hash": "b101cd6f00537648a0185952c2da4009",
     "semantic_hash": ""
   },
   "db/tests/variant-size-relink.integration.mjs": {
-    "mtime": 1791052641.2428625,
-    "seen": 1791052699.11082,
-    "ast_hash": "619f2ca6ea65ce23943c6bd5c59a509a",
+    "mtime": 1791052728.531914,
+    "seen": 1791091092.4504378,
+    "ast_hash": "a126cb91ab373fe4acfaa7877b3b13e3",
+    "semantic_hash": ""
+  },
+  "app/infrastructure/finance/money-comparison.mjs": {
+    "mtime": 1791090919.817827,
+    "seen": 1791091092.4352884,
+    "ast_hash": "552ea06c236e63c8de78ae2005845caf",
+    "semantic_hash": ""
+  },
+  "app/infrastructure/finance/money-comparison.test.mjs": {
+    "mtime": 1791090920.3271606,
+    "seen": 1791091092.435291,
+    "ast_hash": "29dd319bf5a52d001cef3348e0008976",
     "semantic_hash": ""
   }
 }

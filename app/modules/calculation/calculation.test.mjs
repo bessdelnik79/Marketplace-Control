@@ -325,7 +325,43 @@ test('transport reimbursement accepts sub-kopeck residual after rounding the bun
   }
 });
 
-test('transport reimbursement references remain fail-closed without an exact zero companion set',()=>{
+test('transport reimbursement accepts both half-kopeck boundaries without changing financial totals or amounts',()=>{
+  const base={periodStart:'2026-08-17',periodEnd:'2026-08-23',selectedProductIds:['product-1']};
+  const components=vw=>[
+    {id:'revenue',classificationStatus:'confirmed',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-08-18',categoryCode:'revenue',sourceField:'retailAmount',rawValue:'100',operationType:'sale',docTypeName:'Продажа',sellerOperName:'Продажа',amountSigned:'100'},
+    ...[
+      ['rebill','rebillLogisticCost','rebill_logistic_compensation','-10','10'],
+      ['vw','vw','wb_reward_without_vat',vw,`-${vw}`],
+      ['vat','vwNds','wb_reward_vat','3','-3']
+    ].map(([id,sourceField,categoryCode,amountSigned,rawValue])=>({
+      id,operationVersionId:'transport-boundary',classificationStatus:'unclassified',
+      scopeCode:sourceField==='rebillLogisticCost'?'reconciliation':'selected_product',
+      productId:'product-1',accountingDate:'2026-08-19',sourceField,categoryCode,amountSigned,rawValue,
+      operationType:'service_charge',docTypeName:'',sellerOperName:'Изменяемый текст WB'
+    }))
+  ];
+  const baseline=calculateFinancialResult({...base,financialComponents:components('7')});
+  for(const [vw,accepted] of [
+    ['7.005',true],['6.995',true],
+    ['7.00500000000000000001',false],['6.99499999999999999999',false],
+    ['7.006',false],['6.994',false]
+  ]){
+    const financialComponents=components(vw),original=structuredClone(financialComponents);
+    const result=calculateFinancialResult({...base,financialComponents});
+    assert.equal(result.missingReasons.includes('operation_unclassified'),!accepted,`vw ${vw}`);
+    assert.deepEqual(financialComponents,original,`source amounts preserved for vw ${vw}`);
+    if(accepted){
+      assert.deepEqual(result.totals,baseline.totals);
+      assert.deepEqual(result.lines,baseline.lines);
+    }
+  }
+  for(const financialComponents of [
+    components('7.005').filter(component=>component.sourceField!=='vwNds'),
+    [...components('7.005'),{...components('7.005')[2],id:'duplicate-vw'}]
+  ])assert.ok(calculateFinancialResult({...base,financialComponents}).missingReasons.includes('operation_unclassified'));
+});
+
+test('transport reimbursement references remain fail-closed without a complete companion set',()=>{
   const base={periodStart:'2026-08-17',periodEnd:'2026-08-23',selectedProductIds:['product-1']};
   for(const financialComponents of [
     [{id:'vw-only',operationVersionId:'row-1',classificationStatus:'unclassified',scopeCode:'selected_product',productId:'product-1',accountingDate:'2026-08-19',categoryCode:'wb_reward_without_vat',sourceField:'vw',rawValue:'15',operationType:'service_charge',docTypeName:'',sellerOperName:'Возмещение издержек по перевозке/по складским операциям с товаром',amountSigned:'15'}],
@@ -665,6 +701,80 @@ test('return WB expense fields are summed raw and rounded once to kopecks',()=>{
     {sourceField:'acquiringFee',rawValue:'-1.00'}
   ]),-10000n);
   assert.equal(calculateReturnWbExpenseReversal([{sourceField:'retailAmount',rawValue:'1.00'}]),null);
+});
+
+test('return monetary reconciliation accepts both half-kopeck boundaries and preserves former rounded matches',()=>{
+  for(const [expense,control,expected] of [
+    ['1.005','1',10100n],['1','1.005',10000n],
+    ['1.005000000000000001','1',null],['1','1.005000000000000001',null],
+    ['1.0049','0.9951',10000n]
+  ]){
+    const components=[
+      {sourceField:'retailAmount',rawValue:control},
+      {sourceField:'forPay',rawValue:'0'},
+      {sourceField:'acquiringFee',rawValue:expense}
+    ];
+    const original=structuredClone(components);
+    assert.equal(calculateReturnWbExpenseReversal(components),expected,`${expense} versus ${control}`);
+    assert.deepEqual(components,original);
+  }
+});
+
+test('v30 accepts a linked return half-kopeck expense mismatch without altering source amounts',()=>{
+  const financialComponents=[
+    {id:'return-retail',operationVersionId:'return-boundary',operationType:'return',productId:'product-1',variantId:'variant-1',accountingDate:'2026-08-19',scopeCode:'selected_product',classificationStatus:'confirmed',categoryCode:'revenue_return',sourceField:'retailAmount',rawValue:'100',amountSigned:'-100'},
+    {id:'return-payout',operationVersionId:'return-boundary',operationType:'return',productId:'product-1',variantId:'variant-1',accountingDate:'2026-08-19',scopeCode:'reconciliation',classificationStatus:'confirmed',categoryCode:'payout',sourceField:'forPay',rawValue:'99',amountSigned:'-99'},
+    {id:'return-vw',operationVersionId:'return-boundary',operationType:'return',productId:'product-1',variantId:'variant-1',accountingDate:'2026-08-19',scopeCode:'selected_product',classificationStatus:'confirmed',categoryCode:'wb_reward_without_vat',sourceField:'vw',rawValue:'1.005',amountSigned:'-1.005'}
+  ];
+  const original=structuredClone(financialComponents);
+  const result=calculateFinancialResult({
+    resultMethodVersion:'financial-result-v30',periodStart:'2026-08-17',periodEnd:'2026-08-23',selectedProductIds:['product-1'],financialComponents,
+    operations:[
+      {id:'sale-before',operationType:'sale',productId:'product-1',variantId:'variant-1',accountingDate:'2026-08-10',quantity:'1'},
+      {id:'return-boundary',reportRowId:'return-boundary-row',operationType:'return',productId:'product-1',variantId:'variant-1',accountingDate:'2026-08-19',quantity:'-1'}
+    ],
+    operationLinks:[{id:'return-link',fromOperationVersionId:'return-boundary',toOperationVersionId:'sale-before',linkType:'return_to_original_sale',status:'confirmed'}],
+    costVersions:[{id:'zero-cost',variantId:'variant-1',effectiveFrom:'2026-01-01',unitCost:'0'}]
+  });
+  assert.equal(result.missingReasons.includes('operation_unclassified'),false);
+  assert.equal(result.lines.find(line=>line.categoryCode==='return_wb_expense_reversal').amountSigned,'1.0050');
+  assert.equal(result.totals.availableResultBeforeTax,'-99.0000');
+  assert.deepEqual(financialComponents,original);
+});
+
+test('v30 payout reconciliation accepts both half-kopeck signs, preserves rounding and fails closed beyond tolerance',()=>{
+  for(const [revenue,payout,accepted,total] of [
+    ['100.005','100',true,'100.0000'],
+    ['100.004','100.009',true,'100.0090'],
+    ['100.005000000000001','100',false,null],
+    ['100.003999999999999','100.009',false,null],
+    ['100.006','100',false,null]
+  ]){
+    const financialComponents=[
+      {id:'retail',operationVersionId:'boundary-sale',operationType:'sale',productId:'product-1',variantId:'variant-1',accountingDate:'2026-08-19',scopeCode:'selected_product',classificationStatus:'confirmed',categoryCode:'revenue',sourceField:'retailAmount',rawValue:revenue,amountSigned:revenue},
+      {id:'payout',operationVersionId:'boundary-sale',operationType:'sale',productId:'product-1',variantId:'variant-1',accountingDate:'2026-08-19',scopeCode:'reconciliation',classificationStatus:'confirmed',categoryCode:'payout',sourceField:'forPay',rawValue:payout,amountSigned:payout}
+    ];
+    const original=structuredClone(financialComponents);
+    const result=calculateFinancialResult({
+      resultMethodVersion:'financial-result-v30',periodStart:'2026-08-17',periodEnd:'2026-08-23',selectedProductIds:['product-1'],financialComponents,
+      operations:[{id:'boundary-sale',reportRowId:'boundary-sale-row',operationType:'sale',productId:'product-1',variantId:'variant-1',accountingDate:'2026-08-19',quantity:'1'}],
+      costVersions:[{id:'zero-cost',variantId:'variant-1',effectiveFrom:'2026-01-01',unitCost:'0'}]
+    });
+    assert.equal(result.missingReasons.includes('operation_unclassified'),!accepted,`${revenue} versus ${payout}`);
+    if(accepted)assert.equal(result.totals.availableResultBeforeTax,total);
+    assert.deepEqual(financialComponents,original);
+    if(accepted)for(const brokenComponents of [
+      financialComponents.filter(component=>component.sourceField!=='forPay'),
+      [...financialComponents,{...financialComponents[1],id:'duplicate-payout'}]
+    ]){
+      const broken=calculateFinancialResult({
+        resultMethodVersion:'financial-result-v30',periodStart:'2026-08-17',periodEnd:'2026-08-23',selectedProductIds:['product-1'],financialComponents:brokenComponents,
+        operations:[{id:'boundary-sale',reportRowId:'boundary-sale-row',operationType:'sale',productId:'product-1',variantId:'variant-1',accountingDate:'2026-08-19',quantity:'1'}],
+        costVersions:[{id:'zero-cost',variantId:'variant-1',effectiveFrom:'2026-01-01',unitCost:'0'}]
+      });
+      assert.equal(broken.missingReasons.includes('operation_unclassified'),true);
+    }
+  }
 });
 
 test('v30 rounds each WB sale result once and reconciles September rows to signed forPay',()=>{

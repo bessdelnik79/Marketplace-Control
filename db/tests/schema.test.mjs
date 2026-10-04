@@ -43,7 +43,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,64);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,65);
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.recover_historical_catalog(uuid,uuid)'::regprocedure"));
   const transportRoundingDefinition=(await one(
   `select pg_get_functiondef(
@@ -53,8 +53,12 @@ try {
 
 assert.match(
   transportRoundingDefinition,
-  /round\(coalesce\(sum\(amount_signed\),\s*0\),\s*2\)\s*=\s*0/
+  /mc\.financial_amounts_match\(coalesce\(sum\(amount_signed\),\s*0\),\s*0\)/
 );
+  for(const [actual,expected,matched] of [['0.005','0',true],['-0.005','0',true],['0.00500000000000000001','0',false],['-0.00500000000000000001','0',false],['1.0051','1.0149',false]]){
+    assert.equal((await one('select mc.financial_amounts_match($1::numeric,$2::numeric) matched',[actual,expected])).matched,matched);
+  }
+  pass('financial money controls accept both half-kopeck boundaries without weakening evidence identity');
   assert.deepEqual((await q("select table_name from information_schema.tables where table_schema='mc' and table_name in ('financial_input_events','financial_store_event_state') order by table_name")).map(row=>row.table_name),['financial_input_events','financial_store_event_state']);
   assert.equal((await one("select relforcerowsecurity as forced from pg_class join pg_namespace on pg_namespace.oid=pg_class.relnamespace where nspname='mc' and relname='financial_input_events'")).forced,true);
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.establish_financial_pipeline_context(uuid,bigint,uuid,text,text)'::regprocedure"));
@@ -123,7 +127,7 @@ assert.match(
   assert.match(publicationFunction,/financial_daily_shadow_day_compatible/);
   assert.match(shadowDayFunction,/comparison.status='matched'/);
   assert.match(shadowDayFunction,/legacy_method.code='financial_result'/);
-  assert.match(shadowDayFunction,/legacy_method.version_no BETWEEN 9 AND 32/);
+  assert.match(shadowDayFunction,/legacy_method.version_no BETWEEN 9 AND 34/);
   assert.match(shadowDayFunction,/legacy_method.implementation_version='financial-result-v'\|\|legacy_method.version_no/);
   assert.match(shadowDayFunction,/p_accounting_date BETWEEN comparison.period_start AND comparison.period_end/);
   assert.match(shadowDayFunction,/day\.quality IN \('complete','partial'\)/);
@@ -263,12 +267,12 @@ assert.match(
   assert.equal(resultMethodV30.implementation_version,'financial-result-v30');
   assert.equal(resultMethodV30.parameters.targetPeriod,true);
   assert.equal(resultMethodV30.parameters.rowRoundingAdjustment,'evidenced-scale4-v1');
-  for(const version of [31,32]){
+  for(const version of [31,32,33,34]){
     const method=await one("select implementation_version,parameters from mc.method_versions where code='financial_result' and version_no=$1",[version]);
     assert.equal(method.implementation_version,`financial-result-v${version}`);
     assert.equal(method.parameters.expenseClassification,'source-field-signed-v1');
     assert.equal(method.parameters.rowRoundingAdjustment,'evidenced-scale4-v1');
-    assert.equal(Boolean(method.parameters.targetPeriod),version===32);
+    assert.equal(Boolean(method.parameters.targetPeriod),[32,34].includes(version));
   }
   assert.equal(resultMethodV14.parameters.targetPeriod,true);
   assert.equal(resultMethodV12.parameters.targetPeriod,true);
@@ -307,9 +311,9 @@ assert.match(
   assert.match((await one("select pg_get_functiondef('mc.guard_confirmed_return_link()'::regprocedure) as definition")).definition,/sold\.accounting_date\s*>\s*returned\.accounting_date/);
   assert.match((await one("select pg_get_functiondef('mc.guard_evidence_source()'::regprocedure) as definition")).definition,/return_wb_expense_reversal/);
   const dailyCompatibility=(await one("select pg_get_functiondef('mc.financial_daily_shadow_day_compatible(uuid,date)'::regprocedure) as definition")).definition;
-  assert.match(dailyCompatibility,/generation_method\.version_no\s+IN\(30,32\)/g);
+  assert.match(dailyCompatibility,/generation_method\.version_no\s+IN\(30,32,34\)/g);
   assert.doesNotMatch(dailyCompatibility,/generation_method\.version_no\s*=\s*28/);
-  assert.match(dailyCompatibility,/BETWEEN 9 AND 32/);
+  assert.match(dailyCompatibility,/BETWEEN 9 AND 34/);
   const taxComputationColumns=(await q("select column_name from information_schema.columns where table_schema='mc' and table_name='tax_computations' order by column_name")).map(row=>row.column_name);
   assert.ok(taxComputationColumns.includes('product_id'));
   assert.ok(!taxComputationColumns.includes('tax_year')&&!taxComputationColumns.includes('tax_setting_version_id')&&!taxComputationColumns.includes('rate_fraction'));

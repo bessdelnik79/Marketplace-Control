@@ -2,7 +2,7 @@ import { persistFinancialNormalization,reconcileHistoricalCatalogLinks } from '.
 import { recoverHistoricalCatalog } from '../catalog/historical-catalog.repository.mjs';
 import { createHash } from 'node:crypto';
 import { withOwnedBusinessContext } from '../../infrastructure/database/client.mjs';
-import { financialHistoricalWeekRange, financialParserVersion, financialReportPeriodMatches, stableJson } from './finance.mjs';
+import { decimal, financialHistoricalWeekRange, financialParserVersion, financialReportPeriodMatches, stableJson } from './finance.mjs';
 import { reconcileBankPayment } from './bank-reconciliation.mjs';
 import { buildSellerOffsetReference } from './full-report-credit.mjs';
 
@@ -20,6 +20,76 @@ async function recordBankCheck(client, businessId, job, source, versionId, summa
     [businessId,job.store_id,versionId,result.expectedAmount,result.actualAmount,result.status,JSON.stringify({reason,summaryChecksum:summary?.checksum??null,syncRunId:job.run_id})]
   );
   return result.status;
+}
+
+export async function refreshFinancialBankChecks(userId,storeId){
+  return withOwnedBusinessContext(userId,async(client,businessId,role)=>{
+    if(!['owner','editor'].includes(role))throw new Error('financial_bank_check_write_forbidden');
+    // Serialize with report persistence; a retry keeps the old checks and appends only changed results.
+    await client.query('select id from mc.businesses where id=$1 for update',[businessId]);
+    const store=(await client.query(`select id from mc.stores where business_id=$1 and id=$2 and status='active'`,[businessId,storeId])).rows[0];
+    if(!store)throw new Error('financial_store_unavailable');
+    const candidates=(await client.query(
+      `select r.external_report_id,r.period_start::text,r.period_end::text,rv.id as version_id,rv.checksum as report_checksum,
+              summary.raw_data as summary_data,summary.source as summary_source,summary.id as summary_id,
+              latest.id as prior_check_id,latest.status,latest.expected_amount,latest.actual_amount,latest.details
+         from mc.reports r
+         join mc.report_versions rv on rv.business_id=r.business_id and rv.store_id=r.store_id and rv.id=r.current_version_id and rv.status='accepted'
+         join lateral (
+           select candidate.id,candidate.status,candidate.expected_amount,candidate.actual_amount,candidate.details from mc.reconciliation_checks candidate
+            where candidate.business_id=r.business_id and candidate.store_id=r.store_id and candidate.report_version_id=rv.id
+              and candidate.check_code='wb_bank_payment_sum_v1'
+            order by candidate.created_at desc,candidate.id desc limit 1
+         ) latest on true
+         join lateral (
+           select saved.raw_data,saved.source,saved.id
+             from (
+               select candidate.raw_data,candidate.id,candidate.created_at as saved_at,'financial_report_summary_versions' as source
+                 from mc.financial_report_summary_versions candidate
+                where candidate.business_id=r.business_id and candidate.store_id=r.store_id and candidate.report_version_id=rv.id
+               union all
+               select candidate.summary_raw_data,candidate.id,candidate.last_seen_at,'financial_week_inventory'
+                 from mc.financial_week_inventory candidate
+                where candidate.business_id=r.business_id and candidate.store_id=r.store_id and candidate.report_version_id=rv.id
+                  and candidate.fetch_status='accepted' and candidate.summary_raw_data is not null
+                  and candidate.external_report_id=r.external_report_id
+                  and candidate.period_start=r.period_start and candidate.period_end=r.period_end
+             ) saved
+            order by case when saved.source=case
+              when latest.details->>'source'='durable_pipeline' or latest.details->>'summarySource'='financial_week_inventory'
+                then 'financial_week_inventory' else 'financial_report_summary_versions' end
+              then 0 else 1 end,saved.saved_at desc,saved.id desc limit 1
+         ) summary on true
+        where r.business_id=$1 and r.store_id=$2 and r.report_type='weekly_realization'
+          and ((latest.status='failed' and latest.details->>'reason'='bank_payment_mismatch')
+            or (latest.status='not_checkable' and latest.details->>'reason'='summary_detail_mismatch'))
+        order by r.period_start,r.id`,[businessId,storeId]
+    )).rows;
+    let updated=0;
+    for(const candidate of candidates){
+      const rows=(await client.query(
+        `select raw_data from mc.report_rows where business_id=$1 and store_id=$2 and report_version_id=$3 order by row_number,id`,
+        [businessId,storeId,candidate.version_id]
+      )).rows.map(row=>({rawData:row.raw_data}));
+      const result=reconcileBankPayment({
+        externalReportId:candidate.external_report_id,periodStart:candidate.period_start,periodEnd:candidate.period_end,rows
+      },candidate.summary_data);
+      if(result.status===candidate.status&&result.reason===(candidate.details?.reason??null)
+        &&decimal(result.expectedAmount)===decimal(candidate.expected_amount)
+        &&decimal(result.actualAmount)===decimal(candidate.actual_amount))continue;
+      await client.query(
+        `insert into mc.reconciliation_checks(business_id,store_id,report_version_id,check_code,expected_amount,actual_amount,status,details,created_at)
+         values($1,$2,$3,'wb_bank_payment_sum_v1',$4,$5,$6,$7::jsonb,clock_timestamp())`,
+        [businessId,storeId,candidate.version_id,result.expectedAmount,result.actualAmount,result.status,JSON.stringify({
+          reason:result.reason,summaryChecksum:createHash('sha256').update(stableJson(candidate.summary_data)).digest('hex'),
+          summarySource:candidate.summary_source,summaryId:candidate.summary_id,reportChecksum:candidate.report_checksum,
+          toleranceVersion:'financial-half-kopeck-v1',priorCheckId:candidate.prior_check_id
+        })]
+      );
+      updated++;
+    }
+    return{checked:candidates.length,updated};
+  });
 }
 
 const exactDate=value=>/^\d{4}-\d{2}-\d{2}$/.test(String(value??''))?String(value):null;
