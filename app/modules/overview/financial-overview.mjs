@@ -10,6 +10,9 @@ const WB_TRANSFER_CATEGORIES = new Set([
   'wb_reward_without_vat', 'wb_reward_vat', 'return_wb_expense_reversal', 'wb_row_rounding_adjustment'
 ]);
 const STORE_RESULT_METHODS = new Set(['financial-result-v7', 'financial-result-v8', 'financial-result-v9', 'financial-result-v10', 'financial-result-v11', 'financial-result-v12', 'financial-result-v13', 'financial-result-v14', 'financial-result-v15', 'financial-result-v16', 'financial-result-v17', 'financial-result-v18', 'financial-result-v19', 'financial-result-v20', 'financial-result-v21', 'financial-result-v22', 'financial-result-v23', 'financial-result-v24', 'financial-result-v25', 'financial-result-v26', 'financial-result-v27', 'financial-result-v28', 'financial-result-v29', 'financial-result-v30', 'financial-result-v31', 'financial-result-v32','financial-result-v33','financial-result-v34','financial-result-v35','financial-result-v36']);
+export function financialResultIncludesStore(methodVersion) {
+  return STORE_RESULT_METHODS.has(methodVersion);
+}
 const MISSING_REASON_ORDER = [
   'cost_missing',
   'return_original_sale_unmatched',
@@ -313,7 +316,7 @@ export function buildFinancialPeriodOverview(envelope, { timezone = 'Europe/Mosc
   const beforeTaxLines = selected.filter(line => line.category !== 'estimated_usn_tax');
   const taxLines = selected.filter(line => line.category === 'estimated_usn_tax');
   const selectedTotal = beforeTaxLines.reduce((sum, line) => sum + line.amount, 0n);
-  const includesStoreResult = STORE_RESULT_METHODS.has(methodVersion);
+  const includesStoreResult = financialResultIncludesStore(methodVersion);
   const resultLines = lines.filter(line => (line.scope === 'selected_product' || (includesStoreResult && line.scope === 'store')) && line.category !== 'estimated_usn_tax');
   const revenue = resultLines.filter(line => REVENUE_CATEGORIES.has(line.category)).reduce((sum, line) => sum + line.amount, 0n);
   const costOfGoods = -resultLines.filter(line => line.category === COST_OF_GOODS_CATEGORY).reduce((sum, line) => sum + line.amount, 0n);

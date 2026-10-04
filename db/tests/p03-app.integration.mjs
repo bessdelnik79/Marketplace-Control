@@ -747,4 +747,165 @@ test('latest normalization resolves legacy unlinked data issues and sync count i
   assert.deepEqual(currentIssue,{status:'open',report_normalization_id:current.normalizationId,resolved_by_normalization_id:null});
 });
 
+test('P0.5 readers pin legacy and mixed-generation daily evidence under ordinary PostgreSQL role',async t=>{
+  const {createPublishedDrilldownRepository}=await import('../../app/modules/calculation/drilldown.repository.mjs');
+  const role=`mc_drilldown_${randomUUID().replaceAll('-','').slice(0,12)}`;
+  const viewer=randomUUID();
+  await context(async client=>{
+    await client.query(`insert into mc.users(id,display_name) values($1,'P05 viewer')`,[viewer]);
+    await client.query(`insert into mc.memberships(business_id,user_id,role) values($1,$2,'viewer')`,[ids.business,viewer]);
+    await client.query(`create role ${role} nologin nosuperuser nobypassrls`);
+    await client.query(`grant usage on schema mc to ${role}`);
+    await client.query(`grant select on all tables in schema mc to ${role}`);
+    await client.query(`grant execute on all functions in schema mc to ${role}`);
+  });
+  t.after(async()=>{
+    await pool.query(`drop owned by ${role}`);
+    await pool.query(`drop role ${role}`);
+  });
+  const runtimePool={async connect(){
+    const client=await pool.connect();
+    await client.query(`set role ${role}`);
+    const permissions=(await client.query(`select current_user,rolsuper,rolbypassrls from pg_roles where rolname=current_user`)).rows[0];
+    assert.equal(permissions.rolsuper,false);assert.equal(permissions.rolbypassrls,false);
+    return{query:client.query.bind(client),release(){client.query('reset role').then(()=>client.release(),error=>client.release(error));}};
+  }};
+  const reader=createPublishedDrilldownRepository({pool:runtimePool});
+  const publications=await context(async client=>({
+    legacy:(await client.query(`select p.id from mc.publications p join mc.financial_period_results f on f.run_id=p.run_id
+      where p.store_id=$1 and f.period_start='2026-07-13' and f.period_end='2026-07-19' and f.quality='complete'
+      order by p.created_at,p.id limit 1`,[ids.store])).rows[0].id,
+    daily:(await client.query(`select p.id from mc.financial_daily_publications p where p.store_id=$1
+      and exists(select 1 from mc.financial_daily_publication_days d where d.publication_id=p.id)
+      order by p.publication_no limit 1`,[ids.store])).rows[0].id,
+    mixed:(await client.query(`select p.id from mc.financial_daily_publications p join mc.financial_daily_publication_days d on d.publication_id=p.id
+      where p.store_id=$1 group by p.id,p.publication_no having count(distinct d.generation_id)>1 order by p.publication_no limit 1`,[ids.store])).rows[0].id
+  }));
+  let referenceTotals;
+  for(const [publicationSource,publicationId] of [['legacy',publications.legacy],['daily',publications.daily],['daily',publications.mixed]]){
+    const input={storeId:ids.store,publicationSource,publicationId,periodStart:'2026-07-13',periodEnd:'2026-07-19'};
+    const list=await reader.readPublishedSkuList(viewer,input);
+    assert.equal(list.context.publication.id,publicationId);
+    assert.equal(list.reconciliation.status,'matched',JSON.stringify(list.reconciliation));
+    assert.ok(list.items.length);assert.ok(list.storeLines.length);
+    referenceTotals??=list.context.totals;
+    assert.deepEqual(list.context.totals,referenceTotals);
+    if(publicationId===publications.mixed)assert.equal(new Set(list.context.publication.dayRefs.map(day=>day.generationId)).size,2);
+    const item=list.items[0];
+    const card=await reader.readPublishedSkuCard(viewer,{...input,productId:item.productId});
+    assert.deepEqual(card.item.metrics,item.metrics);
+    for(const group of item.groups){
+      const page=await reader.readPublishedContributions(viewer,{...input,productId:item.productId,groupKey:group.groupKey,limit:1});
+      assert.equal(page.sourceValidationScope,'page');
+      assert.ok(page.items.length||group.amountSigned==='0.0000',JSON.stringify(page));
+      assert.ok(!JSON.stringify(page).includes('raw_data'));
+      assert.ok(!JSON.stringify(page).includes('srid'));
+      assert.ok(['matched','unchecked'].includes(page.evidenceStatus),JSON.stringify(page));
+      assert.ok(page.items.every(value=>value.evidenceStatus==='matched'),JSON.stringify(page));
+      if(publicationSource==='legacy'&&group.categoryCode==='estimated_usn_tax'){
+        assert.equal(group.taxBasisAvailable,true);
+        const basis=await reader.readPublishedContributions(viewer,{...input,productId:item.productId,groupKey:group.groupKey,taxBasis:true,limit:1});
+        assert.ok(basis.items.length);assert.ok(basis.items.every(value=>value.evidenceStatus==='matched'),JSON.stringify(basis));
+        assert.ok(basis.items.every(value=>typeof value.basisContributionAmount==='string'));
+      }
+      if(page.nextCursor){
+        const next=await reader.readPublishedContributions(viewer,{...input,productId:item.productId,groupKey:group.groupKey,limit:1,cursor:page.nextCursor});
+        assert.notDeepEqual(next.items,page.items);
+        await assert.rejects(()=>reader.readPublishedContributions(viewer,{...input,publicationId:randomUUID(),productId:item.productId,groupKey:group.groupKey,cursor:page.nextCursor}),/drilldown_not_found/);
+      }
+    }
+    const storeGroup=list.storeLines[0];
+    const storePage=await reader.readPublishedContributions(viewer,{...input,scope:'store',groupKey:storeGroup.groupKey});
+    assert.equal(storePage.evidenceStatus,'matched',JSON.stringify(storePage));
+    await assert.rejects(()=>reader.readPublishedSkuCard(viewer,{...input,productId:randomUUID()}),/drilldown_not_found/);
+    await assert.rejects(()=>reader.readPublishedSkuList(viewer,{...input,storeId:randomUUID()}),/drilldown_not_found/);
+    await assert.rejects(()=>reader.readPublishedSkuList(randomUUID(),input),/drilldown_not_found/);
+    const missing=await reader.readPublishedSkuList(viewer,{...input,periodEnd:'2026-07-20'});
+    assert.equal(missing.context.quality,'unavailable');assert.equal(missing.context.totals,null);
+    const filtered=await reader.readPublishedSkuList(viewer,{...input,search:'no-such-product'});
+    assert.equal(filtered.items.length,0);assert.deepEqual(filtered.context.totals,list.context.totals);
+    assert.deepEqual(filtered.storeLines,list.storeLines);
+    const foreign=await context(async client=>(await client.query(`select store.id store_id,membership.user_id,
+        product.id product_id,pub.id publication_id,line.id result_line_id,line.run_id,line.financial_period_result_id
+        from mc.stores store join mc.memberships membership on membership.business_id=store.business_id
+        join mc.products product on product.store_id=store.id
+        join lateral(select id,run_id from mc.publications where store_id=store.id order by created_at desc limit 1) pub on true
+        join mc.result_lines line on line.run_id=pub.run_id where store.business_id<>$1 limit 1`,[ids.business])).rows[0]);
+    assert.ok(foreign,'integration has a real second business');
+    await assert.rejects(()=>reader.readPublishedSkuList(viewer,{...input,storeId:foreign.store_id}),/drilldown_not_found/);
+    await assert.rejects(()=>reader.readPublishedSkuList(foreign.user_id,input),/drilldown_not_found/);
+    await assert.rejects(()=>reader.readPublishedSkuCard(viewer,{...input,productId:foreign.product_id}),/drilldown_not_found/);
+    await assert.rejects(()=>reader.readPublishedSkuList(viewer,{...input,publicationSource:'legacy',publicationId:foreign.publication_id}),/drilldown_not_found/);
+    await assert.rejects(()=>reader.readPublishedContributions(viewer,{...input,productId:item.productId,groupKey:item.groups[0].groupKey,
+      lineRef:{source:'legacy',runId:foreign.run_id,periodResultId:foreign.financial_period_result_id,resultLineId:foreign.result_line_id}}),/drilldown_not_found/);
+
+    // Corrupt only this disposable test snapshot with bootstrap privileges.
+    // Runtime remains an ordinary role; frozen reader must fail closed even
+    // when the report version is unchanged and a valid alternate normalization exists.
+    const table=publicationSource==='legacy'?'calculation_inputs':'financial_daily_generation_inputs';
+    const ownerColumn=publicationSource==='legacy'?'run_id':'generation_id';
+    const revenueGroup=item.groups.find(group=>group.categoryCode==='revenue');
+    const revenuePage=await reader.readPublishedContributions(viewer,{...input,productId:item.productId,groupKey:revenueGroup.groupKey});
+    const owner=publicationSource==='legacy'?list.context.publication.runId:revenuePage.items[0].lineRef.generationId;
+    const frozen=await context(async client=>{
+      const original=(await client.query(`select input.id,input.report_normalization_id,n.report_version_id,n.method_version_id
+        from mc.${table} input join mc.report_normalizations n on n.id=input.report_normalization_id
+        where input.${ownerColumn}=$1 order by input.id limit 1`,[owner])).rows[0];
+      const alternateMethod=(await client.query(`select id from mc.method_versions where code='wb_finance_import' and id<>$1 order by version_no desc limit 1`,[original.method_version_id])).rows[0].id;
+      await client.query(`insert into mc.report_normalizations(business_id,store_id,report_version_id,method_version_id,normalization_key,status)
+        values($1,$2,$3,$4,$5,'succeeded') on conflict do nothing`,[ids.business,ids.store,original.report_version_id,alternateMethod,`p05-alternate:${randomUUID()}`]);
+      const alternate=(await client.query(`select id from mc.report_normalizations where report_version_id=$1 and method_version_id=$2 order by created_at desc limit 1`,[original.report_version_id,alternateMethod])).rows[0].id;
+      return{...original,alternate};
+    });
+    const replaceNormalization=value=>context(async client=>{
+      await client.query(`alter table mc.${table} disable trigger user`);
+      await client.query(`update mc.${table} set report_normalization_id=$1 where id=$2`,[value,frozen.id]);
+      await client.query(`alter table mc.${table} enable trigger user`);
+    });
+    await replaceNormalization(frozen.alternate);
+    try{
+      const blocked=await reader.readPublishedContributions(viewer,{...input,productId:item.productId,groupKey:revenueGroup.groupKey});
+      assert.equal(blocked.evidenceStatus,'unavailable');
+      assert.ok(blocked.items.every(value=>value.source===null),JSON.stringify(blocked));
+      assert.ok(blocked.missingReasons.includes('drilldown_frozen_source_missing'));
+      assert.deepEqual(blocked.context.totals,list.context.totals);
+    }finally{await replaceNormalization(frozen.report_normalization_id);}
+  }
+  const pinnedInput={storeId:ids.store,publicationSource:'daily',publicationId:publications.daily,periodStart:'2026-07-13',periodEnd:'2026-07-19'};
+  const originalPointer=await context(async client=>(await client.query('select publication_id from mc.financial_daily_current_publications where store_id=$1',[ids.store])).rows[0].publication_id);
+  const setPointer=value=>context(async client=>{
+    await client.query('alter table mc.financial_daily_current_publications disable trigger user');
+    await client.query('update mc.financial_daily_current_publications set publication_id=$1 where store_id=$2',[value,ids.store]);
+    await client.query('alter table mc.financial_daily_current_publications enable trigger user');
+  });
+  await setPointer(publications.daily);
+  try{
+    const before=await reader.readPublishedSkuList(viewer,pinnedInput);
+    assert.equal(before.context.update.availablePublicationId,null);
+    await setPointer(publications.mixed);
+    const after=await reader.readPublishedSkuCard(viewer,{...pinnedInput,productId:before.items[0].productId});
+    assert.equal(after.context.publication.id,publications.daily);
+    assert.equal(after.context.update.availablePublicationId,publications.mixed);
+    assert.deepEqual(after.item.groups,before.items[0].groups);
+    assert.deepEqual(after.context.totals,before.context.totals);
+  }finally{await setPointer(originalPointer);}
+  const mixedInput={storeId:ids.store,publicationSource:'daily',publicationId:publications.mixed,periodStart:'2026-07-13',periodEnd:'2026-07-19'};
+  const carried=await context(async client=>(await client.query(`select g.id,g.parser_method_version_id,
+      (select id from mc.method_versions where code='wb_finance_import' and id<>g.parser_method_version_id order by version_no limit 1) alternate
+      from mc.financial_daily_publications p join mc.financial_daily_publication_days d on d.publication_id=p.id
+      join mc.financial_daily_generations g on g.id=d.generation_id where p.id=$1 and g.id<>p.generation_id limit 1`,[publications.mixed])).rows[0]);
+  const replaceMethod=value=>context(async client=>{
+    await client.query('alter table mc.financial_daily_generations disable trigger user');
+    await client.query('update mc.financial_daily_generations set parser_method_version_id=$1 where id=$2',[value,carried.id]);
+    await client.query('alter table mc.financial_daily_generations enable trigger user');
+  });
+  await replaceMethod(carried.alternate);
+  try{
+    const incompatible=await reader.readPublishedSkuList(viewer,mixedInput);
+    assert.equal(incompatible.context.quality,'unavailable');
+    assert.ok(incompatible.context.missingReasons.includes('drilldown_publication_incompatible'));
+    assert.equal(incompatible.context.totals,null);
+  }finally{await replaceMethod(carried.parser_method_version_id);}
+});
+
 test.after(async()=>{await pool.end();});

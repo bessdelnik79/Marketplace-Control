@@ -11,7 +11,7 @@
 | `modules/expenses/` | Ручные и массовые дополнительные расходы, HTTP-маршруты |
 | `modules/taxes/` | Настройки налогового режима и НДС, HTTP-маршруты |
 | `modules/reports/` | Финансовые отчёты WB и их загрузка |
-| `modules/calculation/` | Финансовый расчёт и фоновый запуск |
+| `modules/calculation/` | Финансовый расчёт, фоновый запуск и защищённые readers опубликованной расшифровки SKU/evidence (`drilldown*.mjs`) |
 | `modules/overview/` | Чтение опубликованных недельных результатов и финансовая read-модель обзора |
 | `modules/operational/` | Sales Funnel v3, фоновая rolling-синхронизация, версии дневных заказов/выкупов и готовность истории |
 | `infrastructure/database/` | Подключение к PostgreSQL, миграции и общий контекст транзакции |

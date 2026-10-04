@@ -14,6 +14,7 @@ export * from './modules/expenses/expenses.repository.mjs';
 export * from './modules/taxes/taxes.repository.mjs';
 export * from './modules/reports/reports.repository.mjs';
 export * from './modules/calculation/calculation.repository.mjs';
+export * from './modules/calculation/drilldown.repository.mjs';
 export * from './modules/operational/operational.repository.mjs';
 
 export const { getCostState, importVariantCosts, saveVariantCost } = createCostsRepository({ withOwnedBusinessContext });
