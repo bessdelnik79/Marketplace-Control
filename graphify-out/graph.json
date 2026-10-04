@@ -21249,6 +21249,18 @@
     },
     {
       "source": "app_frontend_pages_operationalmetricpanel",
+      "target": "app_frontend_pages_icon",
+      "relation": "calls",
+      "_origin": "ast",
+      "confidence": "EXTRACTED",
+      "confidence_score": 1.0,
+      "context": "call",
+      "source_file": "app/frontend/pages.mjs",
+      "source_location": "L141",
+      "weight": 1.0
+    },
+    {
+      "source": "app_frontend_pages_operationalmetricpanel",
       "target": "app_frontend_pages_operationalbars",
       "relation": "calls",
       "_origin": "ast",
@@ -62640,5 +62652,5 @@
     }
   ],
   "hyperedges": [],
-  "built_at_commit": "d30b7296040ed1727000b1cce120ea7d5de22445"
+  "built_at_commit": "5ff81dda756e3b37916fc059344449cf00bc1795"
 }

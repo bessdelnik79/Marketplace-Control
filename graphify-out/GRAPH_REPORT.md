@@ -1,17 +1,17 @@
 # Graph Report - Marketplace Control  (2026-10-04)
 
 ## Corpus Check
-- 256 files · ~1,067,898 words
+- 256 files · ~1,067,981 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 13 file(s) not represented in the graph (top: .toml 4, (none) 4, .css 2)
 
 ## Summary
-- 1730 nodes · 3642 edges · 110 communities (84 shown, 26 thin omitted)
+- 1730 nodes · 3643 edges · 110 communities (84 shown, 26 thin omitted)
 - Extraction: 97% EXTRACTED · 3% INFERRED · 0% AMBIGUOUS · INFERRED: 113 edges (avg confidence: 0.87)
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `d30b7296`
+- Built from commit: `5ff81dda`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 
@@ -131,9 +131,9 @@
 4. `calculateFinancialResult()` - 31 edges
 5. `esc()` - 29 edges
 6. `Marketplace Control — формулы финансового расчёта` - 20 edges
-7. `frame()` - 18 edges
-8. `calculateStoreTaxReference()` - 18 edges
-9. `icon()` - 17 edges
+7. `icon()` - 18 edges
+8. `frame()` - 18 edges
+9. `calculateStoreTaxReference()` - 18 edges
 10. `invalid()` - 17 edges
 
 ## Surprising Connections (you probably didn't know these)
