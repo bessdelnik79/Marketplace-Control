@@ -332,12 +332,31 @@ export async function getOperationalOverviewData(userId,storeId,options={}){
         order by m.metric_date,m.product_id`,
       [businessId,storeId,current.product_ids,current.period_start,current.period_end,range.days]
     )).rows;
+    // A failed newer refresh must not erase a complete saved day for the same scope.
+    const savedRows=(await client.query(
+      `with candidates as (
+        select s.business_id,s.store_id,s.id snapshot_id,day::date metric_date,a.fetched_at,s.accepted_at,
+          row_number() over(partition by day::date order by a.fetched_at desc,a.created_at desc,a.id desc) rank
+        from mc.operational_snapshots s
+        join mc.operational_snapshot_activations a on a.snapshot_id=s.id and a.business_id=s.business_id and a.store_id=s.store_id
+        join mc.operational_periods p on p.id=s.operational_period_id
+        cross join lateral generate_series(greatest(p.period_start,$4::date),least(p.period_end,$5::date),interval '1 day') day
+        where s.business_id=$1 and s.store_id=$2 and s.status='accepted' and s.quality='complete'
+          and p.period_start<=$5::date and p.period_end>=$4::date
+          and (select count(*) from mc.operational_snapshot_products sp where sp.snapshot_id=s.id)=cardinality($3::uuid[])
+          and not exists(select 1 from mc.operational_snapshot_products sp where sp.snapshot_id=s.id and not(sp.product_id=any($3::uuid[])))
+      ) select m.product_id,c.metric_date::text,c.snapshot_id,m.currency,true available,
+          m.order_count::text,m.order_amount::text,m.buyout_count::text,m.buyout_amount::text,
+          'complete' quality,'[]'::jsonb missing_reasons,c.fetched_at,c.accepted_at,m.cancel_count::text,m.cancel_amount::text
+        from candidates c join mc.operational_daily_metrics m on m.business_id=c.business_id and m.store_id=c.store_id and m.snapshot_id=c.snapshot_id and m.metric_date=c.metric_date
+        where c.rank=1 order by c.metric_date,m.product_id`,[businessId,storeId,current.product_ids,range.start,range.end]
+    )).rows;
     const state=(await client.query(`select ss.status,ss.next_run_at,r.status run_status,r.error_code,
       (select count(*)::int from mc.operational_range_requests q where q.business_id=$1 and q.store_id=$2 and q.status='pending' and q.metric_date between $3::date-$5::int*4 and $4::date) pending_days,
       (select count(*)::int from mc.operational_range_requests q where q.business_id=$1 and q.store_id=$2 and q.status='failed' and q.metric_date between $3::date-$5::int*4 and $4::date) failed_days
       from mc.sync_streams ss left join lateral(select status,error_code from mc.sync_runs where stream_id=ss.id order by created_at desc limit 1) r on true where ss.business_id=$1 and ss.store_id=$2 and ss.source_type='operational_sales_funnel'`,[businessId,storeId,range.start,range.end,range.days])).rows[0];
     const updateStatus={status:state?.run_status==='running'?'running':state?.status==='blocked'||state?.run_status==='failed'||state?.failed_days?'failed':state?.pending_days?'pending':'current',pendingDays:state?.pending_days??0,errorCode:state?.error_code??(state?.failed_days?'operational_metric_unavailable':null)};
-    return {store,current,rows,updateStatus};
+    return {store,current,rows,savedRows,updateStatus};
   });
 }
 

@@ -52,7 +52,7 @@ const display={periodStart:'2026-09-14',periodEnd:'2026-09-20',now:new Date('202
 async function publish(range,{cancelCount=2,cancelAmount='9007199254740993.1250',fetchedAt=new Date('2026-09-21T12:00:00Z'),skipFirst=false}={}){
   const job=await beginOperationalSync(ids.user,ids.store,{force:true,...range});
   const snapshotId=randomUUID();
-  const object=await storeOperationalSnapshot({businessId:ids.business,storeId:ids.store,snapshotId,raw:JSON.stringify({range,cancelCount,cancelAmount}),root:rawRoot,masterKey});
+  const object=await storeOperationalSnapshot({businessId:ids.business,storeId:ids.store,snapshotId,raw:JSON.stringify({range,cancelCount,cancelAmount,skipFirst}),root:rawRoot,masterKey});
   const rows=[];
   for(let time=Date.parse(`${job.date_from}T00:00:00Z`);time<=Date.parse(`${job.date_to}T00:00:00Z`);time+=86400000)rows.push({nmId:7400001,date:new Date(time).toISOString().slice(0,10),currency:'RUB',orderCount:3,orderSum:'20.0000',buyoutCount:1,buyoutSum:'10.0000',cancelCount,cancelSum:cancelAmount});
   if(skipFirst)rows.shift();
@@ -129,6 +129,29 @@ test('partial coverage marks missing requested day failed rather than falsely co
   const state=await getOperationalOverviewData(ids.user,ids.store,{...display,periodStart:loaded.job.date_from,periodEnd:loaded.job.date_to});
   assert.equal(state.updateStatus.status,'failed');
   assert.equal(state.updateStatus.errorCode,'operational_metric_unavailable');
+});
+
+test('read model restores saved complete scope locally after a partial refresh',async()=>{
+  await context(ids.user,ids.business,client=>client.query(`update mc.operational_range_requests set status='failed' where status='pending'`));
+  await publish({dateFrom:'2026-09-14',dateTo:'2026-09-20'},{fetchedAt:new Date('2026-10-02T12:00:00Z')});
+  await publish({dateFrom:'2026-09-14',dateTo:'2026-09-20'},{skipFirst:true,fetchedAt:new Date('2026-10-03T12:00:00Z')});
+  const data=await getOperationalOverviewData(ids.user,ids.store,display);
+  assert.equal(data.savedRows.length,7);
+  const model=buildOperationalOverview(data);
+  assert.equal(model.quality,'complete');assert.equal(model.savedDataUsed,true);
+  assert.equal(model.returnData.quality,'complete');assert.equal(model.returnData.savedDataUsed,true);
+  assert.equal(model.orders.count,'21');
+});
+
+test('saved fallback rejects alternate scope and foreign tenant',async()=>{
+  const second=randomUUID();
+  await context(ids.user,ids.business,async client=>{
+    await client.query(`insert into mc.products(id,business_id,store_id,wb_article,seller_article) values($1,$2,$3,7400002,'P04 extra')`,[second,ids.business,ids.store]);
+    await client.query(`select mc.add_products_to_selection($1,$2::uuid[])`,[ids.store,[second]]);
+  });
+  const data=await getOperationalOverviewData(ids.user,ids.store,display);
+  assert.deepEqual(data.savedRows,[]);assert.equal(buildOperationalOverview(data).savedDataUsed,false);
+  assert.equal(await getOperationalOverviewData(ids.foreignUser,ids.store,display),null);
 });
 
 test.after(async()=>{await pool.end();await rm(rawRoot,{recursive:true,force:true});});

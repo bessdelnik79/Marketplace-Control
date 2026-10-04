@@ -81,3 +81,18 @@ test('current range with no facts preserves requested dates and shows unavailabl
   assert.equal(result.returnData.returns,null);
   assert.equal(result.quality,'unavailable');
 });
+
+test('partial refresh preserves one whole saved day with exact scope and original freshness',()=>{
+ const current=[{...row(date(0),productIds[0]),order_count:'99',cancel_count:'2',cancel_amount:'1.0000'}];
+ const saved=productIds.map(id=>({...row(date(0),id,{week:1}),cancel_count:null,cancel_amount:null}));
+ const model=buildOperationalOverview({...envelope(current,{period_end:date(0)}),savedRows:saved});
+ assert.equal(model.quality,'complete');assert.equal(model.savedDataUsed,true);
+ assert.deepEqual(model.orders,{count:'2',amount:'20.2500'});assert.deepEqual(model.missingReasons,[]);
+ assert.equal(model.updatedAt,saved[0].fetched_at.toISOString());
+ assert.equal(model.comparison.reason,'operational_saved_snapshot');
+ assert.equal(model.returnData.quality,'partial');assert.deepEqual(model.returnData.returns,{count:'2',amount:'1.0000'});
+});
+test('saved incomplete scope never fabricates missing products or returns',()=>{
+ const model=buildOperationalOverview({...envelope([row(date(0),productIds[0])],{period_end:date(0)}),savedRows:[row(date(0),productIds[0],{week:1})]});
+ assert.equal(model.quality,'partial');assert.equal(model.savedDataUsed,false);assert.equal(model.returnData.quality,'unavailable');
+});

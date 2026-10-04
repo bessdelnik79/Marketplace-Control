@@ -156,15 +156,15 @@
     "semantic_hash": ""
   },
   "app/frontend/pages.mjs": {
-    "mtime": 1791102620.2176476,
-    "seen": 1791103560.2643821,
-    "ast_hash": "a24fbf71ed741e89c877221934bb69f3",
+    "mtime": 1791110429.0157268,
+    "seen": 1791110533.3975785,
+    "ast_hash": "7ee628352779d1ad28b2d18b137f91aa",
     "semantic_hash": ""
   },
   "app/frontend/pages.test.mjs": {
-    "mtime": 1791102632.1587346,
-    "seen": 1791103560.264385,
-    "ast_hash": "b9e377e7f093397ea6580228c797ba11",
+    "mtime": 1791110008.9195228,
+    "seen": 1791110533.3975816,
+    "ast_hash": "81ae66a014dd117b4c8fc9c403281e8c",
     "semantic_hash": ""
   },
   "app/frontend/public/ui.js": {
@@ -624,9 +624,9 @@
     "semantic_hash": ""
   },
   "outputs/ui-site.md": {
-    "mtime": 1791103532.221494,
-    "seen": 1791103560.2821302,
-    "ast_hash": "99dc96c060313baf8c0da2d67e49b676",
+    "mtime": 1791110713.7797644,
+    "seen": 1791110735.2704935,
+    "ast_hash": "bba40bfa13f0b3c7a43d394b059beedd",
     "semantic_hash": ""
   },
   "outputs/user-financial-inputs.md": {
@@ -906,9 +906,9 @@
     "semantic_hash": ""
   },
   "app/modules/operational/operational-sync.mjs": {
-    "mtime": 1791102672.7825272,
-    "seen": 1791103560.270077,
-    "ast_hash": "a1b7f278f54d9503408111ecb796639f",
+    "mtime": 1791110142.652509,
+    "seen": 1791110533.4039853,
+    "ast_hash": "d4fd324f49d1f8c99e79fb566f7b29e9",
     "semantic_hash": ""
   },
   "app/modules/operational/operational-sync.test.mjs": {
@@ -918,9 +918,9 @@
     "semantic_hash": ""
   },
   "app/modules/operational/operational.repository.mjs": {
-    "mtime": 1791102935.868535,
-    "seen": 1791103560.270081,
-    "ast_hash": "a078b6ff9382d390efb3240d65025146",
+    "mtime": 1791110429.014749,
+    "seen": 1791110533.4041047,
+    "ast_hash": "39f6cf39bee5530faf4ac838afc77976",
     "semantic_hash": ""
   },
   "app/modules/operational/wb-sales-funnel.mjs": {
@@ -948,15 +948,15 @@
     "semantic_hash": ""
   },
   "app/modules/overview/operational-overview.mjs": {
-    "mtime": 1791102889.2923687,
-    "seen": 1791103560.270554,
-    "ast_hash": "435373d58895eb7beebd29af1f41bdb1",
+    "mtime": 1791110483.3702915,
+    "seen": 1791110533.404555,
+    "ast_hash": "2a558d4fcc58e3add1df3ac36034617f",
     "semantic_hash": ""
   },
   "app/modules/overview/operational-overview.test.mjs": {
-    "mtime": 1791102519.064408,
-    "seen": 1791103560.2705564,
-    "ast_hash": "cf101843ff15d3019141d2cbae1a8469",
+    "mtime": 1791110483.3712695,
+    "seen": 1791110533.404557,
+    "ast_hash": "c2abf3f2d74cc1c892f058539e95b792",
     "semantic_hash": ""
   },
   "app/modules/overview/overview.routes.mjs": {
@@ -1164,9 +1164,9 @@
     "semantic_hash": ""
   },
   "outputs/p0.4-operational-contract.md": {
-    "mtime": 1791103532.221494,
-    "seen": 1791103560.2821267,
-    "ast_hash": "cef16c5bcb7aea86b3c652684024897b",
+    "mtime": 1791110713.7797644,
+    "seen": 1791110735.2703848,
+    "ast_hash": "4c7f92ce20565c8983efcfd2b65eec34",
     "semantic_hash": ""
   },
   "outputs/p0.4-plan.md": {
@@ -1260,21 +1260,21 @@
     "semantic_hash": ""
   },
   "app/modules/operational/wb-funnel-products.mjs": {
-    "mtime": 1791102672.3471465,
-    "seen": 1791103560.2700832,
-    "ast_hash": "102539913b2dbf8c7173bc645dde162e",
+    "mtime": 1791110368.388765,
+    "seen": 1791110533.404107,
+    "ast_hash": "4b4bf90c24b94ac5a5a6c71cebed3ea1",
     "semantic_hash": ""
   },
   "app/modules/operational/wb-funnel-products.test.mjs": {
-    "mtime": 1791103005.588568,
-    "seen": 1791103560.2700853,
-    "ast_hash": "fb49cfcb9dcc083f8a9d3025c9c8ab7d",
+    "mtime": 1791110368.8516629,
+    "seen": 1791110533.404109,
+    "ast_hash": "1a0ed61b6e68167ae66417c78e8b4e88",
     "semantic_hash": ""
   },
   "db/tests/operational-returns.integration.mjs": {
-    "mtime": 1791103334.3096821,
-    "seen": 1791103560.2765565,
-    "ast_hash": "00c17f9f8cfba04671984129851796be",
+    "mtime": 1791110675.3042138,
+    "seen": 1791110735.2619886,
+    "ast_hash": "34fb7dc3183c533cc6a2e83f79c2e399",
     "semantic_hash": ""
   },
   "outputs/financial-workflow-changes-2026-10-04.md": {

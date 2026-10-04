@@ -180,6 +180,7 @@ export async function runOperationalSync(userId, storeId, {
         nmIds: productBatch.map(product => product.nmId),
         dateFrom: job.date_from,
         dateTo: job.date_to,
+        now: clock(),
         fetchImpl,
         beforeRequest: async () => {
           const slot = await operations.reserve(userId, job, rateDelaySeconds);

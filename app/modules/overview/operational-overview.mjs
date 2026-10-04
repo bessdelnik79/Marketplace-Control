@@ -59,10 +59,16 @@ function buildMetricsOverview(data){
   const productIds=[...new Set((current.product_ids??[]).map(requiredText))];
   if(!productIds.length)invalid('overview_invalid_scope');
   const rows=Array.isArray(data.rows)?data.rows:invalid('overview_invalid_operational_data');
+  const savedDates=new Set();
   const currentGroups=[];
   const dailySeries=[];
   for(let day=startDay;day<=endDay;day++){
-    const date=dateFromDay(day),availableRows=availableRowsForDate(rows,date,productIds);
+    const date=dateFromDay(day);
+    let availableRows=availableRowsForDate(rows,date,productIds);
+    if(availableRows.length<productIds.length){
+      const saved=rowsForDate(data.savedRows??[],date,productIds);
+      if(saved){availableRows=saved;savedDates.add(date);}
+    }
     currentGroups.push(...availableRows);
     const dayQuality=availableRows.length===productIds.length?'complete':availableRows.length?'partial':'unavailable';
     dailySeries.push({date,quality:dayQuality,available:availableRows.length>0,orders:availableRows.length?measure(availableRows,'order'):null,buyouts:availableRows.length?measure(availableRows,'buyout'):null});
@@ -73,15 +79,15 @@ function buildMetricsOverview(data){
     return day>=startDay&&day<=endDay&&productIds.includes(String(row.product_id));
   });
   const baseReasons=reasons([
-    ...(current.missing_reasons??[]),
-    ...currentRows.filter(row=>row.available!==true).flatMap(row=>row.missing_reasons??[])
+    ...(savedDates.size===periodDays?[]:current.missing_reasons??[]),
+    ...currentRows.filter(row=>row.available!==true&&!savedDates.has(row.metric_date)).flatMap(row=>row.missing_reasons??[])
   ]);
   const availableCount=currentGroups.length;
-  const quality=availableCount===expected&&current.quality==='complete'?'complete':availableCount?'partial':'unavailable';
-  const missingReasons=[...new Set([...baseReasons,...(availableCount===expected?[]:['operational_metric_unavailable'])])].sort();
-  const snapshotIds=[...new Set(currentRows.map(row=>requiredText(row.snapshot_id)))].sort();
-  const updatedAt=currentRows.length
-    ? currentRows.map(row=>timestamp(row.fetched_at)).sort().at(-1)
+  const quality=availableCount===expected&&(current.quality==='complete'||savedDates.size>0)?'complete':availableCount?'partial':'unavailable';
+  const missingReasons=[...new Set([...(quality==='complete'?[]:baseReasons),...(availableCount===expected?[]:['operational_metric_unavailable'])])].sort();
+  const snapshotIds=[...new Set(currentGroups.map(row=>requiredText(row.snapshot_id)))].sort();
+  const updatedAt=currentGroups.length
+    ? currentGroups.map(row=>timestamp(row.fetched_at)).sort().at(savedDates.size?0:-1)
     : null;
   const baselineGroups=[];
   const baselineDaily=[];
@@ -97,11 +103,11 @@ function buildMetricsOverview(data){
     baselineGroups.push(...dayRows);
     baselineDaily.push({date,orders:measure(dayRows,'order',{averaged:true}),buyouts:measure(dayRows,'buyout',{averaged:true})});
   }
-  const comparison=quality==='complete'&&baselineComplete?{
+  const comparison=quality==='complete'&&baselineComplete&&!savedDates.size?{
     available:true,periods:4,reason:null,orders:measure(baselineGroups,'order',{averaged:true}),buyouts:measure(baselineGroups,'buyout',{averaged:true}),dailySeries:baselineDaily
-  }:{available:false,periods:0,reason:quality==='complete'?'operational_history_insufficient':'operational_current_incomplete',orders:null,buyouts:null,dailySeries:[]};
+  }:{available:false,periods:0,reason:savedDates.size?'operational_saved_snapshot':quality==='complete'?'operational_history_insufficient':'operational_current_incomplete',orders:null,buyouts:null,dailySeries:[]};
   return {
-    status:quality==='unavailable'?'unavailable':'available',snapshotIds,
+    status:quality==='unavailable'?'unavailable':'available',snapshotIds,savedDataUsed:savedDates.size>0,
     period:{start,end,timezone:'Europe/Moscow'},updatedAt,quality,missingReasons,
     scope:{type:'selected_products',productIds},orders:availableCount?measure(currentGroups,'order'):null,
     buyouts:availableCount?measure(currentGroups,'buyout'):null,dailySeries,comparison
@@ -110,12 +116,12 @@ function buildMetricsOverview(data){
 
 export function buildOperationalOverview(data){
   const result=buildMetricsOverview(data);
-  const returnRows=(data?.rows??[]).map(row=>({...row,
+  const returnMetrics=rows=>rows.map(row=>({...row,
     available:row.available===true&&row.cancel_count!=null&&row.cancel_amount!=null,
     order_count:row.cancel_count,order_amount:row.cancel_amount,buyout_count:row.cancel_count,buyout_amount:row.cancel_amount
   }));
-  const returns=buildMetricsOverview({...data,rows:returnRows,current:data?.current?{...data.current,quality:'complete',missing_reasons:[]}:null});
-  result.returnData={status:returns.status,quality:returns.quality,missingReasons:returns.missingReasons,
+  const returns=buildMetricsOverview({...data,savedRows:returnMetrics(data?.savedRows??[]),rows:returnMetrics(data?.rows??[]),current:data?.current?{...data.current,quality:'complete',missing_reasons:[]}:null});
+  result.returnData={status:returns.status,quality:returns.quality,savedDataUsed:returns.savedDataUsed,missingReasons:returns.missingReasons,
     updatedAt:returns.orders?returns.updatedAt:null,snapshotIds:returns.snapshotIds,returns:returns.orders,
     dailySeries:returns.dailySeries.map(day=>({date:day.date,quality:day.quality,available:day.available,returns:day.orders})),
     comparison:{available:returns.comparison.available,periods:returns.comparison.periods,reason:returns.comparison.reason,

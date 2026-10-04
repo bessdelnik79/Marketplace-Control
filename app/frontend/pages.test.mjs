@@ -24,6 +24,27 @@ test('operational calendar and three metric charts share paired daily comparison
   assert.match(html,/1,25 шт\./);assert.match(html,/Отмены заказов и возвраты после покупки/);
   assert.match(html,/aria-label="Возвраты по дням"/);
 });
+test('operational missing reasons use Russian explanations once per metric and keep absent values unavailable',()=>{
+  const missingReasons=['metric_date_missing','selected_product_missing','source_empty','operational_metric_unavailable','metric_date_missing','selected_product_missing','source_empty'];
+  const model={status:'unavailable',quality:'unavailable',missingReasons,orders:{count:null,amount:null},buyouts:{count:null,amount:null},
+    returnData:{quality:'unavailable',returns:{count:null,amount:null},missingReasons:[...missingReasons,'operational_returns_metric_unavailable']}};
+  const html=operationalOverviewPanel(model);
+  const panels=[...html.matchAll(/<div class="design-metric-panel"[\s\S]*?(?=<div class="design-metric-panel"|<\/section>)/g)].map(match=>match[0]);
+  assert.equal(panels.length,3);
+  for(const panel of panels){
+    assert.equal((panel.match(/нет оперативных данных за часть дней выбранного периода/g)||[]).length,1);
+    assert.equal((panel.match(/нет оперативных данных по части выбранных товаров/g)||[]).length,1);
+    assert.equal((panel.match(/источник WB не содержит данных за выбранный период/g)||[]).length,1);
+    assert.match(panel,/отсутствие данных не означает нулевые показатели/);
+    assert.match(panel,/<strong>— · —<\/strong>/);
+    assert.doesNotMatch(panel,/metric_date_missing|metric date missing|selected_product_missing|selected product missing|source_empty|source empty|operational_metric_unavailable|часть дней или товаров недоступна|часть данных отмен и возвратов недоступна|0,00 ₽|0 шт\./);
+  }
+});
+test('operational generic missing reasons remain visible once when no specific explanation exists',()=>{
+  const html=operationalOverviewPanel({missingReasons:['operational_metric_unavailable','operational_metric_unavailable'],returnData:{missingReasons:['operational_returns_metric_unavailable','operational_returns_metric_unavailable']}});
+  assert.equal((html.match(/часть дней или товаров недоступна/g)||[]).length,2);
+  assert.equal((html.match(/часть данных отмен и возвратов недоступна/g)||[]).length,1);
+});
 test('settings escapes account data in HTML attributes and text',()=>{const html=settingsPage(user);assert.ok(!html.includes('<script>alert(1)</script>'));assert.ok(html.includes('&lt;script&gt;'));assert.ok(html.includes('&quot; autofocus'));assert.ok(!html.includes('value="" autofocus'));});
 test('every screen link resolves to a supported authenticated route or anchor',()=>{for(const html of [overviewPage(user),settingsPage(user),...Array.from(uiRoutes.keys(),route=>placeholderPage(user,route))]){for(const [,href] of html.matchAll(/href="([^"#]+)"/g)){const p=new URL(href,'http://localhost').pathname;assert.ok(uiRoutes.has(p)||['/favicon.svg','/ui.css'].includes(p),`Unsupported link ${href}`)}for(const match of html.matchAll(/<a[^>]+href="\/overview"[^>]*>/g))assert.match(match[0],/data-overview-home/)}});
 test('overview labels illustrative data and keeps independent date controls',()=>{const html=overviewPage(user);assert.match(html,/Демонстрационные данные/);assert.match(html,/data-calendar="profit"/);assert.match(html,/data-calendar="current"/);assert.equal((html.match(/class="bar current"/g)||[]).length,6);assert.equal((html.match(/class="bar average"/g)||[]).length,6);});
