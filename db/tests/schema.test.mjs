@@ -43,7 +43,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,68);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,69);
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.recover_historical_catalog(uuid,uuid)'::regprocedure"));
   const transportRoundingDefinition=(await one(
   `select pg_get_functiondef(
@@ -398,8 +398,10 @@ assert.match(
   await insert('source_objects',{business_id:b.id,store_id:store.id,document_id:operationalDocument.id,storage_key:`${b.id}/${store.id}/operational-snapshots/${operationalSnapshot.id}/part-0000.json.gz.enc`,part_number:0,byte_size:64,checksum:'e'.repeat(64),content_type:'application/json+gzip+aes-256-gcm'});
   for(const [position,selectedProduct] of products.slice(0,3).entries()){
     await insert('operational_snapshot_products',{business_id:b.id,store_id:store.id,snapshot_id:operationalSnapshot.id,product_id:selectedProduct.id,request_position:position+1});
-    for(let day=14;day<=20;day++)await insert('operational_daily_metrics',{business_id:b.id,store_id:store.id,snapshot_id:operationalSnapshot.id,product_id:selectedProduct.id,metric_date:`2026-09-${day}`,currency:'RUB',order_count:day,order_amount:String(day*100),buyout_count:day-1,buyout_amount:String((day-1)*100),row_checksum:String(position+1).repeat(64)});
+    for(let day=14;day<=20;day++)await insert('operational_daily_metrics',{business_id:b.id,store_id:store.id,snapshot_id:operationalSnapshot.id,product_id:selectedProduct.id,metric_date:`2026-09-${day}`,currency:'RUB',order_count:day,order_amount:String(day*100),buyout_count:day-1,buyout_amount:String((day-1)*100),row_checksum:String(position+1).repeat(64),return_count:position===0&&day===14?1:null,return_amount:null});
   }
+  await rejects('insert into mc.operational_daily_metrics(business_id,store_id,snapshot_id,product_id,metric_date,currency,order_count,order_amount,buyout_count,buyout_amount,row_checksum,return_amount) select business_id,store_id,snapshot_id,product_id,metric_date,currency,order_count,order_amount,buyout_count,buyout_amount,row_checksum,1 from mc.operational_daily_metrics where snapshot_id=$1 limit 1',[operationalSnapshot.id],/check constraint/,'purchased return amount requires a known event count');
+  assert.deepEqual(await one('select return_count::int n,return_amount from mc.operational_daily_metrics where snapshot_id=$1 and return_count=1 limit 1',[operationalSnapshot.id]),{n:1,return_amount:null});
   await q("update mc.operational_snapshots set status='validated' where id=$1",[operationalSnapshot.id]);
   await q("update mc.operational_snapshots set status='accepted',accepted_at=now() where id=$1",[operationalSnapshot.id]);
   await insert('operational_snapshot_activations',{business_id:b.id,store_id:store.id,operational_period_id:operationalPeriod.id,snapshot_id:operationalSnapshot.id,document_id:operationalDocument.id,fetched_at:new Date()});
@@ -407,6 +409,9 @@ assert.match(
   assert.equal((await one('select quality from mc.operational_snapshots where id=$1',[operationalSnapshot.id])).quality,'complete');
   pass('complete operational snapshot freezes selected scope and switches accepted current version');
   await rejects('update mc.operational_daily_metrics set order_count=0 where snapshot_id=$1',[operationalSnapshot.id],/immutable/,'accepted operational daily metrics are immutable');
+  const legacyReturn=(await one('select return_count,return_amount from mc.current_operational_daily_metrics where snapshot_id=$1 and return_count is null limit 1',[operationalSnapshot.id]));
+  assert.deepEqual(legacyReturn,{return_count:null,return_amount:null});
+  await rejects('update mc.operational_daily_metrics set return_count=0,return_amount=0 where snapshot_id=$1',[operationalSnapshot.id],/immutable/,'old accepted snapshots cannot be relabeled as zero purchased returns');
   await rejects('update mc.operational_periods set current_snapshot_id=null where id=$1',[operationalPeriod.id],/cannot be cleared/,'accepted operational current pointer cannot be cleared');
 
   const b2 = await insert('businesses',{name:'Business B'});

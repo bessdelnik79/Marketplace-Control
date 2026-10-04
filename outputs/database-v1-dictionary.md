@@ -1530,6 +1530,8 @@
 | created_at | timestamp with time zone | нет | now() |
 | cancel_count | bigint | да | — |
 | cancel_amount | numeric(20,4) | да | — |
+| return_count | bigint | да | — |
+| return_amount | numeric(20,4) | да | — |
 
 Ограничения и связи:
 
@@ -1545,8 +1547,11 @@
 - `CHECK ((order_amount >= (0)::numeric))`
 - `CHECK ((order_count >= 0))`
 - `PRIMARY KEY (id)`
+- `CHECK ((return_amount >= (0)::numeric))`
+- `CHECK ((return_count >= 0))`
 - `CHECK ((row_checksum ~ '^[0-9a-f]{64}$'::text))`
 - `UNIQUE (snapshot_id, product_id, metric_date)`
+- `CHECK (((return_amount IS NULL) OR (return_count IS NOT NULL)))`
 
 ## operational_history_factories
 

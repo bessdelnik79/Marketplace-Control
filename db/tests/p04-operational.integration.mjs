@@ -11,6 +11,7 @@ if(!new URL(integrationUrl).pathname.slice(1).toLowerCase().includes('test'))thr
 process.env.DATABASE_URL=integrationUrl;
 
 const {migrate,pool,beginOperationalSync,completeOperationalSync,failOperationalSync,getOperationalOverviewData,getOperationalSyncState,reserveOperationalRequestSlot}=await import('../../app/db.mjs');
+const {reserveOperationalPurchasedReturnsSlot}=await import('../../app/modules/operational/operational.repository.mjs');
 const {storeOperationalSnapshot}=await import('../../app/infrastructure/storage/operational-source-storage.mjs');
 const ids={user:randomUUID(),foreignUser:randomUUID(),business:randomUUID(),foreignBusiness:randomUUID(),store:randomUUID(),product:randomUUID()};
 const rawRoot=await mkdtemp(path.join(os.tmpdir(),'mc-p04-integration-'));
@@ -34,7 +35,7 @@ await context(ids.user,ids.business,async client=>{
   await client.query(`insert into mc.businesses(id,name) values($1,'P04 test'),($2,'Foreign test')`,[ids.business,ids.foreignBusiness]);
   await client.query(`insert into mc.memberships(business_id,user_id,role) values($1,$2,'owner'),($3,$4,'owner')`,[ids.business,ids.user,ids.foreignBusiness,ids.foreignUser]);
   await client.query(`insert into mc.stores(id,business_id,external_account_id,name,status) values($1,$2,'p04-seller','P04 store','active')`,[ids.store,ids.business]);
-  const connection=(await client.query(`insert into mc.connections(business_id,store_id,secret_ref,scopes,status) values($1,$2,'database:p04','["analytics"]'::jsonb,'active') returning id`,[ids.business,ids.store])).rows[0];
+  const connection=(await client.query(`insert into mc.connections(business_id,store_id,secret_ref,scopes,status) values($1,$2,'database:p04','["analytics","statistics"]'::jsonb,'active') returning id`,[ids.business,ids.store])).rows[0];
   await client.query(`insert into mc.connection_secrets(business_id,connection_id,ciphertext,nonce,auth_tag) values($1,$2,decode('abcd','hex'),decode(repeat('01',12),'hex'),decode(repeat('02',16),'hex'))`,[ids.business,connection.id]);
   const catalog=(await client.query(`insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness) values($1,$2,'wb_api','catalog','p04-catalog','complete') returning id`,[ids.business,ids.store])).rows[0];
   await client.query(`insert into mc.products(id,business_id,store_id,wb_article,seller_article) values($1,$2,$3,7400001,'P04')`,[ids.product,ids.business,ids.store]);
@@ -45,7 +46,7 @@ await context(ids.user,ids.business,async client=>{
 const week={dateFrom:'2026-09-14',dateTo:'2026-09-20'};
 function metrics(skipDate){
   const rows=[];
-  for(let day=14;day<=20;day++)if(day!==skipDate)rows.push({nmId:7400001,date:`2026-09-${day}`,currency:'RUB',orderCount:day,orderSum:`${day}00.25`,buyoutCount:day-1,buyoutSum:`${day-1}00.10`});
+  for(let day=14;day<=20;day++)if(day!==skipDate)rows.push({nmId:7400001,date:`2026-09-${day}`,currency:'RUB',orderCount:day,orderSum:`${day}00.25`,buyoutCount:day-1,buyoutSum:`${day-1}00.10`,returnCount:0,returnSum:'0'});
   return rows;
 }
 async function storedObject(raw,snapshotId){
@@ -94,7 +95,7 @@ test('operational repository atomically publishes immutable complete and partial
   const rollingRange={dateFrom:'2026-09-15',dateTo:'2026-09-21'};
   const rollingMetrics=Array.from({length:7},(_,index)=>{
     const day=15+index;
-    return {nmId:7400001,date:`2026-09-${day}`,currency:'RUB',orderCount:day,orderSum:`${day}00.25`,buyoutCount:day-1,buyoutSum:`${day-1}00.10`};
+    return {nmId:7400001,date:`2026-09-${day}`,currency:'RUB',orderCount:day,orderSum:`${day}00.25`,buyoutCount:day-1,buyoutSum:`${day-1}00.10`,returnCount:0,returnSum:'0'};
   });
   const rollingJob=await beginOperationalSync(ids.user,ids.store,{force:true,...rollingRange});
   const rollingSnapshotId=randomUUID();
@@ -150,6 +151,12 @@ test('analytics request slots are seller-scoped and serialized',async()=>{
   const first=await reserveOperationalRequestSlot(ids.user,firstJob,20);
   const second=await reserveOperationalRequestSlot(ids.user,firstJob,20);
   assert.equal(new Date(second.scheduledAt).getTime(),new Date(first.nextAllowedAt).getTime());
+  const returnsFirst=await reserveOperationalPurchasedReturnsSlot(ids.user,firstJob,65);
+  const returnsSecond=await reserveOperationalPurchasedReturnsSlot(ids.user,firstJob,65);
+  assert.equal(new Date(returnsSecond.scheduledAt).getTime(),new Date(returnsFirst.nextAllowedAt).getTime());
+  assert.equal(new Date(returnsFirst.nextAllowedAt).getTime()-new Date(returnsFirst.scheduledAt).getTime(),65000);
+  assert.notEqual(new Date(returnsFirst.scheduledAt).getTime(),new Date(second.scheduledAt).getTime());
+  await assert.rejects(()=>reserveOperationalPurchasedReturnsSlot(ids.user,firstJob,20),/operational_invalid_rate_delay/);
   await failOperationalSync(ids.user,firstJob,'operational_test_finished');
 });
 
@@ -192,7 +199,7 @@ test('snapshot publication and selection extension share a database mutex',async
   const snapshotId=randomUUID();
   const allMetrics=job.products.flatMap(product=>Array.from({length:7},(_,index)=>{
     const day=14+index;
-    return {nmId:product.nmId,date:`2026-09-${day}`,currency:'RUB',orderCount:day,orderSum:`${day}00.25`,buyoutCount:day-1,buyoutSum:`${day-1}00.10`};
+    return {nmId:product.nmId,date:`2026-09-${day}`,currency:'RUB',orderCount:day,orderSum:`${day}00.25`,buyoutCount:day-1,buyoutSum:`${day-1}00.10`,returnCount:0,returnSum:'0'};
   }));
   const object=await storedObject('{"batch":"mutex"}',snapshotId);
   const blocker=await pool.connect();

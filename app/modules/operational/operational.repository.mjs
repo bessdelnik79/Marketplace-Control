@@ -3,7 +3,7 @@ import { pool, withBusinessContext, withOwnedBusinessContext } from '../../infra
 import { verifyOperationalSnapshotObject } from '../../infrastructure/storage/operational-source-storage.mjs';
 import { validateCalendarDate } from '../overview/financial-overview.mjs';
 
-const parserVersion='wb-sales-funnel-v2';
+const parserVersion='wb-operational-funnel-purchased-returns-v3';
 const dayMs=86400000;
 
 function calendarDay(value){
@@ -54,6 +54,7 @@ export async function beginOperationalSync(userId,storeId,{force=false,dateFrom,
     )).rows[0];
     if(!row)throw new Error('operational_connection_unavailable');
     if(!row.scopes.includes('analytics'))return {started:false,reason:'operational_scope_missing'};
+    if(!row.scopes.includes('statistics'))return {started:false,reason:'operational_statistics_scope_missing'};
     const products=(await client.query(
       `select p.id as product_id,p.wb_article::text as nm_id
          from mc.product_selections ps
@@ -68,7 +69,7 @@ export async function beginOperationalSync(userId,storeId,{force=false,dateFrom,
     const running=(await client.query(`select id,started_at from mc.sync_runs where stream_id=$1 and status='running'`,[row.stream_id])).rows[0];
     if(running&&new Date(running.started_at)>new Date(Date.now()-30*60*1000))return {started:false,reason:'running'};
     if(running)await client.query(`update mc.sync_runs set status='failed',finished_at=now(),error_code='operational_interrupted',progress=jsonb_set(progress,'{stage}','"failed"') where id=$1`,[running.id]);
-    const pending=(await client.query(`select metric_date::text from mc.operational_range_requests where business_id=$1 and store_id=$2 and (status='pending' or status='failed' and retryable) order by metric_date desc limit 1`,[businessId,storeId])).rows[0];
+    const pending=(await client.query(`select metric_date::text from mc.operational_range_requests where business_id=$1 and store_id=$2 and (status='pending' or status='failed' and retryable) order by case status when 'pending' then 0 else 1 end,metric_date desc limit 1`,[businessId,storeId])).rows[0];
     if(pending){
       const ending=calendarDay(pending.metric_date);
       const starting=(await client.query(`select min(metric_date)::text as start from mc.operational_range_requests where business_id=$1 and store_id=$2 and (status='pending' or status='failed' and retryable) and metric_date between $3::date-6 and $3::date`,[businessId,storeId,ending.text])).rows[0].start;
@@ -81,7 +82,7 @@ export async function beginOperationalSync(userId,storeId,{force=false,dateFrom,
     )).rows[0];
     await client.query(`update mc.sync_streams set next_run_at=null where id=$1`,[row.stream_id]);
     return {started:true,business_id:businessId,store_id:storeId,stream_id:row.stream_id,run_id:run.id,
-      date_from:range.dateFrom,date_to:range.dateTo,credential_generation:Number(row.credential_generation),seller_id:row.seller_id,ciphertext:row.ciphertext,nonce:row.nonce,auth_tag:row.auth_tag,
+      date_from:range.dateFrom,date_to:range.dateTo,credential_generation:Number(row.credential_generation),scopes:row.scopes,seller_id:row.seller_id,ciphertext:row.ciphertext,nonce:row.nonce,auth_tag:row.auth_tag,
       products:products.map(item=>({productId:item.product_id,nmId:Number(item.nm_id)}))};
   });
 }
@@ -97,6 +98,21 @@ export async function reserveOperationalRequestSlot(userId,job,delaySeconds=20){
        on conflict(rate_key) do update
          set next_allowed_at=greatest(mc.wb_api_request_slots.next_allowed_at,clock_timestamp())+make_interval(secs=>$2),updated_at=clock_timestamp()
        returning next_allowed_at-make_interval(secs=>$2) as scheduled_at,next_allowed_at`,[rateKey,delaySeconds]
+    )).rows[0];
+    return {scheduledAt:slot.scheduled_at,nextAllowedAt:slot.next_allowed_at,waitMs:Math.max(0,new Date(slot.scheduled_at).getTime()-Date.now())};
+  });
+}
+
+export async function reserveOperationalPurchasedReturnsSlot(userId,job,delaySeconds=65){
+  if(!Number.isInteger(delaySeconds)||delaySeconds<65||delaySeconds>300)throw new Error('operational_invalid_rate_delay');
+  return withBusinessContext(userId,job.business_id,async(client,businessId)=>{
+    if(businessId!==job.business_id||!job.seller_id)throw new Error('operational_context_mismatch');
+    const rateKey=sha(`wb:statistics:sales:${job.seller_id}`);
+    const slot=(await client.query(
+      `insert into mc.wb_api_request_slots(rate_key,next_allowed_at)
+       values($1,clock_timestamp()+make_interval(secs=>$2))
+       on conflict(rate_key) do update set next_allowed_at=greatest(mc.wb_api_request_slots.next_allowed_at,clock_timestamp())+make_interval(secs=>$2),updated_at=clock_timestamp()
+       returning next_allowed_at-make_interval(secs=>$2) scheduled_at,next_allowed_at`,[rateKey,delaySeconds]
     )).rows[0];
     return {scheduledAt:slot.scheduled_at,nextAllowedAt:slot.next_allowed_at,waitMs:Math.max(0,new Date(slot.scheduled_at).getTime()-Date.now())};
   });
@@ -141,7 +157,8 @@ export async function completeOperationalSync(userId,job,{documentId,snapshotId,
       if(seen.has(key))throw new Error('operational_duplicate_metric');
       seen.add(key);
       if((metric.cancelCount==null)!==(metric.cancelSum==null)||metric.cancelCount!=null&&(!Number.isSafeInteger(metric.cancelCount)||metric.cancelCount<0))throw new Error('operational_invalid_metric');
-      const row={productId,date:date.text,currency:'RUB',orderCount:metric.orderCount,orderAmount:decimal(metric.orderSum),buyoutCount:metric.buyoutCount,buyoutAmount:decimal(metric.buyoutSum),cancelCount:metric.cancelCount??null,cancelAmount:metric.cancelSum==null?null:decimal(metric.cancelSum)};
+      if(metric.returnCount==null&&metric.returnSum!=null||metric.returnCount!=null&&(!Number.isSafeInteger(metric.returnCount)||metric.returnCount<0))throw new Error('operational_invalid_metric');
+      const row={productId,date:date.text,currency:'RUB',orderCount:metric.orderCount,orderAmount:decimal(metric.orderSum),buyoutCount:metric.buyoutCount,buyoutAmount:decimal(metric.buyoutSum),cancelCount:metric.cancelCount??null,cancelAmount:metric.cancelSum==null?null:decimal(metric.cancelSum),returnCount:metric.returnCount??null,returnAmount:metric.returnSum==null?null:decimal(metric.returnSum)};
       normalized.push({...row,rowChecksum:sha(JSON.stringify(row))});
     }
     normalized.sort((a,b)=>a.date.localeCompare(b.date)||a.productId.localeCompare(b.productId));
@@ -193,19 +210,21 @@ export async function completeOperationalSync(userId,job,{documentId,snapshotId,
         [businessId,job.store_id,snapshot.id,product.productId,position+1]
       );
       for(const metric of normalized)await client.query(
-        `insert into mc.operational_daily_metrics(business_id,store_id,snapshot_id,product_id,metric_date,currency,order_count,order_amount,buyout_count,buyout_amount,row_checksum,cancel_count,cancel_amount)
-         values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
-        [businessId,job.store_id,snapshot.id,metric.productId,metric.date,metric.currency,metric.orderCount,metric.orderAmount,metric.buyoutCount,metric.buyoutAmount,metric.rowChecksum,metric.cancelCount,metric.cancelAmount]
+        `insert into mc.operational_daily_metrics(business_id,store_id,snapshot_id,product_id,metric_date,currency,order_count,order_amount,buyout_count,buyout_amount,row_checksum,cancel_count,cancel_amount,return_count,return_amount)
+         values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+        [businessId,job.store_id,snapshot.id,metric.productId,metric.date,metric.currency,metric.orderCount,metric.orderAmount,metric.buyoutCount,metric.buyoutAmount,metric.rowChecksum,metric.cancelCount,metric.cancelAmount,metric.returnCount,metric.returnAmount]
       );
       await client.query(`update mc.operational_snapshots set status='validated' where id=$1`,[snapshot.id]);
       await client.query(`update mc.operational_snapshots set status='accepted',accepted_at=now() where id=$1`,[snapshot.id]);
     }else if(snapshot.status!=='accepted')throw new Error('operational_snapshot_not_accepted');
     for(let day=range.fromDay;day<=range.toDay;day++){
       const date=new Date(day*dayMs).toISOString().slice(0,10);
-      const complete=normalized.filter(row=>row.date===date&&row.cancelCount!=null&&row.cancelAmount!=null).length===job.products.length;
-      await client.query(`update mc.operational_range_requests set status=$4,retryable=false,
+      const dayRows=normalized.filter(row=>row.date===date),returnsRequired=operationalReturnsRequired(date,fetchedAt);
+      const complete=dayRows.filter(row=>!returnsRequired||row.returnCount!=null&&row.returnAmount!=null).length===job.products.length;
+      const amountPending=returnsRequired&&dayRows.length===job.products.length&&dayRows.some(row=>row.returnCount>0&&row.returnAmount==null);
+      await client.query(`update mc.operational_range_requests set status=$4,retryable=$5,
         initial_status=case when initial_status='complete' then initial_status when initial_status is not null then $4 else null end
-        where business_id=$1 and store_id=$2 and metric_date=$3`,[businessId,job.store_id,date,complete?'complete':'failed']);
+        where business_id=$1 and store_id=$2 and metric_date=$3`,[businessId,job.store_id,date,complete?'complete':'failed',amountPending]);
     }
     await client.query(
       `insert into mc.operational_snapshot_activations(business_id,store_id,operational_period_id,snapshot_id,document_id,fetched_at)
@@ -215,7 +234,7 @@ export async function completeOperationalSync(userId,job,{documentId,snapshotId,
     const progress={stage:'complete',quality,products:job.products.length,rows:normalized.length,batches:normalizedObjects.length,reused};
     await client.query(`update mc.sync_runs set status=$2,finished_at=now(),error_code=null,progress=$3::jsonb where id=$1 and status='running'`,[job.run_id,quality==='complete'?'succeeded':'partial',JSON.stringify(progress)]);
     await client.query(
-      `update mc.sync_streams set cursor=coalesce(cursor,'{}'::jsonb)||$2::jsonb,last_success_at=now(),next_run_at=case when exists(select 1 from mc.operational_range_requests where store_id=mc.sync_streams.store_id and (status='pending' or status='failed' and retryable)) then now() else now()+interval '1 hour' end where id=$1`,
+      `update mc.sync_streams set cursor=coalesce(cursor,'{}'::jsonb)||$2::jsonb,last_success_at=now(),next_run_at=case when exists(select 1 from mc.operational_range_requests where store_id=mc.sync_streams.store_id and status='pending') then now() when exists(select 1 from mc.operational_range_requests where store_id=mc.sync_streams.store_id and status='failed' and retryable) then now()+interval '15 minutes' else now()+interval '1 hour' end where id=$1`,
       [job.stream_id,JSON.stringify({dateFrom:range.dateFrom,dateTo:range.dateTo,snapshotId:snapshot.id,quality})]
     );
     return {documentId,snapshotId:snapshot.id,quality,missingReasons,rowCount:normalized.length,reused};
@@ -234,7 +253,7 @@ export async function failOperationalSync(userId,job,errorCode,{retryDelaySecond
     await client.query(`update mc.operational_range_requests set status='failed',retryable=true,
       initial_status=case when initial_status='complete' then initial_status when initial_status is not null then 'failed' else null end
       where business_id=$1 and store_id=$2 and metric_date between $3 and $4 and status<>'complete'`,[businessId,job.store_id,job.date_from,job.date_to]);
-    if(['operational_unauthorized','operational_payment_required','operational_invalid_request','operational_token_expired','operational_token_type_unsupported','operational_test_token_unsupported','operational_write_token_forbidden','operational_scope_missing'].includes(code))await client.query(`update mc.sync_streams set status='blocked',next_run_at=null where id=$1`,[job.stream_id]);
+    if(['operational_unauthorized','operational_payment_required','operational_invalid_request','operational_token_expired','operational_token_type_unsupported','operational_test_token_unsupported','operational_write_token_forbidden','operational_scope_missing','operational_statistics_scope_missing'].includes(code))await client.query(`update mc.sync_streams set status='blocked',next_run_at=null where id=$1`,[job.stream_id]);
     else if(code==='operational_rate_limited')await client.query(`update mc.sync_streams set next_run_at=now()+make_interval(secs=>$2) where id=$1`,[job.stream_id,retryDelaySeconds]);
     else if(code==='operational_selection_changed')await client.query(`update mc.sync_streams set next_run_at=now() where id=$1`,[job.stream_id]);
     else await client.query(`update mc.sync_streams set next_run_at=now()+interval '15 minutes' where id=$1`,[job.stream_id]);
@@ -311,12 +330,12 @@ export async function requestOperationalRangeRefresh(userId,storeId,start,end,{n
     const stream=(await client.query(`select id,status from mc.sync_streams where business_id=$1 and store_id=$2 and source_type='operational_sales_funnel' for update`,[businessId,storeId])).rows[0];
     if(stream.status==='blocked'){
       const lastRun=(await client.query(`select status,error_code from mc.sync_runs where stream_id=$1 order by created_at desc,id desc limit 1`,[stream.id])).rows[0];
-      if(lastRun?.status!=='failed'||lastRun.error_code!=='operational_invalid_request'||!store.scopes?.includes('analytics'))return {queued:0,status:'blocked',errorCode:lastRun?.error_code??'operational_scope_missing'};
+      if(lastRun?.status!=='failed'||lastRun.error_code!=='operational_invalid_request'||(!store.scopes?.includes('analytics')||!store.scopes?.includes('statistics')))return {queued:0,status:'blocked',errorCode:lastRun?.error_code??'operational_scope_missing'};
       await client.query(`update mc.sync_streams set status='active',next_run_at=now() where id=$1`,[stream.id]);
     }
     const queued=await client.query(`insert into mc.operational_range_requests(business_id,store_id,metric_date,status,requested_at)
       select $1,$2,day::date,'pending',$6::timestamptz from generate_series($3::date,$4::date,interval '1 day') day
-      where (select count(*) from mc.current_operational_daily_metrics m where m.business_id=$1 and m.store_id=$2 and m.metric_date=day::date and m.product_id=any($5::uuid[]) and m.available and m.cancel_count is not null and m.cancel_amount is not null and m.fetched_at>=$6::timestamptz-case when day::date=$7::date then interval '1 hour' else interval '24 hours' end)<cardinality($5::uuid[])
+      where (select count(*) from mc.current_operational_daily_metrics m where m.business_id=$1 and m.store_id=$2 and m.metric_date=day::date and m.product_id=any($5::uuid[]) and m.available and (day::date<$7::date-89 or m.return_count is not null and m.return_amount is not null) and m.fetched_at>=$6::timestamptz-case when day::date=$7::date then interval '1 hour' else interval '24 hours' end)<cardinality($5::uuid[])
       on conflict(store_id,metric_date) do update set status='pending',retryable=false,requested_at=excluded.requested_at where mc.operational_range_requests.status in ('complete','failed')`,[businessId,storeId,earliest,range.end,products.map(row=>row.product_id),now,range.today]);
     await client.query(`insert into mc.sync_streams(business_id,store_id,source_type,status,next_run_at) values($1,$2,'operational_sales_funnel','active',now()) on conflict(store_id,source_type) do update set next_run_at=case when $3::int>0 then now() else mc.sync_streams.next_run_at end where mc.sync_streams.status='active'`,[businessId,storeId,queued.rowCount]);
     const pendingDays=(await client.query(`select count(*)::int count from mc.operational_range_requests where business_id=$1 and store_id=$2 and status='pending' and metric_date between $3 and $4`,[businessId,storeId,earliest,range.end])).rows[0].count;
@@ -326,6 +345,11 @@ export async function requestOperationalRangeRefresh(userId,storeId,start,end,{n
 
 export function operationalRefreshStart(range){
   return new Date(Math.max(calendarDay(range.start).number-range.days*4,calendarDay(range.today).number-364)*dayMs).toISOString().slice(0,10);
+}
+
+export function operationalReturnsRequired(date,now=new Date()){
+  const today=operationalDisplayRange({now}).today;
+  return calendarDay(date).number>=calendarDay(today).number-89;
 }
 
 export function deriveOperationalProgress({start,end,completeDays=0,pendingDays=0,failedDays=0,retryableDays=0,retryEligible=false,nextRunAt=null,run=null,blocked=false,errorCode=null,selected=true,factory=false,now=new Date()}={}){
@@ -342,6 +366,7 @@ export function deriveOperationalProgress({start,end,completeDays=0,pendingDays=
 }
 
 async function readOperationalProgress(client,businessId,storeId,range,products,rows,now){
+  const returnsStart=new Date((calendarDay(range.today).number-89)*dayMs).toISOString().slice(0,10);
   const clippedStart=operationalRefreshStart(range);
   const outOfRange=clippedStart>range.end;
   const start=outOfRange?new Date((calendarDay(range.start).number-range.days*4)*dayMs).toISOString().slice(0,10):clippedStart;
@@ -357,7 +382,7 @@ async function readOperationalProgress(client,businessId,storeId,range,products,
     and requested_from<=$5::date and requested_to>=$4::date
     order by (status='running' and started_at>$3::timestamptz-interval '30 minutes') desc,created_at desc,id desc limit 1`,[businessId,storeId,now,from,to])).rows[0]??null;
   const byDate=new Map();
-  for(const row of rows)if(row.available&&row.cancel_count!=null&&row.cancel_amount!=null){
+  for(const row of rows)if(row.available&&(row.metric_date<returnsStart||row.return_count!=null&&row.return_amount!=null)){
     const ids=byDate.get(row.metric_date)??new Set();ids.add(row.product_id);byDate.set(row.metric_date,ids);
   }
   let completeDays=0,pendingDays=0,failedDays=0,retryableDays=0;
@@ -368,16 +393,16 @@ async function readOperationalProgress(client,businessId,storeId,range,products,
     else if(request?.status==='failed'){failedDays++;if(request.retryable)retryableDays++;}
     else if(request?.status!=='pending'&&products.length&&byDate.get(date)?.size===products.length)completeDays++;
   }
-  const blocked=state?.status==='blocked'||Boolean(state&& !state.scopes?.includes('analytics'));
-  const errorCode=!state?.scopes?.includes('analytics')?'operational_scope_missing':state?.error_code;
-  const retryEligible=state?.status==='active'&&state?.store_status==='active'&&state?.scopes?.includes('analytics');
+  const blocked=state?.status==='blocked'||Boolean(state&& (!state.scopes?.includes('analytics')||!state.scopes?.includes('statistics')));
+  const errorCode=!state?.scopes?.includes('analytics')?'operational_scope_missing':!state?.scopes?.includes('statistics')?'operational_statistics_scope_missing':state?.error_code;
+  const retryEligible=state?.status==='active'&&state?.store_status==='active'&&state?.scopes?.includes('analytics')&&state?.scopes?.includes('statistics');
   const updateStatus=deriveOperationalProgress({start,end:range.end,completeDays,pendingDays,failedDays,retryableDays,retryEligible,nextRunAt:state?.next_run_at,selected:products.length>0,blocked,errorCode,run:await runFor(start,range.end),now});
   if(outOfRange&&updateStatus.status==='unavailable')updateStatus.errorCode='operational_history_out_of_range';
-  const factoryRows=marker&&products.length?(await client.query(`select product_id,metric_date::text,available,cancel_count,cancel_amount
+  const factoryRows=marker&&products.length?(await client.query(`select product_id,metric_date::text,available,return_count,return_amount
     from mc.current_operational_daily_metrics where business_id=$1 and store_id=$2 and metric_date between $3 and $4
       and product_id=any($5::uuid[])`,[businessId,storeId,marker.start,marker.end,products.map(row=>row.product_id)])).rows:[];
   const factoryCompleteDates=new Map();
-  for(const row of factoryRows)if(row.available&&row.cancel_count!=null&&row.cancel_amount!=null){
+  for(const row of factoryRows)if(row.available&&(row.metric_date<returnsStart||row.return_count!=null&&row.return_amount!=null)){
     const ids=factoryCompleteDates.get(row.metric_date)??new Set();ids.add(row.product_id);factoryCompleteDates.set(row.metric_date,ids);
   }
   const factoryComplete=row=>row.initial_status==='complete'&&products.length>0&&factoryCompleteDates.get(row.metric_date)?.size===products.length;
@@ -402,13 +427,13 @@ export async function getOperationalOverviewData(userId,storeId,options={}){
     )).rows[0];
     if(!store)return null;
     const products=(await client.query(`select i.product_id from mc.product_selections ps join mc.product_selection_items i on i.business_id=ps.business_id and i.store_id=ps.store_id and i.selection_id=ps.id where ps.business_id=$1 and ps.store_id=$2 and ps.status='confirmed' order by i.product_id`,[businessId,storeId])).rows;
-    if(!products.length)return {store,current:null,rows:[],period:{start:range.start,end:range.end,timezone:'Europe/Moscow'},
+    if(!products.length)return {store,current:null,rows:[],today:range.today,period:{start:range.start,end:range.end,timezone:'Europe/Moscow'},
       updateStatus:await readOperationalProgress(client,businessId,storeId,range,products,[],options.now??new Date())};
     const current={period_start:range.start,period_end:range.end,quality:'complete',missing_reasons:[],product_ids:products.map(row=>row.product_id),fetched_at:options.now??new Date()};
     const rows=(await client.query(
       `select m.product_id,m.metric_date::text,m.snapshot_id,m.currency,m.available,
               m.order_count::text,m.order_amount::text,m.buyout_count::text,m.buyout_amount::text,
-              m.quality,m.missing_reasons,m.fetched_at,m.accepted_at,m.cancel_count::text,m.cancel_amount::text
+              m.quality,m.missing_reasons,m.fetched_at,m.accepted_at,m.cancel_count::text,m.cancel_amount::text,m.return_count::text,m.return_amount::text
          from mc.current_operational_daily_metrics m
         where m.business_id=$1 and m.store_id=$2
           and m.product_id=any($3::uuid[])
@@ -431,12 +456,12 @@ export async function getOperationalOverviewData(userId,storeId,options={}){
           and not exists(select 1 from mc.operational_snapshot_products sp where sp.snapshot_id=s.id and not(sp.product_id=any($3::uuid[])))
       ) select m.product_id,c.metric_date::text,c.snapshot_id,m.currency,true available,
           m.order_count::text,m.order_amount::text,m.buyout_count::text,m.buyout_amount::text,
-          'complete' quality,'[]'::jsonb missing_reasons,c.fetched_at,c.accepted_at,m.cancel_count::text,m.cancel_amount::text
+          'complete' quality,'[]'::jsonb missing_reasons,c.fetched_at,c.accepted_at,m.cancel_count::text,m.cancel_amount::text,m.return_count::text,m.return_amount::text
         from candidates c join mc.operational_daily_metrics m on m.business_id=c.business_id and m.store_id=c.store_id and m.snapshot_id=c.snapshot_id and m.metric_date=c.metric_date
         where c.rank=1 order by c.metric_date,m.product_id`,[businessId,storeId,current.product_ids,range.start,range.end]
     )).rows;
     const updateStatus=await readOperationalProgress(client,businessId,storeId,range,products,rows,options.now??new Date());
-    return {store,current,rows,savedRows,updateStatus};
+    return {store,current,rows,savedRows,updateStatus,today:range.today};
   });
 }
 

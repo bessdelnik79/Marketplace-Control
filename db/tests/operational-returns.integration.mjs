@@ -42,7 +42,7 @@ await context(ids.user,ids.business,async client=>{
   await client.query(`insert into mc.businesses(id,name) values($1,'P04 test')`,[ids.business]);
   await client.query(`insert into mc.memberships(business_id,user_id,role) values($1,$2,'owner')`,[ids.business,ids.user]);
   await client.query(`insert into mc.stores(id,business_id,external_account_id,name,status) values($1,$2,'p04-seller','P04 store','active')`,[ids.store,ids.business]);
-  const connection=(await client.query(`insert into mc.connections(business_id,store_id,secret_ref,scopes,status) values($1,$2,'database:p04','["analytics"]'::jsonb,'active') returning id`,[ids.business,ids.store])).rows[0];
+  const connection=(await client.query(`insert into mc.connections(business_id,store_id,secret_ref,scopes,status) values($1,$2,'database:p04','["analytics","statistics"]'::jsonb,'active') returning id`,[ids.business,ids.store])).rows[0];
   await client.query(`insert into mc.connection_secrets(business_id,connection_id,ciphertext,nonce,auth_tag) values($1,$2,decode('abcd','hex'),decode(repeat('01',12),'hex'),decode(repeat('02',16),'hex'))`,[ids.business,connection.id]);
   const catalog=(await client.query(`insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness) values($1,$2,'wb_api','catalog','p04-catalog','complete') returning id`,[ids.business,ids.store])).rows[0];
   await client.query(`insert into mc.products(id,business_id,store_id,wb_article,seller_article) values($1,$2,$3,7400001,'P04')`,[ids.product,ids.business,ids.store]);
@@ -50,12 +50,12 @@ await context(ids.user,ids.business,async client=>{
 });
 
 const display={periodStart:'2026-09-14',periodEnd:'2026-09-20',now:new Date('2026-09-21T12:00:00Z')};
-async function publish(range,{cancelCount=2,cancelAmount='9007199254740993.1250',fetchedAt=new Date('2026-09-21T12:00:00Z'),skipFirst=false}={}){
+async function publish(range,{cancelCount=2,cancelAmount='9007199254740993.1250',returnCount=cancelCount,returnAmount=cancelAmount,fetchedAt=new Date('2026-09-21T12:00:00Z'),skipFirst=false}={}){
   const job=await beginOperationalSync(ids.user,ids.store,{force:true,...range});
   const snapshotId=randomUUID();
-  const object=await storeOperationalSnapshot({businessId:ids.business,storeId:ids.store,snapshotId,raw:JSON.stringify({range,cancelCount,cancelAmount,skipFirst}),root:rawRoot,masterKey});
+  const object=await storeOperationalSnapshot({businessId:ids.business,storeId:ids.store,snapshotId,raw:JSON.stringify({range,cancelCount,cancelAmount,returnCount,returnAmount,skipFirst}),root:rawRoot,masterKey});
   const rows=[];
-  for(let time=Date.parse(`${job.date_from}T00:00:00Z`);time<=Date.parse(`${job.date_to}T00:00:00Z`);time+=86400000)rows.push({nmId:7400001,date:new Date(time).toISOString().slice(0,10),currency:'RUB',orderCount:3,orderSum:'20.0000',buyoutCount:1,buyoutSum:'10.0000',cancelCount,cancelSum:cancelAmount});
+  for(let time=Date.parse(`${job.date_from}T00:00:00Z`);time<=Date.parse(`${job.date_to}T00:00:00Z`);time+=86400000)rows.push({nmId:7400001,date:new Date(time).toISOString().slice(0,10),currency:'RUB',orderCount:3,orderSum:'20.0000',buyoutCount:1,buyoutSum:'10.0000',cancelCount,cancelSum:cancelAmount,returnCount,returnSum:returnAmount});
   if(skipFirst)rows.shift();
   const result=await completeOperationalSync(ids.user,job,{documentId:randomUUID(),snapshotId,objects:[object],metrics:rows,fetchedAt,storage});
   return {job,result};
@@ -76,7 +76,7 @@ test('first credential factory waits for selection, drains thirty Moscow days an
       where business_id=$1`,[ids.business]);
     await client.query(`insert into mc.stores(id,business_id,name,status) values($1,$2,'Factory store','paused')`,[storeId,ids.business]);
   });
-  const credential={storeId,sellerId:'factory-seller',scopes:['finance','analytics'],fingerprint:'a'.repeat(64),now:at,
+  const credential={storeId,sellerId:'factory-seller',scopes:['finance','analytics','statistics'],fingerprint:'a'.repeat(64),now:at,
     encrypted:{ciphertext:Buffer.from('abcd','hex'),nonce:Buffer.alloc(12,1),authTag:Buffer.alloc(16,2),keyVersion:1}};
   await saveWbConnection(ids.user,credential);
   const options={periodStart:'2026-01-26',periodEnd:'2026-02-01',now:at};
@@ -110,25 +110,31 @@ test('first credential factory waits for selection, drains thirty Moscow days an
     where ss.business_id=$1 and ss.store_id=$2 and ss.source_type='operational_sales_funnel'`,[ids.business,storeId])).rows[0]);
   assert.equal(raceState.status,'active');assert.equal(Number(raceState.credential_generation),2);
   await assert.rejects(()=>completeOperationalSync(ids.user,job,{documentId:randomUUID(),snapshotId:randomUUID(),objects:[{}],metrics:[]}),/operational_sync_superseded/);
+  const completedDates=new Set();
   for(let batch=0;batch<5;batch++){
     job=await beginOperationalSync(ids.user,storeId,{force:true,dateFrom:'2026-01-26',dateTo:'2026-02-01'});
     if(batch===4){
+      const remainingDays=(Date.parse(job.date_to)-Date.parse(job.date_from))/86400000+1;
       await failOperationalSync(ids.user,job,'operational_rate_limited');
-      const retry=(await getOperationalOverviewData(ids.user,storeId,{...options,periodStart:'2026-01-03',periodEnd:'2026-01-04'})).updateStatus;
+      const retry=(await getOperationalOverviewData(ids.user,storeId,{...options,periodStart:job.date_from,periodEnd:job.date_to})).updateStatus;
       assert.equal(retry.status,'failed');assert.equal(retry.retryScheduled,true);
-      assert.equal(retry.factory.status,'failed');assert.equal(retry.factory.completeDays,28);
-      assert.equal(retry.factory.failedDays,2);assert.equal(retry.factory.pendingDays,0);assert.equal(retry.factory.retryScheduled,true);
+      assert.equal(retry.factory.status,'failed');assert.equal(retry.factory.completeDays,completedDates.size);
+      assert.equal(retry.factory.failedDays,remainingDays);assert.equal(completedDates.size+remainingDays,30);
+      assert.equal(retry.factory.pendingDays,0);assert.equal(retry.factory.retryScheduled,true);
       job=await beginOperationalSync(ids.user,storeId,{force:true,dateFrom:'2026-01-26',dateTo:'2026-02-01'});
     }
     assert.ok((Date.parse(job.date_to)-Date.parse(job.date_from))/86400000<=6);
     const snapshotId=randomUUID();
     const object=await storeOperationalSnapshot({businessId:ids.business,storeId,snapshotId,raw:JSON.stringify({batch}),root:rawRoot,masterKey});
     const metrics=[];
-    for(let day=Date.parse(job.date_from);day<=Date.parse(job.date_to);day+=86400000)metrics.push({nmId:7400003,date:new Date(day).toISOString().slice(0,10),currency:'RUB',orderCount:0,orderSum:'0',buyoutCount:0,buyoutSum:'0',cancelCount:0,cancelSum:'0'});
+    for(let day=Date.parse(job.date_from);day<=Date.parse(job.date_to);day+=86400000)metrics.push({nmId:7400003,date:new Date(day).toISOString().slice(0,10),currency:'RUB',orderCount:0,orderSum:'0',buyoutCount:0,buyoutSum:'0',cancelCount:0,cancelSum:'0',returnCount:0,returnSum:'0'});
     await completeOperationalSync(ids.user,job,{documentId:randomUUID(),snapshotId,objects:[object],metrics,storage});
+    for(const metric of metrics){assert.equal(completedDates.has(metric.date),false);completedDates.add(metric.date);}
     const factory=(await getOperationalOverviewData(ids.user,storeId,options)).updateStatus.factory;
-    assert.equal(factory.completeDays,Math.min((batch+1)*7,30));
+    assert.equal(factory.completeDays,completedDates.size);
   }
+  assert.equal(completedDates.size,30);
+  assert.equal([...completedDates].sort()[0],'2026-01-03');assert.equal([...completedDates].sort().at(-1),'2026-02-01');
   data=await getOperationalOverviewData(ids.user,storeId,options);
   assert.equal(data.updateStatus.factory.status,'current');assert.equal(data.updateStatus.factory.completeDays,30);
   assert.equal(data.updateStatus.factory.retryScheduled,false);
@@ -232,6 +238,50 @@ test('read model restores saved complete scope locally after a partial refresh',
   assert.equal(model.quality,'complete');assert.equal(model.savedDataUsed,true);
   assert.equal(model.returnData.quality,'complete');assert.equal(model.returnData.savedDataUsed,true);
   assert.equal(model.orders.count,'21');
+});
+
+test('historical purchased-return amount pending remains retryable until WB fills its amount',async()=>{
+  await context(ids.user,ids.business,async client=>{
+    await client.query(`delete from mc.operational_range_requests where business_id=$1 and store_id=$2`,[ids.business,ids.store]);
+    await client.query(`insert into mc.operational_range_requests(business_id,store_id,metric_date)
+      select $1,$2,day::date from generate_series('2026-08-24'::date,'2026-08-30'::date,interval '1 day') day`,[ids.business,ids.store]);
+  });
+  const range={dateFrom:'2026-08-24',dateTo:'2026-08-30'},options={...display,periodStart:range.dateFrom,periodEnd:range.dateTo};
+  await publish(range,{returnCount:1,returnAmount:null,fetchedAt:display.now});
+  let data=await getOperationalOverviewData(ids.user,ids.store,options);
+  assert.equal(data.updateStatus.status,'failed');assert.equal(data.updateStatus.failedDays,7);assert.equal(data.updateStatus.retryScheduled,true);
+  const scheduled=await context(ids.user,ids.business,async client=>(await client.query(`select next_run_at>=now()+interval '14 minutes' delayed
+    from mc.sync_streams where business_id=$1 and store_id=$2 and source_type='operational_sales_funnel'`,[ids.business,ids.store])).rows[0]);
+  assert.equal(scheduled.delayed,true);
+  assert.ok(data.rows.filter(row=>row.metric_date>=range.dateFrom).every(row=>row.return_count==='1'&&row.return_amount===null));
+  await publish(range,{returnCount:1,returnAmount:'2.50',fetchedAt:new Date('2026-09-21T13:00:00Z')});
+  data=await getOperationalOverviewData(ids.user,ids.store,options);
+  assert.equal(data.updateStatus.failedDays,0);assert.equal(data.updateStatus.retryScheduled,false);
+});
+
+test('older-than-ninety-day funnel coverage completes its queue without inventing or re-fetching returns',async()=>{
+  const options={...display,periodStart:'2026-05-01',periodEnd:'2026-05-07'};
+  const requested=await requestOperationalRangeRefresh(ids.user,ids.store,options.periodStart,options.periodEnd,{now:display.now});
+  assert.equal(requested.pendingDays,35);
+  for(let batch=0;batch<5;batch++)await publish({dateFrom:options.periodStart,dateTo:options.periodEnd},{cancelCount:99,cancelAmount:'99',returnCount:null,returnAmount:null,fetchedAt:display.now});
+  const data=await getOperationalOverviewData(ids.user,ids.store,options);
+  assert.equal(data.today,'2026-09-21');assert.equal(data.updateStatus.status,'current');assert.equal(data.updateStatus.completeDays,35);
+  assert.equal(data.updateStatus.failedDays,0);assert.equal(data.updateStatus.pendingDays,0);
+  assert.ok(data.rows.every(row=>row.return_count===null&&row.return_amount===null));
+  assert.equal(buildOperationalOverview(data).returnData.returns,null);
+  const repeated=await requestOperationalRangeRefresh(ids.user,ids.store,options.periodStart,options.periodEnd,{now:display.now});
+  assert.equal(repeated.queued,0);assert.equal(repeated.pendingDays,0);assert.equal(repeated.status,'current');
+});
+
+test('funnel cancellations remain audit data and missing purchased-return evidence never becomes zero',async()=>{
+  await publish({dateFrom:'2026-08-03',dateTo:'2026-08-09'},{cancelCount:99,cancelAmount:'99',returnCount:null,returnAmount:null});
+  const legacy=await getOperationalOverviewData(ids.user,ids.store,{...display,periodStart:'2026-08-03',periodEnd:'2026-08-09'});
+  assert.equal(legacy.rows[0].cancel_count,'99');assert.equal(legacy.rows[0].return_count,null);
+  assert.equal(buildOperationalOverview(legacy).returnData.quality,'unavailable');assert.equal(buildOperationalOverview(legacy).returnData.returns,null);
+  assert.equal(legacy.updateStatus.completeDays,0);
+  await publish({dateFrom:'2026-08-17',dateTo:'2026-08-23'},{cancelCount:99,cancelAmount:'99',returnCount:2,returnAmount:'3.1250'});
+  const purchased=buildOperationalOverview(await getOperationalOverviewData(ids.user,ids.store,{...display,periodStart:'2026-08-17',periodEnd:'2026-08-23'}));
+  assert.deepEqual(purchased.returnData.returns,{count:'14',amount:'21.8750'});
 });
 
 test('saved fallback rejects alternate scope and foreign tenant',async()=>{

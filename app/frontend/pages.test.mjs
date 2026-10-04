@@ -21,7 +21,7 @@ test('operational calendar and three metric charts share paired daily comparison
   assert.match(html,/data-operational-range/);assert.match(html,/data-range-today="2026-10-04"/);
   assert.match(html,/name="operationalStart" value="2026-09-01"/);assert.doesNotMatch(html,/name="periodStart"/);
   assert.equal((html.match(/class="design-bar current"/g)||[]).length,3);assert.equal((html.match(/class="design-bar average"/g)||[]).length,3);
-  assert.match(html,/1,25 шт\./);assert.match(html,/Отмены заказов и возвраты после покупки/);
+  assert.match(html,/1,25 шт\./);assert.match(html,/Возвраты после покупки/);
   assert.match(html,/aria-label="Возвраты по дням"/);
 });
 test('operational missing reasons use Russian explanations once per metric and keep absent values unavailable',()=>{
@@ -37,13 +37,13 @@ test('operational missing reasons use Russian explanations once per metric and k
     assert.equal((panel.match(/источник WB не содержит данных за выбранный период/g)||[]).length,1);
     assert.match(panel,/отсутствие данных не означает нулевые показатели/);
     assert.match(panel,/<strong>— · —<\/strong>/);
-    assert.doesNotMatch(panel,/metric_date_missing|metric date missing|selected_product_missing|selected product missing|source_empty|source empty|operational_metric_unavailable|часть дней или товаров недоступна|часть данных отмен и возвратов недоступна|0,00 ₽|0 шт\./);
+    assert.doesNotMatch(panel,/metric_date_missing|metric date missing|selected_product_missing|selected product missing|source_empty|source empty|operational_metric_unavailable|часть дней или товаров недоступна|часть данных возвратов после покупки недоступна|0,00 ₽|0 шт\./);
   }
 });
 test('operational generic missing reasons remain visible once when no specific explanation exists',()=>{
   const html=operationalOverviewPanel({missingReasons:['operational_metric_unavailable','operational_metric_unavailable'],returnData:{missingReasons:['operational_returns_metric_unavailable','operational_returns_metric_unavailable']}});
   assert.equal((html.match(/часть дней или товаров недоступна/g)||[]).length,2);
-  assert.equal((html.match(/часть данных отмен и возвратов недоступна/g)||[]).length,1);
+  assert.equal((html.match(/часть данных возвратов после покупки недоступна/g)||[]).length,1);
 });
 test('settings escapes account data in HTML attributes and text',()=>{const html=settingsPage(user);assert.ok(!html.includes('<script>alert(1)</script>'));assert.ok(html.includes('&lt;script&gt;'));assert.ok(html.includes('&quot; autofocus'));assert.ok(!html.includes('value="" autofocus'));});
 test('every screen link resolves to a supported authenticated route or anchor',()=>{for(const html of [overviewPage(user),settingsPage(user),...Array.from(uiRoutes.keys(),route=>placeholderPage(user,route))]){for(const [,href] of html.matchAll(/href="([^"#]+)"/g)){const p=new URL(href,'http://localhost').pathname;assert.ok(uiRoutes.has(p)||['/favicon.svg','/ui.css'].includes(p),`Unsupported link ${href}`)}for(const match of html.matchAll(/<a[^>]+href="\/overview"[^>]*>/g))assert.match(match[0],/data-overview-home/)}});
@@ -169,7 +169,7 @@ test('operational overview exposes returns tab without inventing return metrics'
 
   assert.match(
     html,
-    /Отмены заказов и возвраты после покупки/
+    /Возвраты после покупки/
   );
 });
 test('profit row places rounded comparison next to amount with palette signs and accessible info',()=>{

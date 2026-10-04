@@ -42,9 +42,9 @@
     "semantic_hash": ""
   },
   "db/tests/schema.test.mjs": {
-    "mtime": 1791111987.0742288,
-    "seen": 1791112495.0034006,
-    "ast_hash": "8121db6ff40b75c74ddefa0c2a57a2a7",
+    "mtime": 1791116884.4171836,
+    "seen": 1791117467.0703216,
+    "ast_hash": "990e45b8010c84b93ef754608ca04d71",
     "semantic_hash": ""
   },
   "outputs/design/build-editable.mjs": {
@@ -156,15 +156,15 @@
     "semantic_hash": ""
   },
   "app/frontend/pages.mjs": {
-    "mtime": 1791115607.614235,
-    "seen": 1791115697.3609972,
-    "ast_hash": "e4fa1904a902fb64af6ce06a871de89d",
+    "mtime": 1791117429.3282773,
+    "seen": 1791117467.0567298,
+    "ast_hash": "a9e40b6761aaea78b21a8374dfcb4cf3",
     "semantic_hash": ""
   },
   "app/frontend/pages.test.mjs": {
-    "mtime": 1791115645.7052455,
-    "seen": 1791115697.3609998,
-    "ast_hash": "f927e5fd10f919162a8266e868270134",
+    "mtime": 1791116951.7967212,
+    "seen": 1791117467.0567327,
+    "ast_hash": "5108cc5cce267ab63e94127856d6c6d3",
     "semantic_hash": ""
   },
   "app/frontend/public/ui.js": {
@@ -522,9 +522,9 @@
     "semantic_hash": ""
   },
   "outputs/database-v1-dictionary.md": {
-    "mtime": 1791112076.101789,
-    "seen": 1791112495.0081775,
-    "ast_hash": "d9195f7c398b170f6681c9e8919fb30e",
+    "mtime": 1791117472.7690063,
+    "seen": 1791117884.8336217,
+    "ast_hash": "f59ab56d63d2185946d0d9831f6fadd8",
     "semantic_hash": ""
   },
   "outputs/database-v1.md": {
@@ -600,9 +600,9 @@
     "semantic_hash": ""
   },
   "outputs/mvp-status.md": {
-    "mtime": 1791112575.4015775,
-    "seen": 1791112789.920813,
-    "ast_hash": "60e904f445d9145b71979b8ea2969742",
+    "mtime": 1791117568.2598221,
+    "seen": 1791117884.8357959,
+    "ast_hash": "a061fd1d86e83f8bb58762770b148ad5",
     "semantic_hash": ""
   },
   "outputs/onboarding-flow.md": {
@@ -906,21 +906,21 @@
     "semantic_hash": ""
   },
   "app/modules/operational/operational-sync.mjs": {
-    "mtime": 1791113759.8981085,
-    "seen": 1791113846.898683,
-    "ast_hash": "66c7643b1c580f51ae02e19ff16f9045",
+    "mtime": 1791117499.2304146,
+    "seen": 1791117884.8185499,
+    "ast_hash": "43743c7e1643153685bf9b695644b736",
     "semantic_hash": ""
   },
   "app/modules/operational/operational-sync.test.mjs": {
-    "mtime": 1791113760.4159102,
-    "seen": 1791113846.8986857,
-    "ast_hash": "2825f1ce3ea189012de67731c2b49f8d",
+    "mtime": 1791117544.0344012,
+    "seen": 1791117884.818553,
+    "ast_hash": "17c87a2b1b1c2da26c9f49b4b343365f",
     "semantic_hash": ""
   },
   "app/modules/operational/operational.repository.mjs": {
-    "mtime": 1791113546.0537567,
-    "seen": 1791113846.8986876,
-    "ast_hash": "191259b58ea933d3e9110ac8651f6c08",
+    "mtime": 1791117543.551022,
+    "seen": 1791117884.818555,
+    "ast_hash": "0706390b2d244a2e8f7d1824e280f462",
     "semantic_hash": ""
   },
   "app/modules/operational/wb-sales-funnel.mjs": {
@@ -948,15 +948,15 @@
     "semantic_hash": ""
   },
   "app/modules/overview/operational-overview.mjs": {
-    "mtime": 1791110483.3702915,
-    "seen": 1791110533.404555,
-    "ast_hash": "2a558d4fcc58e3add1df3ac36034617f",
+    "mtime": 1791117429.3273027,
+    "seen": 1791117467.064013,
+    "ast_hash": "fd62021725581c5e6e9d2e7921ecb079",
     "semantic_hash": ""
   },
   "app/modules/overview/operational-overview.test.mjs": {
-    "mtime": 1791110483.3712695,
-    "seen": 1791110533.404557,
-    "ast_hash": "c2abf3f2d74cc1c892f058539e95b792",
+    "mtime": 1791117429.3273027,
+    "seen": 1791117467.0640163,
+    "ast_hash": "2e39502b273956d3caf88864508a1d43",
     "semantic_hash": ""
   },
   "app/modules/overview/overview.routes.mjs": {
@@ -1152,9 +1152,9 @@
     "semantic_hash": ""
   },
   "db/tests/p04-operational.integration.mjs": {
-    "mtime": 1791103450.4663942,
-    "seen": 1791103560.2768824,
-    "ast_hash": "1a28bae4d739d7eb9684aef224320b38",
+    "mtime": 1791116759.196442,
+    "seen": 1791117467.0703197,
+    "ast_hash": "d3ff5d0742e54dcdf4d07507016d34e6",
     "semantic_hash": ""
   },
   "outputs/event-driven-financial-recalculation-plan.md": {
@@ -1164,15 +1164,15 @@
     "semantic_hash": ""
   },
   "outputs/p0.4-operational-contract.md": {
-    "mtime": 1791115647.064307,
-    "seen": 1791115697.382925,
-    "ast_hash": "c7413cc990dfc087c3ae484dbd041b3a",
+    "mtime": 1791117876.0706022,
+    "seen": 1791117884.8362553,
+    "ast_hash": "a5a8b9d4eb018915fc895c66c22f0fb9",
     "semantic_hash": ""
   },
   "outputs/p0.4-plan.md": {
-    "mtime": 1791112334.5502498,
-    "seen": 1791112495.0103862,
-    "ast_hash": "0674b6498d93345049411ef49d37c5af",
+    "mtime": 1791117568.2598221,
+    "seen": 1791117884.836259,
+    "ast_hash": "bfc408f96e9869fa44bd77bef984153a",
     "semantic_hash": ""
   },
   "db/tests/p04-financial-comparison.integration.mjs": {
@@ -1272,9 +1272,9 @@
     "semantic_hash": ""
   },
   "db/tests/operational-returns.integration.mjs": {
-    "mtime": 1791113603.2237632,
-    "seen": 1791113846.905344,
-    "ast_hash": "d9d0f8dab61bf0860f952d98427f083e",
+    "mtime": 1791117795.553833,
+    "seen": 1791117884.8274,
+    "ast_hash": "f958f7773be612084c801147d9989fd9",
     "semantic_hash": ""
   },
   "outputs/financial-workflow-changes-2026-10-04.md": {
@@ -1284,9 +1284,21 @@
     "semantic_hash": ""
   },
   "app/modules/operational/operational-progress.test.mjs": {
-    "mtime": 1791112457.1785896,
-    "seen": 1791112494.9960737,
-    "ast_hash": "90571bab2d59fbb865f706bbd6102749",
+    "mtime": 1791117416.263093,
+    "seen": 1791117467.0632021,
+    "ast_hash": "c85e7535e0001ff2c15f2f7101549a13",
+    "semantic_hash": ""
+  },
+  "app/modules/operational/wb-purchased-returns.mjs": {
+    "mtime": 1791117458.7471986,
+    "seen": 1791117467.063447,
+    "ast_hash": "7a53582bb97e6a296fa37746a2b0da8a",
+    "semantic_hash": ""
+  },
+  "app/modules/operational/wb-purchased-returns.test.mjs": {
+    "mtime": 1791116854.4076307,
+    "seen": 1791117467.063449,
+    "ast_hash": "81b034a410aec2ba2353759da21db131",
     "semantic_hash": ""
   }
 }

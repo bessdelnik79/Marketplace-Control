@@ -116,16 +116,43 @@ function buildMetricsOverview(data){
 
 export function buildOperationalOverview(data){
   const result=buildMetricsOverview(data);
+  if(data?.today)result.today=validateCalendarDate(data.today);
+  const retentionDay=data?.today?dayNumber(data.today)-89:null;
   const returnMetrics=rows=>rows.map(row=>({...row,
-    available:row.available===true&&row.cancel_count!=null&&row.cancel_amount!=null,
-    order_count:row.cancel_count,order_amount:row.cancel_amount,buyout_count:row.cancel_count,buyout_amount:row.cancel_amount
+    available:row.available===true&&row.return_count!=null,
+    missing_reasons:[...(row.missing_reasons??[]),...(row.return_count==null?[retentionDay!=null&&dayNumber(row.metric_date)<retentionDay?'operational_returns_history_unavailable':'operational_returns_snapshot_missing']:[])],
+    order_count:row.return_count,order_amount:row.return_amount??'0',buyout_count:row.return_count,buyout_amount:row.return_amount??'0'
   }));
-  const returns=buildMetricsOverview({...data,savedRows:returnMetrics(data?.savedRows??[]),rows:returnMetrics(data?.rows??[]),current:data?.current?{...data.current,quality:'complete',missing_reasons:[]}:null});
+  const returnRows=returnMetrics(data?.rows??[]),savedReturnRows=returnMetrics(data?.savedRows??[]);
+  const returns=buildMetricsOverview({...data,savedRows:savedReturnRows,rows:returnRows,current:data?.current?{...data.current,quality:'complete',missing_reasons:[]}:null});
   result.returnData={status:returns.status,quality:returns.quality,savedDataUsed:returns.savedDataUsed,missingReasons:returns.missingReasons,
     updatedAt:returns.orders?returns.updatedAt:null,snapshotIds:returns.snapshotIds,returns:returns.orders,
     dailySeries:returns.dailySeries.map(day=>({date:day.date,quality:day.quality,available:day.available,returns:day.orders})),
     comparison:{available:returns.comparison.available,periods:returns.comparison.periods,reason:returns.comparison.reason,
       returns:returns.comparison.orders,dailySeries:returns.comparison.dailySeries.map(day=>({date:day.date,returns:day.orders}))}};
+  if(data?.current){
+    const {period_start:start,period_end:end,product_ids:products}=data.current;
+    const currentRows=[];
+    for(let day=dayNumber(start);day<=dayNumber(end);day++){
+      const date=dateFromDay(day),fresh=availableRowsForDate(returnRows,date,products);
+      const saved=fresh.length<products.length?rowsForDate(savedReturnRows,date,products):null;
+      currentRows.push(...(saved??fresh));
+    }
+    const amountPending=row=>row.available&&row.return_count!=null&&row.return_amount==null;
+    const currentPending=currentRows.filter(amountPending);
+    const days=dayNumber(end)-dayNumber(start)+1;
+    const historicalPending=returnRows.some(row=>products.includes(row.product_id)&&row.metric_date<start&&dayNumber(row.metric_date)>=dayNumber(start)-4*days&&amountPending(row));
+    if(currentPending.length){
+      result.returnData.quality='partial';
+      result.returnData.missingReasons=[...new Set([...result.returnData.missingReasons,'operational_returns_amount_pending'])];
+      if(result.returnData.returns)result.returnData.returns.amount=null;
+      for(const day of result.returnData.dailySeries)if(currentPending.some(row=>row.metric_date===day.date)){
+        if(day.returns)day.returns.amount=null;
+        if(day.quality==='complete')day.quality='partial';
+      }
+    }
+    if(currentPending.length||historicalPending)result.returnData.comparison={available:false,periods:0,reason:currentPending.length?'operational_current_incomplete':'operational_history_insufficient',returns:null,dailySeries:[]};
+  }
   if(data?.updateStatus)result.updateStatus=data.updateStatus;
   return result;
 }

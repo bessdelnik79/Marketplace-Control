@@ -2,6 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildOperationalOverview } from './operational-overview.mjs';
 
+test('legacy cancellation totals cannot become purchased returns',()=>{
+ const rows=productIds.map(id=>({...row(date(0),id),cancel_count:'99',cancel_amount:'999.0000'}));
+ const result=buildOperationalOverview(envelope(rows,{period_end:date(0)}));
+ assert.equal(result.returnData.returns,null);assert.equal(result.returnData.quality,'unavailable');
+});
+test('purchased return counts remain available while WB is filling in their amount',()=>{
+ const rows=productIds.map(id=>({...row(date(0),id),return_count:'1',return_amount:null,cancel_count:'99',cancel_amount:'999.0000'}));
+ const result=buildOperationalOverview(envelope(rows,{period_end:date(0)}));
+ assert.deepEqual(result.returnData.returns,{count:'2',amount:null});assert.equal(result.returnData.quality,'partial');
+ assert.equal(result.returnData.comparison.available,false);assert.ok(result.returnData.missingReasons.includes('operational_returns_amount_pending'));
+});
+
 const productIds=['product-a','product-b'];
 function row(date,productId,{available=true,week=0}={}){
   return {
@@ -55,9 +67,9 @@ test('absent snapshot has an explicit unavailable model',()=>{
   assert.deepEqual(result.missingReasons,['operational_snapshot_missing']);
 });
 
-test('two-day selection compares four preceding two-day periods and includes cancellations',()=>{
+test('two-day selection compares four preceding two-day periods and includes purchased returns',()=>{
   const rows=[];
-  for(let day=-8;day<2;day++)for(const productId of productIds)rows.push({...row(date(day),productId),cancel_count:'2',cancel_amount:'3.1250'});
+  for(let day=-8;day<2;day++)for(const productId of productIds)rows.push({...row(date(day),productId),return_count:'2',return_amount:'3.1250'});
   const result=buildOperationalOverview(envelope(rows,{period_end:'2026-09-15'}));
   assert.equal(result.dailySeries.length,2);
   assert.equal(result.comparison.available,true);
@@ -66,7 +78,7 @@ test('two-day selection compares four preceding two-day periods and includes can
   assert.deepEqual(result.returnData.comparison.returns,{count:'8.0000',amount:'12.5000'});
   assert.equal(result.returnData.comparison.dailySeries.length,2);
 });
-test('legacy snapshots preserve orders while cancellations remain unavailable',()=>{
+test('legacy snapshots preserve orders while purchased returns remain unavailable',()=>{
   const rows=Array.from({length:7},(_,day)=>productIds.map(productId=>row(date(day),productId))).flat();
   const result=buildOperationalOverview(envelope(rows));
   assert.equal(result.quality,'complete');
@@ -83,8 +95,8 @@ test('current range with no facts preserves requested dates and shows unavailabl
 });
 
 test('partial refresh preserves one whole saved day with exact scope and original freshness',()=>{
- const current=[{...row(date(0),productIds[0]),order_count:'99',cancel_count:'2',cancel_amount:'1.0000'}];
- const saved=productIds.map(id=>({...row(date(0),id,{week:1}),cancel_count:null,cancel_amount:null}));
+ const current=[{...row(date(0),productIds[0]),order_count:'99',return_count:'2',return_amount:'1.0000'}];
+ const saved=productIds.map(id=>({...row(date(0),id,{week:1}),return_count:null,return_amount:null}));
  const model=buildOperationalOverview({...envelope(current,{period_end:date(0)}),savedRows:saved});
  assert.equal(model.quality,'complete');assert.equal(model.savedDataUsed,true);
  assert.deepEqual(model.orders,{count:'2',amount:'20.2500'});assert.deepEqual(model.missingReasons,[]);
@@ -95,4 +107,22 @@ test('partial refresh preserves one whole saved day with exact scope and origina
 test('saved incomplete scope never fabricates missing products or returns',()=>{
  const model=buildOperationalOverview({...envelope([row(date(0),productIds[0])],{period_end:date(0)}),savedRows:[row(date(0),productIds[0],{week:1})]});
  assert.equal(model.quality,'partial');assert.equal(model.savedDataUsed,false);assert.equal(model.returnData.quality,'unavailable');
+});
+
+test('saved return counts with unknown money never become zero or complete',()=>{
+ const current=productIds.map(id=>({...row(date(0),id),return_count:null,return_amount:null}));
+ const saved=productIds.map(id=>({...row(date(0),id,{week:1}),return_count:'1',return_amount:null}));
+ const model=buildOperationalOverview({...envelope(current,{period_end:date(0)}),savedRows:saved});
+ assert.equal(model.returnData.savedDataUsed,true);
+ assert.deepEqual(model.returnData.returns,{count:'2',amount:null});
+ assert.equal(model.returnData.quality,'partial');
+ assert.ok(model.returnData.missingReasons.includes('operational_returns_amount_pending'));
+ assert.equal(model.returnData.comparison.available,false);
+});
+test('returns beyond Statistics retention explain unknown history while orders remain readable',()=>{
+ const rows=productIds.map(id=>({...row('2026-06-01',id),return_count:null,return_amount:null}));
+ const model=buildOperationalOverview({...envelope(rows,{period_start:'2026-06-01',period_end:'2026-06-01'}),today:'2026-10-04'});
+ assert.equal(model.quality,'complete');assert.equal(model.returnData.quality,'unavailable');
+ assert.ok(model.returnData.missingReasons.includes('operational_returns_history_unavailable'));
+ assert.equal(model.returnData.returns,null);
 });

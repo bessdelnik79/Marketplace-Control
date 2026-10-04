@@ -7,11 +7,13 @@ import {
 import {
   beginOperationalSync,
   reserveOperationalRequestSlot,
+  reserveOperationalPurchasedReturnsSlot,
   updateOperationalSyncProgress,
   completeOperationalSync,
   failOperationalSync
 } from './operational.repository.mjs';
 import { loadWbFunnelProductsHistory } from './wb-funnel-products.mjs';
+import { loadWbPurchasedReturns } from './wb-purchased-returns.mjs';
 import { decodeWbToken } from '../stores/wb.mjs';
 
 const DAY_MS = 86400000;
@@ -25,6 +27,12 @@ const knownErrors = new Set([
   'operational_invalid_nm_ids',
   'operational_duplicate_nm_id',
   'operational_invalid_request',
+  'operational_statistics_scope_missing',
+  'operational_returns_unavailable',
+  'operational_returns_invalid_response',
+  'operational_returns_duplicate_conflict',
+  'operational_returns_too_large',
+  'operational_returns_unexpected_date',
   'operational_unauthorized',
   'operational_payment_required',
   'operational_rate_limited',
@@ -65,11 +73,13 @@ const knownErrors = new Set([
 const defaultOperations = {
   begin: beginOperationalSync,
   reserve: reserveOperationalRequestSlot,
+  reserveReturns: reserveOperationalPurchasedReturnsSlot,
   progress: updateOperationalSyncProgress,
   complete: completeOperationalSync,
   fail: failOperationalSync,
   decrypt: decryptSecret,
   load: loadWbFunnelProductsHistory,
+  loadReturns: loadWbPurchasedReturns,
   store: storeOperationalSnapshot,
   remove: removeOperationalSnapshot,
   randomUUID
@@ -124,7 +134,7 @@ function operationalToken(value, job, now) {
   let decoded;
   try { decoded = decodeWbToken(value); } catch { throw failure('operational_unauthorized'); }
   if (decoded.expiresAt.getTime() <= now.getTime() || decoded.isTest || ![1, 3].includes(decoded.accountType) ||
-      !decoded.readOnly || !decoded.scopes.includes('analytics') || decoded.sellerId !== String(job.seller_id ?? '')) {
+      !decoded.readOnly || !decoded.scopes.includes('analytics') || !decoded.scopes.includes('statistics') || decoded.sellerId !== String(job.seller_id ?? '')) {
     throw failure('operational_unauthorized');
   }
   return decoded.token;
@@ -164,6 +174,7 @@ export async function runOperationalSync(userId, storeId, {
     job = await operations.begin(userId, storeId, { force, ...(businessId ? { businessId } : {}), ...range });
     if (!job?.started) return { status: 'not_started', reason: job?.reason ?? 'unknown', range };
     range={dateFrom:job.date_from,dateTo:job.date_to};
+    if(!job.scopes?.includes('statistics'))throw failure('operational_statistics_scope_missing');
     const products = selectedProducts(job);
     const token = operationalToken(
       operations.decrypt({ ciphertext: job.ciphertext, nonce: job.nonce, authTag: job.auth_tag }),
@@ -216,6 +227,28 @@ export async function runOperationalSync(userId, storeId, {
       });
     }
 
+    const returns=await operations.loadReturns(token,{
+      nmIds:products.map(product=>product.nmId),dateFrom:job.date_from,dateTo:job.date_to,now:clock(),clock,fetchImpl,
+      beforeRequest:async request=>{
+        const slot=await operations.reserveReturns(userId,job,65);
+        if(!slot||!Number.isFinite(slot.waitMs)||slot.waitMs<0)throw failure('operational_invalid_rate_slot');
+        const progress={batches:objects.length,batchCount:productBatches.length+1,rows:metrics.length,source:'purchased_returns',requestFrom:request?.dateFrom??job.date_from,requestTo:request?.dateTo??job.date_to};
+        if(slot.waitMs>0){
+          await operations.progress(userId,job,{...progress,stage:'rate_wait',nextRequestAt:slot.scheduledAt??new Date(clock().getTime()+slot.waitMs).toISOString()});
+          await waitImpl(slot.waitMs);
+        }
+        await operations.progress(userId,job,{...progress,stage:'fetching',requestStartedAt:clock().toISOString()});
+      }
+    });
+    objects.push(await operations.store({businessId:job.business_id,storeId:job.store_id,snapshotId,
+      partNumber:productBatches.length,raw:returns.raw,checksum:returns.rawChecksum,...storageOptions(sourceRoot,masterKey)}));
+    const byReturn=new Map(returns.rows.map(row=>[`${row.nmId}:${row.date}`,row]));
+    if(byReturn.size!==returns.rows.length)throw failure('operational_duplicate_row');
+    for(const metric of metrics){
+      const returned=byReturn.get(`${metric.nmId}:${metric.date}`);
+      metric.returnCount=returned?.returnCount??null;
+      metric.returnSum=returned?.returnSum??null;
+    }
     await operations.progress(userId, job, {
       stage: 'saving', batches: objects.length, batchCount: productBatches.length,
       products: products.length, rows: metrics.length, missing: missingCount

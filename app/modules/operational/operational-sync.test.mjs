@@ -3,14 +3,24 @@ import assert from 'node:assert/strict';
 import {
   operationalRollingMoscowRange,
   operationalSyncErrorCode,
-  runOperationalSync,
+  runOperationalSync as executeOperationalSync,
   scheduleOperationalSync
 } from './operational-sync.mjs';
+
+async function syntheticReturns(_token,options){
+  await options.beforeRequest();
+  const rows=[];
+  for(let day=Date.parse(options.dateFrom);day<=Date.parse(options.dateTo);day+=86400000)for(const nmId of options.nmIds)rows.push({nmId,date:new Date(day).toISOString().slice(0,10),returnCount:0,returnSum:'0'});
+  return {rows,missing:[],raw:'{"returns":[]}',rawChecksum:'d'.repeat(64)};
+}
+function runOperationalSync(userId,storeId,options){
+  return executeOperationalSync(userId,storeId,{...options,dependencies:{reserveReturns:async()=>({waitMs:0}),loadReturns:syntheticReturns,...options.dependencies}});
+}
 
 const silentLogger = { info() {}, warn() {} };
 const fixedClock = () => new Date('2026-09-21T20:59:00Z');
 const sellerId = 'seller-1';
-const analyticsReadOnlyMask = (1n << 2n) | (1n << 30n);
+const analyticsReadOnlyMask = (1n << 2n) | (1n << 5n) | (1n << 30n);
 const wbToken = (overrides = {}) => {
   const payload = { sid: sellerId, exp: 2_000_000_000, s: Number(analyticsReadOnlyMask), acc: 1, t: false, ...overrides };
   return `header.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.signature`;
@@ -28,6 +38,7 @@ function jobFor(range, count = 1) {
     stream_id: 'stream-1',
     run_id: 'run-1',
     seller_id: sellerId,
+    scopes:['analytics','statistics'],
     date_from: range.dateFrom,
     date_to: range.dateTo,
     ciphertext: Buffer.from('ciphertext'),
@@ -104,10 +115,10 @@ test('sync batches selected products by 1000, waits for every reserved slot and 
   assert.deepEqual(calls.loads.map(call => call.token), [wbToken(), wbToken()]);
   assert.equal(calls.reserve.length, 2);
   assert.deepEqual(calls.waits, [35, 20]);
-  assert.deepEqual(calls.stores.map(call => [call.partNumber, call.raw]), [[0, '{"batch":1}'], [1, '{"batch":2}']]);
-  assert.deepEqual(calls.progress.map(progress => progress.stage), ['rate_wait','fetching','loading','rate_wait','fetching','loading','saving']);
+  assert.deepEqual(calls.stores.map(call => [call.partNumber, call.raw]), [[0, '{"batch":1}'], [1, '{"batch":2}'],[2,'{"returns":[]}']]);
+  assert.deepEqual(calls.progress.map(progress => progress.stage), ['rate_wait','fetching','loading','rate_wait','fetching','loading','fetching','saving']);
   assert.equal(calls.progress.filter(progress=>progress.stage==='loading')[1].missing, 1005);
-  assert.equal(calls.complete[0].objects.length, 2);
+  assert.equal(calls.complete[0].objects.length, 3);
   assert.equal(calls.complete[0].metrics.length, 1005);
   assert.equal(calls.remove.length, 0);
   assert.equal(calls.fail.length, 0);
@@ -141,6 +152,36 @@ test('coverage gaps are passed as absence of rows, never synthesized as zero met
   assert.equal(completed.metrics.length, 1);
   assert.equal(completed.metrics[0].orderCount, 0);
   assert.equal(completed.metrics.some(metric => metric.nmId === 7_400_002), false);
+});
+
+test('purchased returns load once for all products with a separate 65 second slot and exact raw part',async()=>{
+  const reserve=[],stored=[];let calls=0,completed;
+  const result=await runOperationalSync('returns-user','returns-store',{clock:fixedClock,logger:silentLogger,waitImpl:async()=>{},dependencies:{
+    begin:async(_user,_store,range)=>jobFor(range,1001),decrypt:()=>wbToken(),reserve:async()=>({waitMs:0}),
+    reserveReturns:async(...args)=>{reserve.push(args);return {waitMs:65};},
+    load:async(_token,options)=>({rows:options.nmIds.map(nmId=>({nmId,date:options.dateFrom,currency:'RUB',orderCount:1,orderSum:'5',buyoutCount:1,buyoutSum:'5',cancelCount:99,cancelSum:'99'})),missing:[],raw:'funnel',rawChecksum:'a'.repeat(64)}),
+    loadReturns:async(_token,options)=>{calls++;assert.equal(options.nmIds.length,1001);await options.beforeRequest();return {rows:[{nmId:options.nmIds[0],date:options.dateFrom,returnCount:2,returnSum:'3.1250'},{nmId:options.nmIds[1],date:options.dateFrom,returnCount:1,returnSum:null}],missing:[],raw:'returns-raw',rawChecksum:'b'.repeat(64)};},
+    store:async options=>{stored.push(options);return {partNumber:options.partNumber};},progress:async()=>{},
+    complete:async(_user,_job,payload)=>{completed=payload;return {quality:'complete'};},randomUUID:ids(),remove:async()=>{},fail:async()=>{}
+  }});
+  assert.equal(result.status,'completed');assert.equal(calls,1);assert.equal(reserve[0][2],65);
+  assert.deepEqual(stored.map(part=>part.partNumber),[0,1,2]);assert.equal(stored[2].raw,'returns-raw');
+  assert.equal(completed.metrics[0].cancelCount,99);assert.equal(completed.metrics[0].returnCount,2);assert.equal(completed.metrics[0].returnSum,'3.1250');
+  assert.equal(completed.metrics[1].returnCount,1);assert.equal(completed.metrics[1].returnSum,null);
+  assert.equal(completed.metrics[2].returnCount,null);assert.equal(completed.metrics[2].returnSum,null);
+});
+
+test('returns source failure cleans the unpublished parts and preserves the existing published result',async()=>{
+  const calls=[];
+  const result=await runOperationalSync('returns-failure-user','returns-failure-store',{clock:fixedClock,logger:silentLogger,dependencies:{
+    begin:async(_user,_store,range)=>jobFor(range),decrypt:()=>wbToken(),reserve:async()=>({waitMs:0}),
+    load:async()=>({rows:[],missing:[],raw:'funnel',rawChecksum:'a'.repeat(64)}),
+    store:async()=>{calls.push('store');return {partNumber:0};},progress:async()=>{},
+    loadReturns:async()=>{throw new Error('operational_unavailable');},complete:async()=>calls.push('publish'),
+    remove:async()=>calls.push('cleanup'),fail:async()=>calls.push('failed'),randomUUID:ids()
+  }});
+  assert.equal(result.status,'failed');assert.equal(result.errorCode,'operational_unavailable');
+  assert.deepEqual(calls,['store','cleanup','failed']);
 });
 
 test('any pre-publication failure removes all stored parts before marking the run failed', async () => {
@@ -221,6 +262,7 @@ test('rate-limit and unknown errors map to stable fail codes', async () => {
     assert.deepEqual(failed, { code: expected, options: { retryDelaySeconds: retry } });
   }
   assert.equal(operationalSyncErrorCode(new Error('unexpected raw error')), 'operational_internal_error');
+  for(const code of ['operational_returns_unavailable','operational_returns_invalid_response','operational_returns_duplicate_conflict','operational_returns_too_large','operational_returns_unexpected_date'])assert.equal(operationalSyncErrorCode(new Error(code)),code);
 });
 
 test('local token validation maps invalid, expired, unsafe and mismatched tokens to the blocking unauthorized code', async () => {
@@ -229,6 +271,7 @@ test('local token validation maps invalid, expired, unsafe and mismatched tokens
     wbToken({ exp: 1 }),
     wbToken({ s: Number(1n << 30n) }),
     wbToken({ s: Number(1n << 2n) }),
+    wbToken({ s: Number((1n << 2n)|(1n << 30n)) }),
     wbToken({ sid: 'another-seller' }),
     wbToken({ acc: 2 }),
     wbToken({ t: true })
@@ -249,6 +292,15 @@ test('local token validation maps invalid, expired, unsafe and mismatched tokens
     assert.equal(failed, 'operational_unauthorized');
     assert.equal(loaded, false);
   }
+});
+
+test('missing Statistics scope prevents decrypting credentials or calling either source',async()=>{
+  let decrypted=false,loaded=false;
+  const result=await runOperationalSync('scope-user','scope-store',{clock:fixedClock,logger:silentLogger,dependencies:{
+    begin:async(_user,_store,range)=>({...jobFor(range),scopes:['analytics']}),
+    decrypt:()=>{decrypted=true;return wbToken();},load:async()=>{loaded=true;},loadReturns:async()=>{loaded=true;},fail:async()=>{}
+  }});
+  assert.equal(result.errorCode,'operational_statistics_scope_missing');assert.equal(decrypted,false);assert.equal(loaded,false);
 });
 
 test('scheduler deduplicates an active user and store in process', async () => {

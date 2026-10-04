@@ -1,10 +1,18 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {deriveOperationalProgress,operationalRefreshStart,operationalDisplayRange} from './operational.repository.mjs';
+import {deriveOperationalProgress,operationalRefreshStart,operationalDisplayRange,operationalReturnsRequired} from './operational.repository.mjs';
 
 const now=new Date('2026-10-04T12:00:00Z');
 const base={start:'2026-09-30',end:'2026-10-04',pendingDays:5,now};
 const run={status:'running',requested_from:'2026-09-30',requested_to:'2026-10-04',started_at:new Date('2026-10-04T11:59:00Z'),progress:{stage:'rate_wait'}};
+
+test('purchased-return coverage is required only within ninety Moscow calendar days',()=>{
+  const midnight=new Date('2026-10-03T21:00:00Z');
+  assert.equal(operationalReturnsRequired('2026-07-07',midnight),true);
+  assert.equal(operationalReturnsRequired('2026-07-06',midnight),false);
+  assert.equal(operationalReturnsRequired('2026-10-04',midnight),true);
+  assert.throws(()=>operationalReturnsRequired('2026-07-07',new Date('invalid')),/operational_invalid_clock/);
+});
 
 test('queued coverage is pending; only live overlapping work is running',()=>{
   assert.equal(deriveOperationalProgress(base).status,'pending');
