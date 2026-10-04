@@ -141,7 +141,7 @@ function operationalMetricPanel(operational,metric,hidden=false){
   return`<div class="design-metric-panel" data-live-metric-panel="${metric}" data-quality="${esc(model.quality||'unavailable')}" ${hidden?'hidden':''}><div class="design-current-total${metric==='returns'?' operational-returns-total':''}"><strong>${overviewCount(value?.count)} · ${overviewMoney(value?.amount)}</strong>${metric==='returns'?`<span class="transfer-info operational-returns-info" tabindex="0" aria-label="О возвратах" aria-describedby="operational-returns-tooltip">${icon('info')}<span class="transfer-tooltip" id="operational-returns-tooltip" role="tooltip">Отмены заказов и возвраты после покупки</span></span>`:''}</div><p class="muted overview-comparison">${esc(baseline)}</p><div class="design-legend"><span><i></i>Текущие</span><span><i></i>Среднее за 4 периода</span></div>${operationalBars(model,metric)}${model.savedDataUsed?'<p class="overview-meta" role="status">Показаны ранее сохранённые полные данные: новый ответ WB неполный. Дата получения указана ниже.</p>':''}${operationalReasonList(model.missingReasons)}<p class="overview-meta">Обновлено: ${esc(overviewFreshness(model.updatedAt))}</p></div>`;
 }
 export function operationalLoadStatus(update,{factory=false}={}){
-  if(!update)return '';
+  if(!update||update.status==='current')return '';
   const count=value=>Number.isSafeInteger(Number(value))&&Number(value)>=0?Number(value):0;
   const total=count(update.totalDays),done=Math.min(total,count(update.completeDays)),failed=count(update.failedDays);
   const stage=update.progress?.stage;

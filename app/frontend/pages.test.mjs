@@ -202,5 +202,6 @@ test('initial history status exposes selection waiting, failure and completion w
  assert.match(operationalLoadStatus({status:'unavailable',errorCode:'operational_history_out_of_range'}),/за пределами доступной истории WB/);
  assert.match(operationalLoadStatus({status:'waiting_selection',totalDays:30},{factory:true}),/после подтверждения выбранных товаров/);
  const failed=operationalLoadStatus({status:'failed',totalDays:30,completeDays:25,failedDays:5});assert.match(failed,/с ошибками: 5/);assert.match(failed,/aria-valuenow="25"/);
- assert.match(operationalLoadStatus({status:'current',totalDays:30,completeDays:30},{factory:true}),/История загружена/);
+ assert.equal(operationalLoadStatus({status:'current',totalDays:35,completeDays:35}),'');
+ assert.equal(operationalLoadStatus({status:'current',totalDays:30,completeDays:30},{factory:true}),'');
 });

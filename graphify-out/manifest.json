@@ -156,15 +156,15 @@
     "semantic_hash": ""
   },
   "app/frontend/pages.mjs": {
-    "mtime": 1791115074.9406865,
-    "seen": 1791115122.326368,
-    "ast_hash": "48f6365397c54625a474c86d1a5faa0e",
+    "mtime": 1791115607.614235,
+    "seen": 1791115697.3609972,
+    "ast_hash": "e4fa1904a902fb64af6ce06a871de89d",
     "semantic_hash": ""
   },
   "app/frontend/pages.test.mjs": {
-    "mtime": 1791113492.4226408,
-    "seen": 1791113846.892252,
-    "ast_hash": "4b13862163efbfe6782434299c632a3d",
+    "mtime": 1791115645.7052455,
+    "seen": 1791115697.3609998,
+    "ast_hash": "f927e5fd10f919162a8266e868270134",
     "semantic_hash": ""
   },
   "app/frontend/public/ui.js": {
@@ -1164,9 +1164,9 @@
     "semantic_hash": ""
   },
   "outputs/p0.4-operational-contract.md": {
-    "mtime": 1791115114.0436592,
-    "seen": 1791115122.3469503,
-    "ast_hash": "58c5a8e1c6a1a74250f90c402b4a823f",
+    "mtime": 1791115647.064307,
+    "seen": 1791115697.382925,
+    "ast_hash": "c7413cc990dfc087c3ae484dbd041b3a",
     "semantic_hash": ""
   },
   "outputs/p0.4-plan.md": {
