@@ -174,6 +174,11 @@ export async function getFinancialOverview(userId, storeId, selectedDate, select
   };
 }
 
+export async function getOperationalOverview(userId,storeId,options={}, {loadOperationalData=getOperationalOverviewData}={}){
+  const data=await loadOperationalData(requiredId(userId),requiredId(storeId),options);
+  return data?buildOperationalOverview(data):null;
+}
+
 export async function getOverviewState(userId,{storeId,financialPeriodStart,financialPeriodEnd=null},{
   loadPeriodPair=getPublishedFinancialPeriodPair,
   loadOperationalData=getOperationalOverviewData

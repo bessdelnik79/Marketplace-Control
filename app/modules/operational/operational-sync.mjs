@@ -11,11 +11,11 @@ import {
   completeOperationalSync,
   failOperationalSync
 } from './operational.repository.mjs';
-import { loadWbSalesFunnelHistory } from './wb-sales-funnel.mjs';
+import { loadWbFunnelProductsHistory } from './wb-funnel-products.mjs';
 import { decodeWbToken } from '../stores/wb.mjs';
 
 const DAY_MS = 86400000;
-const batchSize = 20;
+const batchSize = 1000;
 const activeJobs = new Set();
 const knownErrors = new Set([
   'operational_connection_unavailable',
@@ -69,7 +69,7 @@ const defaultOperations = {
   complete: completeOperationalSync,
   fail: failOperationalSync,
   decrypt: decryptSecret,
-  load: loadWbSalesFunnelHistory,
+  load: loadWbFunnelProductsHistory,
   store: storeOperationalSnapshot,
   remove: removeOperationalSnapshot,
   randomUUID
@@ -163,6 +163,7 @@ export async function runOperationalSync(userId, storeId, {
     range = operationalRollingMoscowRange(clock());
     job = await operations.begin(userId, storeId, { force, ...(businessId ? { businessId } : {}), ...range });
     if (!job?.started) return { status: 'not_started', reason: job?.reason ?? 'unknown', range };
+    range={dateFrom:job.date_from,dateTo:job.date_to};
     const products = selectedProducts(job);
     const token = operationalToken(
       operations.decrypt({ ciphertext: job.ciphertext, nonce: job.nonce, authTag: job.auth_tag }),

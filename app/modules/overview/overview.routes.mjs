@@ -31,6 +31,10 @@ function requestedPeriod(url) {
 export function createOverviewRoutes({
   listStores,
   getOverviewState,
+  getOperationalOverview = async () => null,
+  operationalOverviewPanel = () => '',
+  requestOperationalRangeRefresh = async () => null,
+  scheduleOperationalSync = () => false,
   overviewPage,
   send,
   redirect,
@@ -43,28 +47,55 @@ export function createOverviewRoutes({
     const isPage=req.method==='GET'&&['/','/overview'].includes(url.pathname);
     const isStatus=req.method==='GET'&&url.pathname==='/overview/financial-status';
     const isRetry=req.method==='POST'&&url.pathname==='/overview/financial-retry';
-    if(!isPage&&!isStatus&&!isRetry)return false;
+    const isOperational=req.method==='GET'&&url.pathname==='/overview/operational';
+    const isOperationalRefresh=req.method==='POST'&&url.pathname==='/overview/operational-refresh';
+    if(!isPage&&!isStatus&&!isRetry&&!isOperational&&!isOperationalRefresh)return false;
     if (!current) {
-      if(isStatus)send(res,401,JSON.stringify({error:'authentication_required'}),{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
+      if(isStatus||isOperational||isOperationalRefresh)send(res,401,JSON.stringify({error:'authentication_required'}),{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
       else redirect(res, '/login');
       return true;
     }
-    if(isRetry&&!sameOrigin(req)){
+    if((isRetry||isOperationalRefresh)&&!sameOrigin(req)){
       send(res,403,'Запрос отклонён.',{'cache-control':'no-store'});
       return true;
     }
     const stores = await listStores(current.user_id);
     if (!stores.length) {
-      if(isStatus)send(res,404,JSON.stringify({error:'store_not_found'}),{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
+      if(isStatus||isOperational||isOperationalRefresh)send(res,404,JSON.stringify({error:'store_not_found'}),{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
       else if (url.pathname === '/') redirect(res, '/onboarding/store');
       else send(res, 200, overviewPage(current, stores));
       return true;
     }
-    const body=isRetry?await form(req):null;
-    const requestedStoreId = isRetry?body.storeId:url.searchParams.get('storeId');
+    const body=isRetry||isOperationalRefresh?await form(req):null;
+    const requestedStoreId = body?body.storeId:url.searchParams.get('storeId');
     const store = requestedStoreId ? stores.find(item => item.id === requestedStoreId) : stores[0];
     if (!store) {
       send(res,404,isStatus?JSON.stringify({error:'store_not_found'}):'Магазин не найден.',isStatus?{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}:{});
+      return true;
+    }
+    if(isOperational||isOperationalRefresh){
+      const start=body?body.operationalStart:url.searchParams.get('operationalStart');
+      const end=body?body.operationalEnd:url.searchParams.get('operationalEnd');
+      let period=null;
+      try{if(start||end)period=validateCalendarPeriod({start,end,timezone:'Europe/Moscow'});}
+      catch{send(res,400,'Некорректный период статистики.',{'cache-control':'no-store'});return true;}
+      if(isOperationalRefresh){
+        if(!period){send(res,400,'Период обязателен.',{'cache-control':'no-store'});return true;}
+        try{
+          const result=await requestOperationalRangeRefresh(current.user_id,store.id,period.start,period.end);
+          if(result?.pendingDays>0||result?.queued>0)scheduleOperationalSync(current.user_id,store.id);
+          send(res,202,JSON.stringify(result),{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});
+        }catch(error){
+          if(['owned business context is required','operational_refresh_forbidden'].includes(error.message)){send(res,403,'Недостаточно прав.',{'cache-control':'no-store'});return true;}
+          if(error.message==='operational_invalid_period'){send(res,400,'Некорректный период статистики.',{'cache-control':'no-store'});return true;}
+          throw error;
+        }
+      }else{
+        let state;
+        try{state=await getOperationalOverview(current.user_id,store.id,{periodStart:period?.start??null,periodEnd:period?.end??null});}
+        catch(error){if(error.message==='operational_invalid_period'){send(res,400,'Некорректный период статистики.',{'cache-control':'no-store'});return true;}throw error;}
+        send(res,state?200:404,state?operationalOverviewPanel(state,{selectedStoreId:store.id}):'Магазин не найден.',{'cache-control':'no-store'});
+      }
       return true;
     }
     const periodUrl=isRetry?new URL(`/overview?periodStart=${encodeURIComponent(body.periodStart??'')}&periodEnd=${encodeURIComponent(body.periodEnd??'')}`,'http://localhost'):url;

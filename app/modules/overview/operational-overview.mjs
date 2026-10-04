@@ -46,15 +46,16 @@ function availableRowsForDate(rows,date,productIds){
   return productIds.map(id=>byProduct.get(id)).filter(row=>row?.available===true&&row.currency==='RUB');
 }
 
-export function buildOperationalOverview(data){
+function buildMetricsOverview(data){
   if(!data?.current)return {
-    status:'unavailable',period:null,updatedAt:null,quality:'unavailable',missingReasons:['operational_snapshot_missing'],
+    status:'unavailable',period:data?.period??null,updatedAt:null,quality:'unavailable',missingReasons:['operational_snapshot_missing'],
     snapshotIds:[],scope:null,orders:null,buyouts:null,dailySeries:[],comparison:{available:false,periods:0,reason:'operational_history_insufficient',orders:null,buyouts:null,dailySeries:[]}
   };
   const current=data.current;
   const start=validateCalendarDate(current.period_start),end=validateCalendarDate(current.period_end);
   const startDay=dayNumber(start),endDay=dayNumber(end);
-  if(endDay<startDay||endDay-startDay>6)invalid('overview_invalid_operational_period');
+  if(endDay<startDay||endDay-startDay>365)invalid('overview_invalid_operational_period');
+  const periodDays=endDay-startDay+1;
   const productIds=[...new Set((current.product_ids??[]).map(requiredText))];
   if(!productIds.length)invalid('overview_invalid_scope');
   const rows=Array.isArray(data.rows)?data.rows:invalid('overview_invalid_operational_data');
@@ -73,7 +74,7 @@ export function buildOperationalOverview(data){
   });
   const baseReasons=reasons([
     ...(current.missing_reasons??[]),
-    ...currentRows.flatMap(row=>row.missing_reasons??[])
+    ...currentRows.filter(row=>row.available!==true).flatMap(row=>row.missing_reasons??[])
   ]);
   const availableCount=currentGroups.length;
   const quality=availableCount===expected&&current.quality==='complete'?'complete':availableCount?'partial':'unavailable';
@@ -81,14 +82,14 @@ export function buildOperationalOverview(data){
   const snapshotIds=[...new Set(currentRows.map(row=>requiredText(row.snapshot_id)))].sort();
   const updatedAt=currentRows.length
     ? currentRows.map(row=>timestamp(row.fetched_at)).sort().at(-1)
-    : timestamp(current.fetched_at);
+    : null;
   const baselineGroups=[];
   const baselineDaily=[];
   let baselineComplete=true;
   for(let day=startDay;day<=endDay;day++){
     const date=dateFromDay(day),dayRows=[];
     for(let offset=1;offset<=4;offset++){
-      const comparisonRows=rowsForDate(rows,dateFromDay(day-offset*7),productIds);
+      const comparisonRows=rowsForDate(rows,dateFromDay(day-offset*periodDays),productIds);
       if(!comparisonRows){baselineComplete=false;break;}
       dayRows.push(...comparisonRows);
     }
@@ -105,4 +106,20 @@ export function buildOperationalOverview(data){
     scope:{type:'selected_products',productIds},orders:availableCount?measure(currentGroups,'order'):null,
     buyouts:availableCount?measure(currentGroups,'buyout'):null,dailySeries,comparison
   };
+}
+
+export function buildOperationalOverview(data){
+  const result=buildMetricsOverview(data);
+  const returnRows=(data?.rows??[]).map(row=>({...row,
+    available:row.available===true&&row.cancel_count!=null&&row.cancel_amount!=null,
+    order_count:row.cancel_count,order_amount:row.cancel_amount,buyout_count:row.cancel_count,buyout_amount:row.cancel_amount
+  }));
+  const returns=buildMetricsOverview({...data,rows:returnRows,current:data?.current?{...data.current,quality:'complete',missing_reasons:[]}:null});
+  result.returnData={status:returns.status,quality:returns.quality,missingReasons:returns.missingReasons,
+    updatedAt:returns.orders?returns.updatedAt:null,snapshotIds:returns.snapshotIds,returns:returns.orders,
+    dailySeries:returns.dailySeries.map(day=>({date:day.date,quality:day.quality,available:day.available,returns:day.orders})),
+    comparison:{available:returns.comparison.available,periods:returns.comparison.periods,reason:returns.comparison.reason,
+      returns:returns.comparison.orders,dailySeries:returns.comparison.dailySeries.map(day=>({date:day.date,returns:day.orders}))}};
+  if(data?.updateStatus)result.updateStatus=data.updateStatus;
+  return result;
 }

@@ -39,6 +39,7 @@ await context(ids.user,ids.business,async client=>{
   const catalog=(await client.query(`insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness) values($1,$2,'wb_api','catalog','p04-catalog','complete') returning id`,[ids.business,ids.store])).rows[0];
   await client.query(`insert into mc.products(id,business_id,store_id,wb_article,seller_article) values($1,$2,$3,7400001,'P04')`,[ids.product,ids.business,ids.store]);
   await client.query(`select mc.confirm_product_selection($1,$2,$3::uuid[])`,[ids.store,catalog.id,[ids.product]]);
+  await client.query(`insert into mc.sync_streams(business_id,store_id,source_type,next_run_at,status) values($1,$2,'operational_sales_funnel',now(),'active')`,[ids.business,ids.store]);
 });
 
 const week={dateFrom:'2026-09-14',dateTo:'2026-09-20'};
@@ -127,7 +128,7 @@ test('A to B to A creates a fresh immutable activation and current read returns 
     `select metric_date::text,available,order_count::int from mc.current_operational_daily_metrics where store_id=$1 and metric_date='2026-09-18'`,[ids.store]
   )).rows[0]);
   assert.deepEqual(current,{metric_date:'2026-09-18',available:true,order_count:18});
-  const overview=await getOperationalOverviewData(ids.user,ids.store);
+  const overview=await getOperationalOverviewData(ids.user,ids.store,{periodStart:week.dateFrom,periodEnd:week.dateTo});
   assert.equal(overview.store.id,ids.store);
   assert.deepEqual(overview.current.product_ids,[ids.product]);
   assert.equal(overview.rows.find(row=>row.metric_date==='2026-09-18').order_count,'18');
@@ -181,8 +182,9 @@ test('selection change rejects an obsolete snapshot and makes the stream due imm
   assert.equal(state.error_code,'operational_selection_changed');
   assert.ok(new Date(state.next_run_at)<=new Date(Date.now()+5000));
   assert.equal(state.comparison_ready,false);
-  const overview=await getOperationalOverviewData(ids.user,ids.store);
-  assert.deepEqual(overview.current.product_ids,[ids.product]);
+  const overview=await getOperationalOverviewData(ids.user,ids.store,{periodStart:week.dateFrom,periodEnd:week.dateTo});
+  assert.deepEqual(new Set(overview.current.product_ids),new Set([ids.product,secondProduct]));
+  assert.equal(overview.rows.filter(row=>row.product_id===secondProduct).length,0);
 });
 
 test('snapshot publication and selection extension share a database mutex',async()=>{

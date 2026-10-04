@@ -1,0 +1,134 @@
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+
+const integrationUrl=process.env.OPERATIONAL_INTEGRATION_DATABASE_URL;
+if(!integrationUrl)throw new Error('Set OPERATIONAL_INTEGRATION_DATABASE_URL to a disposable PostgreSQL database whose name contains "test".');
+if(!new URL(integrationUrl).pathname.slice(1).toLowerCase().includes('test'))throw new Error('Refusing to run P0.4 integration tests outside a database whose name contains "test".');
+process.env.DATABASE_URL=integrationUrl;
+
+const {beginOperationalSync,completeOperationalSync,failOperationalSync,getOperationalOverviewData,getOperationalSyncState,reserveOperationalRequestSlot,requestOperationalRangeRefresh,operationalDisplayRange}=await import('../../app/modules/operational/operational.repository.mjs');
+const {migrate,pool}=await import('../../app/infrastructure/database/client.mjs');
+const {buildOperationalOverview}=await import('../../app/modules/overview/operational-overview.mjs');
+const {storeOperationalSnapshot}=await import('../../app/infrastructure/storage/operational-source-storage.mjs');
+const ids={user:randomUUID(),foreignUser:randomUUID(),business:randomUUID(),foreignBusiness:randomUUID(),store:randomUUID(),product:randomUUID()};
+const rawRoot=await mkdtemp(path.join(os.tmpdir(),'mc-p04-integration-'));
+const masterKey=Buffer.alloc(32,11);
+const storage={root:rawRoot,masterKey};
+
+await migrate();
+async function context(userId,businessId,action){
+  const client=await pool.connect();
+  try{
+    await client.query('begin');
+    await client.query("select set_config('app.user_id',$1,true),set_config('app.business_id',$2,true)",[userId,businessId]);
+    const result=await action(client);
+    await client.query('commit');
+    return result;
+  }catch(error){await client.query('rollback');throw error;}finally{client.release();}
+}
+
+await context(ids.foreignUser,ids.foreignBusiness,async client=>{
+  await client.query(`insert into mc.users(id,display_name) values($1,'Foreign owner')`,[ids.foreignUser]);
+  await client.query(`insert into mc.businesses(id,name) values($1,'Foreign test')`,[ids.foreignBusiness]);
+  await client.query(`insert into mc.memberships(business_id,user_id,role) values($1,$2,'owner')`,[ids.foreignBusiness,ids.foreignUser]);
+});
+await context(ids.user,ids.business,async client=>{
+  await client.query(`insert into mc.users(id,display_name) values($1,'P04 owner')`,[ids.user]);
+  await client.query(`insert into mc.businesses(id,name) values($1,'P04 test')`,[ids.business]);
+  await client.query(`insert into mc.memberships(business_id,user_id,role) values($1,$2,'owner')`,[ids.business,ids.user]);
+  await client.query(`insert into mc.stores(id,business_id,external_account_id,name,status) values($1,$2,'p04-seller','P04 store','active')`,[ids.store,ids.business]);
+  const connection=(await client.query(`insert into mc.connections(business_id,store_id,secret_ref,scopes,status) values($1,$2,'database:p04','["analytics"]'::jsonb,'active') returning id`,[ids.business,ids.store])).rows[0];
+  await client.query(`insert into mc.connection_secrets(business_id,connection_id,ciphertext,nonce,auth_tag) values($1,$2,decode('abcd','hex'),decode(repeat('01',12),'hex'),decode(repeat('02',16),'hex'))`,[ids.business,connection.id]);
+  const catalog=(await client.query(`insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness) values($1,$2,'wb_api','catalog','p04-catalog','complete') returning id`,[ids.business,ids.store])).rows[0];
+  await client.query(`insert into mc.products(id,business_id,store_id,wb_article,seller_article) values($1,$2,$3,7400001,'P04')`,[ids.product,ids.business,ids.store]);
+  await client.query(`select mc.confirm_product_selection($1,$2,$3::uuid[])`,[ids.store,catalog.id,[ids.product]]);
+});
+
+const display={periodStart:'2026-09-14',periodEnd:'2026-09-20',now:new Date('2026-09-21T12:00:00Z')};
+async function publish(range,{cancelCount=2,cancelAmount='9007199254740993.1250',fetchedAt=new Date('2026-09-21T12:00:00Z'),skipFirst=false}={}){
+  const job=await beginOperationalSync(ids.user,ids.store,{force:true,...range});
+  const snapshotId=randomUUID();
+  const object=await storeOperationalSnapshot({businessId:ids.business,storeId:ids.store,snapshotId,raw:JSON.stringify({range,cancelCount,cancelAmount}),root:rawRoot,masterKey});
+  const rows=[];
+  for(let time=Date.parse(`${job.date_from}T00:00:00Z`);time<=Date.parse(`${job.date_to}T00:00:00Z`);time+=86400000)rows.push({nmId:7400001,date:new Date(time).toISOString().slice(0,10),currency:'RUB',orderCount:3,orderSum:'20.0000',buyoutCount:1,buyoutSum:'10.0000',cancelCount,cancelSum:cancelAmount});
+  if(skipFirst)rows.shift();
+  const result=await completeOperationalSync(ids.user,job,{documentId:randomUUID(),snapshotId,objects:[object],metrics:rows,fetchedAt,storage});
+  return {job,result};
+}
+
+test('calendar defaults independently of persisted snapshots to Moscow latest seven days',()=>{
+  assert.deepEqual(operationalDisplayRange({now:new Date('2026-09-21T21:00:00Z')}),{start:'2026-09-16',end:'2026-09-22',days:7,today:'2026-09-22'});
+  assert.throws(()=>operationalDisplayRange({...display,periodStart:'2025-01-01'}),/operational_invalid_period/);
+  assert.throws(()=>operationalDisplayRange({...display,periodEnd:'2026-09-22'}),/operational_invalid_period/);
+});
+test('immutable versions support exact return money, idempotency and corrected snapshots',async()=>{
+  const range={dateFrom:'2026-09-14',dateTo:'2026-09-20'};
+  const first=await publish(range);
+  const data=await getOperationalOverviewData(ids.user,ids.store,display);
+  const model=buildOperationalOverview(data);
+  assert.deepEqual(model.returnData.returns,{count:'14',amount:'63050394783186951.8750'});
+  assert.equal(model.returnData.quality,'complete');
+  const repeated=await publish(range,{fetchedAt:new Date('2026-09-21T13:00:00Z')});
+  assert.equal(repeated.result.reused,true);
+  assert.equal(repeated.result.snapshotId,first.result.snapshotId);
+  await publish(range,{cancelCount:3,cancelAmount:'1.2345',fetchedAt:new Date('2026-09-21T14:00:00Z')});
+  assert.deepEqual(buildOperationalOverview(await getOperationalOverviewData(ids.user,ids.store,display)).returnData.returns,{count:'21',amount:'8.6415'});
+  await assert.rejects(()=>context(ids.user,ids.business,client=>client.query(`update mc.operational_daily_metrics set cancel_count=100 where snapshot_id=$1`,[first.result.snapshotId])),/immutable|mutation/i);
+  assert.equal(await getOperationalOverviewData(ids.foreignUser,ids.store,display),null);
+});
+test('durable refresh queues exact four preceding equal ranges and drains only published window',async()=>{
+  const requested=await requestOperationalRangeRefresh(ids.user,ids.store,'2026-09-19','2026-09-20',{now:display.now});
+  assert.equal(requested.status,'pending');
+  const pending=()=>context(ids.user,ids.business,async client=>(await client.query(`select metric_date::text from mc.operational_range_requests where store_id=$1 and status='pending' order by metric_date`,[ids.store])).rows);
+  const before=await pending();
+  assert.equal(before[0].metric_date,'2026-09-11');
+  assert.equal(before.at(-1).metric_date,'2026-09-13');
+  const duplicate=await requestOperationalRangeRefresh(ids.user,ids.store,'2026-09-19','2026-09-20',{now:display.now});
+  assert.equal(duplicate.queued,0);
+  const loaded=await publish({dateFrom:'2026-09-15',dateTo:'2026-09-21'},{cancelCount:0,cancelAmount:'0.0000',fetchedAt:new Date('2026-09-21T15:00:00Z')});
+  assert.equal(loaded.job.date_from,'2026-09-11');
+  assert.equal(loaded.job.date_to,'2026-09-13');
+  assert.equal((await pending()).length,0);
+  assert.equal(buildOperationalOverview(await getOperationalOverviewData(ids.user,ids.store,{...display,periodStart:'2026-09-19'})).returnData.comparison.available,true);
+});
+test('pending range isolation denies foreign tenant read and enqueue',async()=>{
+  await assert.rejects(()=>requestOperationalRangeRefresh(ids.foreignUser,ids.store,'2026-09-19','2026-09-20',{now:display.now}),/operational_connection_unavailable/);
+  const foreignRows=await context(ids.foreignUser,ids.foreignBusiness,async client=>(await client.query(`select * from mc.operational_range_requests where store_id=$1`,[ids.store])).rows);
+  assert.deepEqual(foreignRows,[]);
+});
+
+test('viewer may read operational periods but cannot queue a WB refresh',async()=>{
+  const viewer=randomUUID();
+  await context(viewer,ids.business,client=>client.query(`insert into mc.users(id,display_name) values($1,'Read-only viewer')`,[viewer]));
+  await context(ids.user,ids.business,async client=>{
+    await client.query(`insert into mc.memberships(business_id,user_id,role) values($1,$2,'viewer')`,[ids.business,viewer]);
+  });
+  assert.ok(await getOperationalOverviewData(viewer,ids.store,display));
+  await assert.rejects(()=>requestOperationalRangeRefresh(viewer,ids.store,'2026-09-19','2026-09-20',{now:display.now}),/operational_refresh_forbidden/);
+});
+test('failed historical run retains previous published result and pending queue',async()=>{
+  await requestOperationalRangeRefresh(ids.user,ids.store,'2026-08-31','2026-09-01',{now:display.now});
+  const before=buildOperationalOverview(await getOperationalOverviewData(ids.user,ids.store,display));
+  const job=await beginOperationalSync(ids.user,ids.store,{force:true,dateFrom:'2026-09-15',dateTo:'2026-09-21'});
+  await failOperationalSync(ids.user,job,'operational_rate_limited');
+  const after=buildOperationalOverview(await getOperationalOverviewData(ids.user,ids.store,display));
+  assert.deepEqual(after.returnData.returns,before.returnData.returns);
+  assert.equal(after.updateStatus.status,'failed');
+  assert.ok(after.updateStatus.pendingDays>0);
+});
+
+test('partial coverage marks missing requested day failed rather than falsely complete or endlessly pending',async()=>{
+  const loaded=await publish({dateFrom:'2026-09-15',dateTo:'2026-09-21'},{skipFirst:true,cancelCount:0,cancelAmount:'0.0000'});
+  assert.equal(loaded.result.quality,'partial');
+  const row=await context(ids.user,ids.business,async client=>(await client.query(`select status from mc.operational_range_requests where store_id=$1 and metric_date=$2`,[ids.store,loaded.job.date_from])).rows[0]);
+  assert.equal(row.status,'failed');
+  const state=await getOperationalOverviewData(ids.user,ids.store,{...display,periodStart:loaded.job.date_from,periodEnd:loaded.job.date_to});
+  assert.equal(state.updateStatus.status,'failed');
+  assert.equal(state.updateStatus.errorCode,'operational_metric_unavailable');
+});
+
+test.after(async()=>{await pool.end();await rm(rawRoot,{recursive:true,force:true});});

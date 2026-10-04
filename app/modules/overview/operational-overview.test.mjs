@@ -54,3 +54,30 @@ test('absent snapshot has an explicit unavailable model',()=>{
   assert.equal(result.orders,null);
   assert.deepEqual(result.missingReasons,['operational_snapshot_missing']);
 });
+
+test('two-day selection compares four preceding two-day periods and includes cancellations',()=>{
+  const rows=[];
+  for(let day=-8;day<2;day++)for(const productId of productIds)rows.push({...row(date(day),productId),cancel_count:'2',cancel_amount:'3.1250'});
+  const result=buildOperationalOverview(envelope(rows,{period_end:'2026-09-15'}));
+  assert.equal(result.dailySeries.length,2);
+  assert.equal(result.comparison.available,true);
+  assert.deepEqual(result.comparison.orders,{count:'4.0000',amount:'40.5000'});
+  assert.deepEqual(result.returnData.returns,{count:'8',amount:'12.5000'});
+  assert.deepEqual(result.returnData.comparison.returns,{count:'8.0000',amount:'12.5000'});
+  assert.equal(result.returnData.comparison.dailySeries.length,2);
+});
+test('legacy snapshots preserve orders while cancellations remain unavailable',()=>{
+  const rows=Array.from({length:7},(_,day)=>productIds.map(productId=>row(date(day),productId))).flat();
+  const result=buildOperationalOverview(envelope(rows));
+  assert.equal(result.quality,'complete');
+  assert.equal(result.returnData.quality,'unavailable');
+  assert.equal(result.returnData.returns,null);
+  assert.equal(result.returnData.comparison.available,false);
+});
+test('current range with no facts preserves requested dates and shows unavailable rather than zero',()=>{
+  const result=buildOperationalOverview(envelope([],{period_start:'2026-01-01',period_end:'2026-01-31'}));
+  assert.equal(result.dailySeries.length,31);
+  assert.equal(result.orders,null);
+  assert.equal(result.returnData.returns,null);
+  assert.equal(result.quality,'unavailable');
+});

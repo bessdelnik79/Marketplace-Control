@@ -33,6 +33,34 @@ test('overview routes leave unrelated requests untouched and require authenticat
   assert.equal(anonymous.response.location, '/login');
 });
 
+test('operational range reads only the owned store and never queues work in GET',async()=>{
+  let queued=false;
+  const state=setup({getOperationalOverview:async(user,store,options)=>({user,store,options}),operationalOverviewPanel:value=>value,
+    requestOperationalRangeRefresh:async()=>{queued=true}});
+  await state.run('/overview/operational?storeId=store-2&operationalStart=2026-09-01&operationalEnd=2026-09-30');
+  assert.equal(state.response.status,200);assert.equal(queued,false);
+  assert.deepEqual(state.response.body,{user:'user-1',store:'store-2',options:{periodStart:'2026-09-01',periodEnd:'2026-09-30'}});
+  assert.equal(state.response.headers['cache-control'],'no-store');
+  const foreign=setup();await foreign.run('/overview/operational?storeId=foreign');assert.equal(foreign.response.status,404);
+  const anonymous=setup();await anonymous.run('/overview/operational',null);assert.equal(anonymous.response.status,401);
+});
+
+test('operational ranges reset on main-page reload and reject incomplete or oversized ranges',async()=>{
+  const main=setup();await main.run('/overview?operationalStart=2026-01-01&operationalEnd=2026-01-31');
+  assert.equal(main.calls.at(-1)[2].operationalStart,undefined);
+  for(const query of ['operationalStart=2026-09-01','operationalStart=2026-09-10&operationalEnd=2026-09-01','operationalStart=2024-01-01&operationalEnd=2026-01-01']){
+    const state=setup();await state.run('/overview/operational?'+query);assert.equal(state.response.status,400);
+  }
+});
+
+test('operational refresh is same-origin POST and validates store ownership before queueing',async()=>{
+  let writes=0;
+  const options={form:async()=>({storeId:'store-1',operationalStart:'2026-09-01',operationalEnd:'2026-09-07'}),requestOperationalRangeRefresh:async()=>{writes++;return{queued:7}}};
+  const state=setup(options);await state.run('/overview/operational-refresh',current,'POST');assert.equal(state.response.status,202);assert.equal(writes,1);
+  const csrf=setup({...options,sameOrigin:()=>false});await csrf.run('/overview/operational-refresh',current,'POST');assert.equal(csrf.response.status,403);assert.equal(writes,1);
+  const foreign=setup({...options,form:async()=>({storeId:'foreign'})});await foreign.run('/overview/operational-refresh',current,'POST');assert.equal(foreign.response.status,404);assert.equal(writes,1);
+});
+
 test('overview reads the owned requested store and selected week', async () => {
   const state = setup();
   assert.equal(await state.run('/overview?storeId=store-2&week=2026-09-14'), true);

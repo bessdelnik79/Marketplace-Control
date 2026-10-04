@@ -1528,13 +1528,18 @@
 | buyout_amount | numeric(20,4) | нет | — |
 | row_checksum | text | нет | — |
 | created_at | timestamp with time zone | нет | now() |
+| cancel_count | bigint | да | — |
+| cancel_amount | numeric(20,4) | да | — |
 
 Ограничения и связи:
 
+- `CHECK (((cancel_count IS NULL) = (cancel_amount IS NULL)))`
 - `UNIQUE (business_id, store_id, id)`
 - `FOREIGN KEY (business_id, store_id, snapshot_id, product_id) REFERENCES mc.operational_snapshot_products(business_id, store_id, snapshot_id, product_id)`
 - `CHECK ((buyout_amount >= (0)::numeric))`
 - `CHECK ((buyout_count >= 0))`
+- `CHECK ((cancel_amount >= (0)::numeric))`
+- `CHECK ((cancel_count >= 0))`
 - `CHECK ((currency = 'RUB'::text))`
 - `CHECK (isfinite(metric_date))`
 - `CHECK ((order_amount >= (0)::numeric))`
@@ -1567,6 +1572,23 @@
 - `PRIMARY KEY (id)`
 - `CHECK ((source_code = 'wb_sales_funnel_v3'::text))`
 - `UNIQUE (store_id, source_code, period_start, period_end)`
+
+## operational_range_requests
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| metric_date | date | нет | — |
+| status | text | нет | 'pending'::text |
+| requested_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `CHECK (isfinite(metric_date))`
+- `PRIMARY KEY (store_id, metric_date)`
+- `CHECK ((status = ANY (ARRAY['pending'::text, 'complete'::text, 'failed'::text])))`
 
 ## operational_snapshot_activations
 

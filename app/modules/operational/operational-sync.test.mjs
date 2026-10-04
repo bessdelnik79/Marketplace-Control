@@ -62,7 +62,7 @@ test('rolling range preserves calendar arithmetic across year and leap-month bou
   assert.deepEqual(operationalRollingMoscowRange(new Date('2028-03-01T12:00:00Z')), { dateFrom: '2028-02-24', dateTo: '2028-03-01' });
 });
 
-test('sync batches selected products by 20, waits for every reserved slot and stores exact raw parts', async () => {
+test('sync batches selected products by 1000, waits for every reserved slot and stores exact raw parts', async () => {
   const calls = { begin: [], reserve: [], waits: [], loads: [], stores: [], progress: [], complete: [], remove: [], fail: [] };
   const result = await runOperationalSync('user-1', 'store-1', {
     force: true,
@@ -72,7 +72,7 @@ test('sync batches selected products by 20, waits for every reserved slot and st
     waitImpl: async ms => calls.waits.push(ms),
     logger: silentLogger,
     dependencies: {
-      begin: async (_userId, _storeId, options) => { calls.begin.push(options); return jobFor(options, 25); },
+      begin: async (_userId, _storeId, options) => { calls.begin.push(options); return jobFor(options, 1005); },
       reserve: async (...args) => { calls.reserve.push(args); return { waitMs: calls.reserve.length === 1 ? 35 : 20 }; },
       decrypt: () => wbToken(),
       load: async (token, options) => {
@@ -99,15 +99,15 @@ test('sync batches selected products by 20, waits for every reserved slot and st
   });
 
   assert.deepEqual(calls.begin, [{ force: true, dateFrom: '2026-09-15', dateTo: '2026-09-21' }]);
-  assert.deepEqual(calls.loads.map(call => call.options.nmIds.length), [20, 5]);
+  assert.deepEqual(calls.loads.map(call => call.options.nmIds.length), [1000, 5]);
   assert.deepEqual(calls.loads.map(call => call.token), [wbToken(), wbToken()]);
   assert.equal(calls.reserve.length, 2);
   assert.deepEqual(calls.waits, [35, 20]);
   assert.deepEqual(calls.stores.map(call => [call.partNumber, call.raw]), [[0, '{"batch":1}'], [1, '{"batch":2}']]);
   assert.deepEqual(calls.progress.map(progress => progress.stage), ['loading', 'loading', 'saving']);
-  assert.equal(calls.progress[1].missing, 25);
+  assert.equal(calls.progress[1].missing, 1005);
   assert.equal(calls.complete[0].objects.length, 2);
-  assert.equal(calls.complete[0].metrics.length, 25);
+  assert.equal(calls.complete[0].metrics.length, 1005);
   assert.equal(calls.remove.length, 0);
   assert.equal(calls.fail.length, 0);
   assert.equal(result.status, 'completed');
@@ -150,7 +150,7 @@ test('any pre-publication failure removes all stored parts before marking the ru
     sourceRoot: 'test-root',
     logger: silentLogger,
     dependencies: {
-      begin: async (_userId, _storeId, range) => jobFor(range, 21),
+      begin: async (_userId, _storeId, range) => jobFor(range, 1001),
       reserve: async () => ({ waitMs: 0 }), decrypt: () => wbToken(),
       load: async (_token, options) => {
         await options.beforeRequest();
