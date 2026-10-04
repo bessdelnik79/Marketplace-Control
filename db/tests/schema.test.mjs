@@ -43,7 +43,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,65);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,66);
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.recover_historical_catalog(uuid,uuid)'::regprocedure"));
   const transportRoundingDefinition=(await one(
   `select pg_get_functiondef(
@@ -127,7 +127,7 @@ assert.match(
   assert.match(publicationFunction,/financial_daily_shadow_day_compatible/);
   assert.match(shadowDayFunction,/comparison.status='matched'/);
   assert.match(shadowDayFunction,/legacy_method.code='financial_result'/);
-  assert.match(shadowDayFunction,/legacy_method.version_no BETWEEN 9 AND 34/);
+  assert.match(shadowDayFunction,/legacy_method.version_no BETWEEN 9 AND 36/);
   assert.match(shadowDayFunction,/legacy_method.implementation_version='financial-result-v'\|\|legacy_method.version_no/);
   assert.match(shadowDayFunction,/p_accounting_date BETWEEN comparison.period_start AND comparison.period_end/);
   assert.match(shadowDayFunction,/day\.quality IN \('complete','partial'\)/);
@@ -311,9 +311,9 @@ assert.match(
   assert.match((await one("select pg_get_functiondef('mc.guard_confirmed_return_link()'::regprocedure) as definition")).definition,/sold\.accounting_date\s*>\s*returned\.accounting_date/);
   assert.match((await one("select pg_get_functiondef('mc.guard_evidence_source()'::regprocedure) as definition")).definition,/return_wb_expense_reversal/);
   const dailyCompatibility=(await one("select pg_get_functiondef('mc.financial_daily_shadow_day_compatible(uuid,date)'::regprocedure) as definition")).definition;
-  assert.match(dailyCompatibility,/generation_method\.version_no\s+IN\(30,32,34\)/g);
+  assert.match(dailyCompatibility,/generation_method\.version_no\s+IN\(30,32,34,36\)/g);
   assert.doesNotMatch(dailyCompatibility,/generation_method\.version_no\s*=\s*28/);
-  assert.match(dailyCompatibility,/BETWEEN 9 AND 34/);
+  assert.match(dailyCompatibility,/BETWEEN 9 AND 36/);
   const taxComputationColumns=(await q("select column_name from information_schema.columns where table_schema='mc' and table_name='tax_computations' order by column_name")).map(row=>row.column_name);
   assert.ok(taxComputationColumns.includes('product_id'));
   assert.ok(!taxComputationColumns.includes('tax_year')&&!taxComputationColumns.includes('tax_setting_version_id')&&!taxComputationColumns.includes('rate_fraction'));

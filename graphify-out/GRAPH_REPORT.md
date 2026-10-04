@@ -1,7 +1,7 @@
 # Graph Report - Marketplace Control  (2026-10-04)
 
 ## Corpus Check
-- 246 files · ~1,060,284 words
+- 247 files · ~1,061,368 words
 - Verdict: corpus is large enough that graph structure adds value.
 - Unclassified: 13 file(s) not represented in the graph (top: .toml 4, (none) 4, .css 2)
 
@@ -11,7 +11,7 @@
 - Token cost: 0 input · 0 output
 
 ## Graph Freshness
-- Built from commit: `39c8e81b`
+- Built from commit: `cc21df5c`
 - Run `git rev-parse HEAD` and compare to check if the graph is stale.
 - Run `graphify update .` after code changes (no API cost).
 

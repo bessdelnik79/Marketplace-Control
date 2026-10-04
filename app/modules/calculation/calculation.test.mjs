@@ -140,9 +140,9 @@ test('v32 mixed known fields produce signed net expense 14.06 and unknown fields
   }
 });
 
-test('v31/v32 retain exact sale rounding and signed linked-return expense capabilities',()=>{
+test('v31/v32/v35/v36 retain exact sale rounding and signed linked-return expense capabilities',()=>{
   const base={productId:'product-1',variantId:'variant-1',accountingDate:'2026-09-22',scopeCode:'selected_product',classificationStatus:'confirmed'};
-  for(const resultMethodVersion of ['financial-result-v31','financial-result-v32']){
+  for(const resultMethodVersion of ['financial-result-v31','financial-result-v32','financial-result-v35','financial-result-v36']){
     const result=calculateFinancialResult({
       resultMethodVersion,periodStart:'2026-09-21',periodEnd:'2026-09-27',selectedProductIds:['product-1'],
       financialComponents:[
@@ -774,6 +774,103 @@ test('v30 payout reconciliation accepts both half-kopeck signs, preserves roundi
       });
       assert.equal(broken.missingReasons.includes('operation_unclassified'),true);
     }
+  }
+});
+
+test('v35/v36 reconcile payment commission separately without double counting acquiring or losing mismatched sales',()=>{
+  const input=(version,paymentProcessing,payout='90',fee='10')=>{
+    const base={operationVersionId:'sale',operationType:'sale',productId:'product-1',variantId:'variant-1',accountingDate:'2026-09-21',scopeCode:'selected_product',classificationStatus:'confirmed'};
+    return{
+      resultMethodVersion:version,periodStart:'2026-09-21',periodEnd:'2026-09-27',selectedProductIds:['product-1'],
+      financialComponents:[
+        {...base,id:'retail',categoryCode:'revenue',sourceField:'retailAmount',rawValue:'100',amountSigned:'100'},
+        {...base,id:'acquiring',categoryCode:'acquiring',sourceField:'acquiringFee',rawValue:fee,amountSigned:`-${fee}`},
+        {...base,id:'payout',categoryCode:'payout',sourceField:'forPay',scopeCode:'reconciliation',rawValue:payout,amountSigned:payout}
+      ],
+      operations:[{id:'sale',reportRowId:'sale-row',operationType:'sale',productId:'product-1',variantId:'variant-1',accountingDate:'2026-09-21',quantity:'1',paymentProcessing}],
+      costVersions:[{id:'cost',variantId:'variant-1',effectiveFrom:'2026-01-01',unitCost:'20'}]
+    };
+  };
+  for(const version of ['financial-result-v35','financial-result-v36']){
+    for(const [paymentProcessing,payout] of [['Перевыставление эквайринга','90'],['Компенсация платёжных услуг','90'],['Комиссия за организацию платежа с НДС','100']]){
+      const source=input(version,paymentProcessing,payout),original=structuredClone(source);
+      const result=calculateFinancialResult(source);
+      assert.equal(result.totals.availableResultBeforeTax,'70.0000');
+      assert.equal(result.lines.find(line=>line.categoryCode==='acquiring').amountSigned,'-10.0000');
+      assert.equal(result.lines.find(line=>line.categoryCode==='cost_of_goods').amountSigned,'-20.0000');
+      assert.equal(result.missingReasons.includes('source_unreconciled'),false);
+      assert.equal(result.missingReasons.includes('operation_unclassified'),false);
+      assert.deepEqual(source,original);
+    }
+    for(const [paymentProcessing,payout] of [['Комиссия за организацию платежа с НДС','90'],['Неизвестный вид услуги','100'],[undefined,'100']]){
+      const result=calculateFinancialResult(input(version,paymentProcessing,payout));
+      assert.equal(result.totals.availableResultBeforeTax,'70.0000');
+      assert.equal(result.missingReasons.includes('source_unreconciled'),true);
+      assert.equal(result.missingReasons.includes('operation_unclassified'),false);
+      assert.equal(result.lines.some(line=>line.categoryCode==='wb_row_rounding_adjustment'),false);
+    }
+    for(const mutate of [
+      source=>source.financialComponents.push({...source.financialComponents[1],id:'duplicate-fee'}),
+      source=>source.financialComponents.push({...source.financialComponents[2],id:'duplicate-payout'}),
+      source=>source.financialComponents[1].classificationStatus='unclassified',
+      source=>source.financialComponents[1].amountSigned='10',
+      source=>source.financialComponents[1].rawValue='-10',
+      source=>delete source.financialComponents[0].amountSigned,
+      source=>delete source.financialComponents[2].rawValue,
+      source=>source.financialComponents[2].scopeCode='selected_product'
+    ]){
+      const source=input(version,'Комиссия за организацию платежа с НДС','100');mutate(source);
+      const result=calculateFinancialResult(source);
+      assert.equal(result.missingReasons.includes('operation_unclassified'),true);
+      assert.equal(result.lines.some(line=>line.categoryCode==='revenue'),false);
+    }
+    const nonResultPayout=input(version,'Комиссия за организацию платежа с НДС','100');
+    nonResultPayout.financialComponents[2].classificationStatus='unclassified';
+    const nonResultResult=calculateFinancialResult(nonResultPayout);
+    assert.equal(nonResultResult.missingReasons.includes('operation_unclassified'),false);
+    assert.equal(nonResultResult.missingReasons.includes('source_unreconciled'),false);
+    assert.equal(nonResultResult.totals.availableResultBeforeTax,'70.0000');
+    const rounded=calculateFinancialResult(input(version,'Комиссия за организацию платежа с НДС','100.005','10'));
+    assert.equal(rounded.missingReasons.includes('source_unreconciled'),false);
+    assert.equal(rounded.totals.availableResultBeforeTax,'70.0050');
+    const beyond=calculateFinancialResult(input(version,'Комиссия за организацию платежа с НДС','100.005000000001','10'));
+    assert.equal(beyond.missingReasons.includes('source_unreconciled'),true);
+    assert.equal(beyond.totals.availableResultBeforeTax,'70.0000');
+    const zero=input(version,' Комиссия за организацию платежа с НДС ','100');
+    zero.financialComponents=zero.financialComponents.filter(component=>component.sourceField!=='acquiringFee');
+    zero.operations[0].acquiringFee='0';
+    assert.equal(calculateFinancialResult(zero).missingReasons.includes('source_unreconciled'),false);
+    assert.equal(calculateFinancialResult(zero).totals.availableResultBeforeTax,'80.0000');
+    const malformed=input(version,'Комиссия за организацию платежа с НДС','100');
+    malformed.financialComponents[1].rawValue='not-money';
+    assert.throws(()=>calculateFinancialResult(malformed),/calculation_invalid_return_expense/);
+  }
+  const legacy=calculateFinancialResult(input('financial-result-v34','Комиссия за организацию платежа с НДС','100'));
+  assert.equal(legacy.missingReasons.includes('operation_unclassified'),true);
+  assert.equal(legacy.lines.some(line=>line.categoryCode==='revenue'),false);
+});
+
+test('v35/v36 return mismatch keeps confirmed revenue and original COGS without inventing expense reversal',()=>{
+  for(const resultMethodVersion of ['financial-result-v35','financial-result-v36']){
+    const base={operationVersionId:'return',operationType:'return',productId:'product-1',variantId:'variant-1',accountingDate:'2026-09-22',scopeCode:'selected_product',classificationStatus:'confirmed'};
+    const result=calculateFinancialResult({
+      resultMethodVersion,periodStart:'2026-09-21',periodEnd:'2026-09-27',selectedProductIds:['product-1'],
+      financialComponents:[
+        {...base,id:'retail',sourceField:'retailAmount',categoryCode:'revenue_return',rawValue:'100',amountSigned:'-100'},
+        {...base,id:'fee',sourceField:'acquiringFee',categoryCode:'acquiring',rawValue:'10',amountSigned:'10'},
+        {...base,id:'payout',sourceField:'forPay',categoryCode:'payout',scopeCode:'reconciliation',rawValue:'99',amountSigned:'-99'}
+      ],
+      operations:[
+        {id:'original-sale',operationType:'sale',productId:'product-1',variantId:'variant-1',accountingDate:'2026-09-20',quantity:'1'},
+        {...base,id:'return',reportRowId:'return-row',quantity:'-1',paymentProcessing:'Комиссия за организацию платежа с НДС'}
+      ],
+      operationLinks:[{id:'link',fromOperationVersionId:'return',toOperationVersionId:'original-sale',linkType:'return_to_original_sale',status:'confirmed'}],
+      costVersions:[{id:'cost',variantId:'variant-1',effectiveFrom:'2026-01-01',unitCost:'20'}]
+    });
+    assert.equal(result.totals.availableResultBeforeTax,'-80.0000');
+    assert.equal(result.missingReasons.includes('source_unreconciled'),true);
+    assert.equal(result.missingReasons.includes('operation_unclassified'),false);
+    assert.deepEqual(result.lines.map(line=>line.categoryCode).sort(),['cost_of_goods','revenue_return']);
   }
 });
 

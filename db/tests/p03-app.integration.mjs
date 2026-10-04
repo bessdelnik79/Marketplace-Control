@@ -597,7 +597,7 @@ test('P0.3 persists exact weekly results, links return cost fail-closed and isol
   assert.equal(pair.current.period_result_id,second.period_result_id);
   assert.equal(pair.previous.period_result_id,first.period_result_id);
   assert.equal(pair.publication_id,second.publication_id);
-  assert.equal(pair.method_version,'financial-result-v33');
+  assert.equal(pair.method_version,'financial-result-v35');
   assert.equal(pair.timezone,'Europe/Moscow');
   assert.deepEqual(pair.scope,{type:'selected_products',productIds:[fixture.productId]});
   assert.ok(pair.current.source_freshness);
@@ -627,7 +627,7 @@ test('P0.3 persists exact weekly results, links return cost fail-closed and isol
   const targetA=await runFinancialCalculation(isolated.user,isolated.store,{targetPeriod:{periodStart:'2026-08-04',periodEnd:'2026-08-10'}});
   assert.equal(targetA.changed,true);
   const publishedTargetA=await getPublishedFinancialPeriod(isolated.user,isolated.store,'2026-08-04','2026-08-10');
-  assert.equal(publishedTargetA.method_version,'financial-result-v34');
+  assert.equal(publishedTargetA.method_version,'financial-result-v36');
   assert.deepEqual([publishedTargetA.period_start,publishedTargetA.period_end],['2026-08-04','2026-08-10']);
   assert.ok(publishedTargetA.period_result_id);
   assert.ok(publishedTargetA.lines.every(line=>line.accounting_date>='2026-08-04'&&line.accounting_date<='2026-08-10'));
@@ -673,13 +673,22 @@ test('P0.3 persists exact weekly results, links return cost fail-closed and isol
     ]}]});
   const inconsistent=await runFinancialCalculation(isolated.user,isolated.store);
   assert.equal(inconsistent.quality,'partial');
-  assert.ok(inconsistent.missingReasons.includes('operation_unclassified'));
+  assert.ok(inconsistent.missingReasons.includes('source_unreconciled'));
   const inconsistentReturnEvidence=await isolatedContext(async client=>(await client.query(`select count(*)::int count
     from mc.result_evidence e join mc.result_lines line on line.id=e.result_line_id
     join mc.report_rows row on row.id=e.report_row_id
     where line.run_id=$1 and row.row_checksum='inconsistent-return'
       and line.category_code in('cost_of_goods','return_wb_expense_reversal')`,[inconsistent.runId])).rows[0].count);
   assert.equal(inconsistentReturnEvidence,0);
+  const retainedReturn=await isolatedContext(async client=>(await client.query(`select line.category_code,e.contribution_amount::text
+    from mc.result_evidence e join mc.result_lines line on line.id=e.result_line_id
+    left join mc.financial_components component on component.id=e.financial_component_id
+    join mc.operation_versions operation on operation.id=coalesce(e.source_operation_version_id,component.operation_version_id)
+    join mc.report_rows row on row.id=operation.report_row_id
+    where line.run_id=$1 and row.row_checksum='inconsistent-return'
+      and line.category_code in('revenue_return','cost_of_goods') order by line.category_code`,[inconsistent.runId])).rows);
+  assert.deepEqual(retainedReturn,[{category_code:'cost_of_goods',contribution_amount:'40.0000'},
+    {category_code:'revenue_return',contribution_amount:'-100.0000'}]);
 });
 
 test('latest normalization resolves legacy unlinked data issues and sync count ignores them',async()=>{

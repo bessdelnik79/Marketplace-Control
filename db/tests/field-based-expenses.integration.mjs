@@ -96,7 +96,7 @@ const corrections=[
   {sellerOperName:'Другое название',docTypeName:'Изменённый документ',deliveryService:'-14.64'}
 ];
 
-test('migration 063 queues every tenant existing week for v32 without WB fetch',async()=>{
+test('financial method upgrades queue every tenant existing week through v36 without WB fetch',async()=>{
   assert.equal((await pool.query("select to_regclass('mc.schema_migrations') table_name")).rows[0].table_name,null,'use an empty disposable database');
   const directory=path.resolve('db/migrations');
   for(const file of (await readdir(directory)).filter(name=>/^\d+_.+\.sql$/.test(name)&&Number(name.slice(0,3))<63).sort()){
@@ -110,11 +110,15 @@ test('migration 063 queues every tenant existing week for v32 without WB fetch',
         from mc.financial_input_events e join mc.method_versions m on m.id=e.source_result_method_version_id
         where e.store_id=$1 and e.event_key=$2`,[scope.store,`financial-result-upgrade:v32:store:${scope.store}`])).rows,
       invalidation:(await client.query(`select reason from mc.calculation_invalidations where store_id=$1`,[scope.store])).rows[0],
+      paymentEvents:(await client.query(`select e.affected_from::text,e.affected_to::text,m.implementation_version
+        from mc.financial_input_events e join mc.method_versions m on m.id=e.source_result_method_version_id
+        where e.store_id=$1 and e.event_key=$2`,[scope.store,`financial-payment-commission:v1:store:${scope.store}`])).rows,
       fetches:(await client.query(`select count(*)::int n from mc.jobs where store_id=$1 and job_type='financial_report_fetch'`,[scope.store])).rows[0].n,
       jobs:(await client.query(`select payload->>'allowsWbApi' allows_wb_api from mc.jobs where store_id=$1 and job_type='financial_dates_recalculate' and status='pending'`,[scope.store])).rows
     }));
     assert.deepEqual(saved.events,[{affected_from:periodStart,affected_to:periodEnd,implementation_version:'financial-result-v32'}]);
-    assert.equal(saved.invalidation.reason,'financial_half_kopeck_tolerance');
+    assert.equal(saved.invalidation.reason,'financial_payment_commission_control');
+    assert.deepEqual(saved.paymentEvents,[{affected_from:periodStart,affected_to:periodEnd,implementation_version:'financial-result-v36'}]);
     assert.equal(saved.fetches,0);
     assert.ok(saved.jobs.length>0);
     assert.ok(saved.jobs.every(job=>job.allows_wb_api==='false'));
@@ -156,7 +160,7 @@ test('mixed sale expenses retain exact sources and rounded evidence through v31 
       where line.run_id=$1 and line.category_code='logistics'`,[calculated.runId])).rows,
     categories:(await client.query(`select category_code from mc.result_lines where run_id=$1 order by category_code`,[calculated.runId])).rows.map(row=>row.category_code)
   }));
-  assert.equal(persisted.method,'financial-result-v33');
+  assert.equal(persisted.method,'financial-result-v35');
   assert.deepEqual(persisted.logistics,[{source_amount:'-1.23456',result_amount:'-1.2346',evidence_amount:'-1.2346'}]);
   for(const category of ['logistics','storage','acceptance','penalty','deduction','acquiring','wb_reward_without_vat','wb_reward_vat','wb_row_rounding_adjustment']){
     assert.ok(persisted.categories.includes(category),category);
@@ -164,7 +168,7 @@ test('mixed sale expenses retain exact sources and rounded evidence through v31 
   await context(scope,client=>client.query(`select e.id from mc.method_versions method
     cross join lateral mc.emit_financial_input_event($1,$2,'result_method_updated',$3,$4,
       p_source_result_method_version_id=>method.id) e
-    where method.code='financial_result' and method.version_no=34`,
+    where method.code='financial_result' and method.version_no=36`,
     [scope.store,`field-expenses-mixed:${scope.store}`,periodStart,periodEnd]));
   await drainDaily();
   const published=await getPublishedFinancialPeriod(scope.user,scope.store,periodStart,periodEnd);
@@ -179,7 +183,7 @@ test('mixed sale expenses retain exact sources and rounded evidence through v31 
     join mc.financial_daily_results line on line.generation_id=generation.id and line.accounting_date=day.accounting_date
     join mc.financial_daily_evidence e on e.daily_result_id=line.id
     where current.store_id=$1 and line.category_code='logistics'`,[scope.store])).rows);
-  assert.deepEqual(daily,[{implementation_version:'financial-result-v34',amount_signed:'-1.2346',contribution_amount:'-1.2346'}]);
+  assert.deepEqual(daily,[{implementation_version:'financial-result-v36',amount_signed:'-1.2346',contribution_amount:'-1.2346'}]);
 });
 
 test('half-kopeck controls persist exact WB amounts through weekly and daily evidence',async()=>{
@@ -195,7 +199,7 @@ test('half-kopeck controls persist exact WB amounts through weekly and daily evi
       await context(scope,client=>client.query(`select e.id from mc.method_versions method
         cross join lateral mc.emit_financial_input_event($1,$2,'result_method_updated',$3,$4,
           p_source_result_method_version_id=>method.id) e
-        where method.code='financial_result' and method.version_no=34`,
+        where method.code='financial_result' and method.version_no=36`,
         [scope.store,`half-kopeck:${scope.store}`,periodStart,periodEnd]));
       await drainDaily();
       const published=await getPublishedFinancialPeriod(scope.user,scope.store,periodStart,periodEnd);
@@ -206,6 +210,66 @@ test('half-kopeck controls persist exact WB amounts through weekly and daily evi
         where operation.store_id=$1 and component.source_field='deliveryService'`,[scope.store])).rows);
       assert.deepEqual(amounts,[{amount:'-1.775'}]);
     }
+  }
+});
+
+test('payment commission controls retain acquiring once in weekly and daily results',async()=>{
+  for(const [paymentProcessing,forPay,quality] of [
+    ['Комиссия за организацию платежа с НДС','100','complete'],
+    ['Перевыставление эквайринга','99','complete'],
+    ['Компенсация платёжных услуг','99','complete'],
+    ['Комиссия за организацию платежа с НДС','98','partial']
+  ]){
+    const scope=await fixture([{docTypeName:'Продажа',sellerOperName:'Продажа',quantity:1,
+      retailAmount:'100',acquiringFee:'1',forPay,paymentProcessing}]);
+    const result=await runFinancialCalculation(scope.user,scope.store);
+    assert.equal(result.quality,quality);
+    assert.equal(result.totals.availableResultBeforeTax,'99.0000');
+    assert.equal(result.missingReasons.includes('source_unreconciled'),quality==='partial');
+    assert.equal(result.missingReasons.includes('operation_unclassified'),false);
+    const evidence=await context(scope,async client=>(await client.query(`select line.category_code,line.amount_signed::text,
+      count(e.id)::int evidence_count from mc.result_lines line join mc.result_evidence e on e.result_line_id=line.id
+      where line.run_id=$1 and line.category_code in('revenue','acquiring') group by line.id order by line.category_code`,[result.runId])).rows);
+    assert.deepEqual(evidence,[{category_code:'acquiring',amount_signed:'-1.0000',evidence_count:1},
+      {category_code:'revenue',amount_signed:'100.0000',evidence_count:1}]);
+    await context(scope,client=>client.query(`select mc.emit_financial_input_event($1,$2,'result_method_updated',$3,$4,
+      p_source_result_method_version_id=>(select id from mc.method_versions where code='financial_result' and version_no=36))`,
+      [scope.store,`payment-control:${scope.store}`,periodStart,periodEnd]));
+    await drainDaily();
+    const published=await getPublishedFinancialPeriod(scope.user,scope.store,periodStart,periodEnd);
+    assert.equal(published.quality,quality);
+    assert.equal(published.totals.availableResultBeforeTax,'99.0000');
+    assert.equal(published.missing_reasons.includes('source_unreconciled'),quality==='partial');
+  }
+});
+
+test('December payment commissions publish exact evidenced rounding without changing WB fields',async()=>{
+  for(const [raw,expected] of [
+    [{retailAmount:'1460',forPay:'1046.26',acquiringFee:'26.31',ppvzReward:'4.85',vw:'340.7416666666666667',vwNds:'68.15'},'1019.9500'],
+    [{retailAmount:'1364',forPay:'1046.26',acquiringFee:'26.31',ppvzReward:'30.683',vw:'239.2141666666666667',vwNds:'47.84'},'1019.9500'],
+    [{retailAmount:'100',forPay:'98.77',acquiringFee:'0',deliveryService:'1.23456'},'98.7700']
+  ]){
+    const scope=await fixture([{docTypeName:'Продажа',sellerOperName:'Продажа',quantity:1,
+      paymentProcessing:'Комиссия за организацию платежа с НДС',...raw}]);
+    const calculated=await runFinancialCalculation(scope.user,scope.store);
+    assert.equal(calculated.quality,'complete');
+    assert.equal(calculated.totals.availableResultBeforeTax,expected);
+    const adjustment=await context(scope,async client=>(await client.query(`select e.contribution_amount::text,
+      mc.expected_wb_row_rounding_adjustment(e.source_operation_version_id,run.method_version_id,null)::text expected
+      from mc.result_evidence e join mc.result_lines line on line.id=e.result_line_id
+      join mc.calculation_runs run on run.id=line.run_id where run.id=$1 and line.category_code='wb_row_rounding_adjustment'`,[calculated.runId])).rows);
+    assert.equal(adjustment.length,1);
+    assert.equal(Number(adjustment[0].contribution_amount),Number(adjustment[0].expected));
+    await context(scope,client=>client.query(`select mc.emit_financial_input_event($1,$2,'result_method_updated',$3,$4,
+      p_source_result_method_version_id=>(select id from mc.method_versions where code='financial_result' and version_no=36))`,
+      [scope.store,`payment-rounding:${scope.store}`,periodStart,periodEnd]));
+    await drainDaily();
+    const published=await getPublishedFinancialPeriod(scope.user,scope.store,periodStart,periodEnd);
+    assert.equal(published.quality,'complete');
+    assert.equal(published.totals.availableResultBeforeTax,expected);
+    const saved=await context(scope,async client=>(await client.query(`select row.raw_data->>'forPay' payout,row.raw_data->>'acquiringFee' acquiring
+      from mc.report_rows row join mc.operation_versions operation on operation.report_row_id=row.id where operation.store_id=$1`,[scope.store])).rows);
+    assert.ok(saved.every(row=>row.payout===raw.forPay&&row.acquiring===raw.acquiringFee));
   }
 });
 

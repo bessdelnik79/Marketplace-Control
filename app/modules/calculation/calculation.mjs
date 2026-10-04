@@ -102,7 +102,7 @@ export function normalizeMoney(value) {
 export function isVerifiedWbResultComponent({ categoryCode, sourceField, operationType, docTypeName, sellerOperName, bonusTypeName, rawValue, scopeCode, resultMethodVersion = 'financial-result-v32' }) {
   const value=String(rawValue??'').trim().replace(',', '.');
   if(!/^-?\d+(?:\.\d+)?$/.test(value)||!/[1-9]/.test(value))return false;
-  const fieldBasedMethod=['financial-result-v31','financial-result-v32','financial-result-v33','financial-result-v34'].includes(resultMethodVersion);
+  const fieldBasedMethod=['financial-result-v31','financial-result-v32','financial-result-v33','financial-result-v34','financial-result-v35','financial-result-v36'].includes(resultMethodVersion);
   if(sourceField==='cashbackDiscount')return false;
   if(scopeCode==='store')return VERIFIED_STORE_COMPONENTS.get(sourceField)?.has(categoryCode)===true;
   if(fieldBasedMethod&&FIELD_BASED_WB_EXPENSES.has(sourceField)){
@@ -608,8 +608,9 @@ export function calculateFinancialResult({
     matches.push(operation);
     operationsById.set(id, matches);
   }
-  const signedReturnExpenseMethod=['financial-result-v25','financial-result-v26','financial-result-v27','financial-result-v28','financial-result-v29','financial-result-v30','financial-result-v31','financial-result-v32','financial-result-v33','financial-result-v34'].includes(resultMethodVersion);
-  const exactRowResultMethod=['financial-result-v29','financial-result-v30','financial-result-v31','financial-result-v32','financial-result-v33','financial-result-v34'].includes(resultMethodVersion);
+  const signedReturnExpenseMethod=['financial-result-v25','financial-result-v26','financial-result-v27','financial-result-v28','financial-result-v29','financial-result-v30','financial-result-v31','financial-result-v32','financial-result-v33','financial-result-v34','financial-result-v35','financial-result-v36'].includes(resultMethodVersion);
+  const exactRowResultMethod=['financial-result-v29','financial-result-v30','financial-result-v31','financial-result-v32','financial-result-v33','financial-result-v34','financial-result-v35','financial-result-v36'].includes(resultMethodVersion);
+  const paymentProcessingMethod=['financial-result-v35','financial-result-v36'].includes(resultMethodVersion);
   const retainReturnAcquiringMethod=['financial-result-v25','financial-result-v26'].includes(resultMethodVersion);
   const replacedReturnExpenseFields=retainReturnAcquiringMethod?RETURN_REPLACED_EXPENSE_FIELDS:RETURN_WB_EXPENSE_FIELDS;
   const componentsByOperation=new Map();
@@ -647,7 +648,7 @@ export function calculateFinancialResult({
     if(!signedReturnExpenseMethod||(operationCandidates.length===1&&confirmedReturnSale(operationCandidates[0])))returnExpenseComponentIds.add(String(component.id));
   }
 
-  const exactRowPlans=new Map(),invalidExactRows=new Set();
+  const exactRowPlans=new Map(),invalidExactRows=new Set(),unreconciledExactRows=new Set();
   if(exactRowResultMethod)for(const operation of operations){
     if(operation?.state==='withdrawn'||!sourceInPeriod(operation,range)||!['sale','return'].includes(operation?.operationType))continue;
     if(excludedProduct(operation)||!operation?.productId||!selected.has(String(operation.productId)))continue;
@@ -656,6 +657,12 @@ export function calculateFinancialResult({
     const confirmed=operation.operationType==='return'?confirmedReturnSale(operation):null;
     if(operation.operationType==='return'&&!confirmed)continue;
     let exactSum=0n,roundedCategorySum=0n,valid=payouts.length===1;
+    if(paymentProcessingMethod&&valid){
+      const payout=payouts[0];
+      if(!isVerifiedNonResultComponent(payout)
+        ||String(payout.rawValue??'').trim()===''||String(payout.amountSigned??'').trim()==='')valid=false;
+    }
+    const resultFields=new Set();
     for(const component of group){
       if(component?.state==='withdrawn'||!sourceInPeriod(component,range))continue;
       if(NON_RESULT_CATEGORIES.has(component?.categoryCode)||transportReimbursementReferences.has(String(component?.id)))continue;
@@ -663,22 +670,52 @@ export function calculateFinancialResult({
       if(!RESULT_CATEGORIES.has(component?.categoryCode)||component?.scopeCode==='reconciliation'||component?.classificationStatus!=='confirmed'){
         valid=false;continue;
       }
+      if(paymentProcessingMethod){
+        if(resultFields.has(component.sourceField))valid=false;
+        resultFields.add(component.sourceField);
+        if(String(component.rawValue??'').trim()===''||String(component.amountSigned??'').trim()==='')valid=false;
+      }
       const exact=rawReturnAmount(component.amountSigned);
       exactSum+=exact;roundedCategorySum+=roundExactToScale4(exact);
     }
-    let reversalAmount=null;
+    let reversalAmount=null,returnReconciliationFailed=false;
     if(operation.operationType==='return'){
       const exactReversal=exactReturnWbExpenseReversal(group);
-      if(exactReversal===null)valid=false;
+      if(exactReversal===null){
+        const fields=group.filter(component=>RETURN_WB_EXPENSE_FIELDS.has(component.sourceField)||['retailAmount','forPay'].includes(component.sourceField));
+        const uniqueFields=new Set(fields.map(component=>component.sourceField));
+        if(paymentProcessingMethod&&valid&&uniqueFields.size===fields.length&&uniqueFields.has('retailAmount')&&uniqueFields.has('forPay'))returnReconciliationFailed=true;
+        else valid=false;
+      }
       else{
         reversalAmount=roundExactToScale4(exactReversal);
         exactSum+=exactReversal;roundedCategorySum+=reversalAmount;
       }
     }
     const roundedTarget=roundExactToKopecksScale4(exactSum);
-    const payout=valid?rawReturnAmount(payouts[0].amountSigned):0n;
+    let payout=valid?rawReturnAmount(payouts[0].amountSigned):0n;
+    if(paymentProcessingMethod&&operation.operationType==='sale'
+      &&String(operation.paymentProcessing??'').trim()==='Комиссия за организацию платежа с НДС'){
+      const acquiring=group.filter(component=>component.sourceField==='acquiringFee');
+      if(acquiring.length===0&&String(operation.acquiringFee??'').trim()!==''&&rawReturnAmount(operation.acquiringFee)===0n){
+        // A zero raw fee has no normalized expense component.
+      }else if(acquiring.length!==1||acquiring[0]?.categoryCode!=='acquiring'
+        ||acquiring[0]?.classificationStatus!=='confirmed')valid=false;
+      else{
+        const rawAcquiring=rawReturnAmount(acquiring[0].rawValue);
+        if(rawAcquiring<=0n||rawReturnAmount(acquiring[0].amountSigned)!==-rawAcquiring)valid=false;
+        else payout-=rawAcquiring;
+      }
+    }
     const payoutEqualsTarget=payout===roundedTarget*10n**BigInt(RETURN_RAW_SCALE-MONEY_SCALE);
-    if(!valid||(!payoutEqualsTarget&&!scaledMoneyMatches(payout,exactSum,RETURN_RAW_SCALE))){invalidExactRows.add(operationId);continue;}
+    if(!valid){invalidExactRows.add(operationId);continue;}
+    if(returnReconciliationFailed||(!payoutEqualsTarget&&!scaledMoneyMatches(payout,exactSum,RETURN_RAW_SCALE))){
+      if(paymentProcessingMethod){
+        unreconciledExactRows.add(operationId);
+        exactRowPlans.set(operationId,{adjustment:0n,reversalAmount});
+      }else invalidExactRows.add(operationId);
+      continue;
+    }
     const reconciledTarget=payoutEqualsTarget?roundedTarget:roundExactToScale4(payout);
     exactRowPlans.set(operationId,{
       adjustment:reconciledTarget-roundedCategorySum,reversalAmount,reportRowId:operation.reportRowId,
@@ -693,6 +730,7 @@ export function calculateFinancialResult({
     if(excludedProduct(component))continue;
     if (component?.productId && !selected.has(String(component.productId))) continue;
     if(invalidExactRows.has(String(component?.operationVersionId))){reasons.add('operation_unclassified');continue;}
+    if(unreconciledExactRows.has(String(component?.operationVersionId)))reasons.add('source_unreconciled');
     if(returnExpenseComponentIds.has(String(componentId)))continue;
     if (NON_RESULT_CATEGORIES.has(component?.categoryCode)) {
       if(!isVerifiedNonResultComponent(component))reasons.add('operation_unclassified');
@@ -742,6 +780,7 @@ export function calculateFinancialResult({
     const scope = resolveScope({ ...operation, scopeCode: operation.scopeCode ?? 'selected_product' }, selected, reasons);
     if (!scope) continue;
     if(invalidExactRows.has(operationId)){reasons.add('operation_unclassified');continue;}
+    if(unreconciledExactRows.has(operationId))reasons.add('source_unreconciled');
     const exactPlan=exactRowPlans.get(operationId);
     if(exactPlan?.adjustment)addLine(lines,{
       ...scope,accountingDate:validDate(operation.accountingDate),categoryCode:'wb_row_rounding_adjustment'
@@ -758,7 +797,7 @@ export function calculateFinancialResult({
       const {link,sale}=confirmed;
       const returnDate = validDate(operation.accountingDate);
       const reversal=exactRowResultMethod?exactPlan?.reversalAmount??null:calculateReturnWbExpenseReversal(componentsByOperation.get(operationId)??[]);
-      if(reversal===null||(!signedReturnExpenseMethod&&reversal<=0n))reasons.add('operation_unclassified');
+      if(reversal===null||(!signedReturnExpenseMethod&&reversal<=0n))reasons.add(unreconciledExactRows.has(operationId)?'source_unreconciled':'operation_unclassified');
       else addLine(lines,{
         ...scope,accountingDate:returnDate,categoryCode:'return_wb_expense_reversal'
       },reversal,{

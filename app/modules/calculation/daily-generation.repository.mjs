@@ -82,7 +82,7 @@ async function loadSnapshot(client,context){
   if(!affectedPeriods.length)throw new Error('financial_daily_inputs_missing');
   const affectedStart=affectedPeriods.reduce((value,row)=>row.period_start<value?row.period_start:value,affectedPeriods[0].period_start);
   const affectedEnd=affectedPeriods.reduce((value,row)=>row.period_end>value?row.period_end:value,affectedPeriods[0].period_end);
-  const method=(await client.query(`select id,implementation_version from mc.method_versions where code='financial_result' and version_no=34`,[])).rows[0];
+  const method=(await client.query(`select id,implementation_version from mc.method_versions where code='financial_result' and version_no=36`,[])).rows[0];
   if(!method)throw new Error('financial_daily_method_missing');
   const normalizationIds=reports.map(row=>row.normalization_id);
   const parserMethods=normalizationIds.length?(await client.query(
@@ -110,12 +110,12 @@ async function loadSnapshot(client,context){
       }));
   const operations=(await client.query(
     `select o.id,o.report_row_id,o.report_normalization_id,o.operation_type,o.product_id,o.variant_id,o.accounting_date::text,o.quantity::text,o.state,
-            rr.raw_data->>'docTypeName' as doc_type_name,rr.raw_data->>'sellerOperName' as seller_oper_name,rr.raw_data->>'nmId' as wb_article
+            rr.raw_data->>'docTypeName' as doc_type_name,rr.raw_data->>'sellerOperName' as seller_oper_name,rr.raw_data->>'nmId' as wb_article,rr.raw_data->>'paymentProcessing' as payment_processing,rr.raw_data->>'acquiringFee' as acquiring_fee
        from mc.operation_versions o join mc.report_rows rr on rr.id=o.report_row_id
       where o.report_normalization_id=any($1::uuid[]) and o.operation_type in ('sale','return') order by o.id`,[normalizationIds])).rows.map(row=>({
         id:row.id,reportRowId:row.report_row_id,reportNormalizationId:row.report_normalization_id,operationType:row.operation_type,productId:row.product_id,
         variantId:row.variant_id,wbArticle:row.wb_article,accountingDate:row.accounting_date,quantity:row.quantity,state:row.state,
-        docTypeName:row.doc_type_name,sellerOperName:row.seller_oper_name,scopeCode:'selected_product'
+        docTypeName:row.doc_type_name,sellerOperName:row.seller_oper_name,paymentProcessing:row.payment_processing,acquiringFee:row.acquiring_fee,scopeCode:'selected_product'
       }));
   const costs=(await client.query(
     `select v.id,c.variant_id,c.effective_from::text,v.unit_cost::text from mc.variant_costs c join mc.cost_versions v on v.id=c.current_version_id
@@ -159,7 +159,7 @@ export function calculateFinancialPeriods(snapshot){
       taxSettings:snapshot.taxSettings.map(row=>({id:row.id,effectiveFrom:row.effective_from,regimeCode:row.regime_code,
         usnRateFraction:row.usn_rate_fraction,vatMode:row.vat_mode,state:row.state})),reportCoverageComplete:coverageComplete});
     const currentTax=snapshot.taxSettings.filter(row=>row.effective_from<=periodEnd).at(-1)??null;
-    const result=calculateFinancialResult({periodStart,periodEnd,resultMethodVersion:snapshot.method?.implementation_version??'financial-result-v34',selectedProductIds:snapshot.products,financialComponents:snapshot.components,
+    const result=calculateFinancialResult({periodStart,periodEnd,resultMethodVersion:snapshot.method?.implementation_version??'financial-result-v36',selectedProductIds:snapshot.products,financialComponents:snapshot.components,
       operations:snapshot.operations,operationLinks:snapshot.operationLinks,costVersions:snapshot.costs,expenses:snapshot.expenses,
       taxSetting:currentTax?{regimeCode:currentTax.regime_code,usnRateFraction:currentTax.usn_rate_fraction,vatMode:currentTax.vat_mode,state:currentTax.state}:null,
       taxReference,reportCoverageComplete:coverageComplete,allowEmptyResult:rows.length===0});
