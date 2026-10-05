@@ -83,7 +83,7 @@ export async function verifyPublishedDrilldownHttp({reader,viewer,storeId,inputs
       const backUrl=links(sourceHtml,base,'/sku/card')[0];assert.ok(backUrl);
       const backHtml=await read(backUrl);
       const overviewBack=links(backHtml,base,'/overview').find(url=>url.searchParams.get('publicationId')===input.publicationId);
-      assert.ok(overviewBack);assert.ok((await read(overviewBack)).includes('Сохранённая публикация'));
+      assert.ok(overviewBack);const returnedOverview=await read(overviewBack);assert.ok(!returnedOverview.includes('Сохранённая публикация'));assert.ok(links(returnedOverview,base,'/sku').some(url=>url.searchParams.get('publicationId')===input.publicationId));
       for(const url of [listUrl,cardUrl,sourceUrl,backUrl,overviewBack]){
         for(const key of ['storeId','publicationId','publicationSource','periodStart','periodEnd'])assert.equal(url.searchParams.get(key),input[key],`${key} remains pinned`);
       }
