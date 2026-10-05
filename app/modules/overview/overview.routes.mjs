@@ -130,14 +130,6 @@ export function createOverviewRoutes({
       selectedPeriodStart: period?.start ?? null,
       selectedPeriodEnd: period?.end ?? null
     };
-    if (store.demo === true) {
-      send(res, 200, overviewPage(current, stores, null, pageOptions));
-      return true;
-    }
-    if (!store.connected) {
-      send(res, 200, overviewPage(current, stores, null, pageOptions));
-      return true;
-    }
     if (url.searchParams.has('publicationId') || url.searchParams.has('publicationSource')) {
       const fields = ['storeId','publicationId','publicationSource','periodStart','periodEnd'];
       if (!readPublishedSkuList || fields.some(key => !url.searchParams.get(key) || url.searchParams.getAll(key).length !== 1) || !period) {
@@ -155,6 +147,10 @@ export function createOverviewRoutes({
         if(!['drilldown_invalid_request','drilldown_not_found','drilldown_cursor_context_mismatch'].includes(error.message))throw error;
         send(res,error.message==='drilldown_not_found'?404:400,error.message==='drilldown_not_found'?'Расшифровка не найдена.':'Некорректные параметры расшифровки.',{'cache-control':'no-store'});
       }
+      return true;
+    }
+    if (store.demo === true || !store.connected) {
+      send(res, 200, overviewPage(current, stores, null, pageOptions));
       return true;
     }
     const state = await getOverviewState(current.user_id, {

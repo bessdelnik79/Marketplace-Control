@@ -57,6 +57,54 @@ test('invalid or foreign frozen overview never silently substitutes current publ
   assert.equal(s.response.status,400);
 });
 
+test('disconnected owned store still renders the exact saved publication and situations',async()=>{
+  const snapshot={context:{publication:{id:'old',source:'daily'},period:{start:'2026-07-13',end:'2026-07-19'},
+    quality:'complete',resultBasis:'before_tax',totals:{availableResultBeforeTax:'-12.0000'},coverage:{covered:null},
+    scope:{productIds:['p']},method:{version:'financial-result-v36'}},
+    items:[{id:'product_loss:p'}],total:1,status:'partial',
+    reconciliation:{checks:[{code:'overview_revenue',expected:'10.0000'}]}};
+  let reads=0;
+  const state=setup({listStores:async()=>[{...stores[0],connected:false}],
+    readPublishedSkuList:async()=>assert.fail('SKU fallback must not be loaded'),
+    readPublishedSituations:async(user,input)=>{
+      reads++;assert.equal(user,current.user_id);
+      assert.deepEqual(input,{storeId:'store-1',publicationId:'old',publicationSource:'daily',periodStart:'2026-07-13',periodEnd:'2026-07-19'});
+      return snapshot;
+    },getOverviewState:async()=>assert.fail('current state must not be loaded')});
+  await state.run('/overview?storeId=store-1&publicationId=old&publicationSource=daily&periodStart=2026-07-13&periodEnd=2026-07-19');
+  assert.equal(reads,1);assert.equal(state.response.status,200);
+  assert.equal(state.response.body.state.financial.publicationId,'old');
+  assert.equal(state.response.body.state.financial.displayResult.amount,'-12.0000');
+  assert.equal(state.response.body.state.financial.totals.revenue,'10.0000');
+  assert.deepEqual(state.response.body.state.situations.items,snapshot.items);
+  assert.equal(state.response.headers['cache-control'],'no-store');
+});
+
+test('disconnected and demo stores reject invalid or foreign frozen context without a placeholder',async()=>{
+  const route='/overview?storeId=store-1&publicationId=old&publicationSource=daily&periodStart=2026-07-13&periodEnd=2026-07-19';
+  for(const store of [{...stores[0],connected:false},{...stores[0],demo:true}]){
+    for(const code of ['drilldown_not_found','drilldown_invalid_request']){
+      const state=setup({listStores:async()=>[store],readPublishedSkuList:async()=>{throw new Error(code);},
+        getOverviewState:async()=>assert.fail('current fallback must not be loaded'),
+        overviewPage:()=>assert.fail('placeholder must not be rendered')});
+      await state.run(route);
+      assert.equal(state.response.status,code==='drilldown_not_found'?404:400);
+    }
+    const malformed=setup({listStores:async()=>[store],readPublishedSkuList:async()=>assert.fail('malformed context must not be read'),
+      getOverviewState:async()=>assert.fail('current fallback must not be loaded'),
+      overviewPage:()=>assert.fail('placeholder must not be rendered')});
+    await malformed.run('/overview?storeId=store-1&publicationId=old&periodStart=2026-07-13&periodEnd=2026-07-19');
+    assert.equal(malformed.response.status,400);
+  }
+});
+
+test('disconnected store without explicit publication keeps the connection placeholder',async()=>{
+  const state=setup({listStores:async()=>[{...stores[0],connected:false}],
+    getOverviewState:async()=>assert.fail('current state must not be loaded')});
+  await state.run('/overview?storeId=store-1');
+  assert.equal(state.response.status,200);assert.equal(state.response.body.state,null);
+});
+
 function setup(overrides = {}) {
   const calls = [];
   const response = {};
