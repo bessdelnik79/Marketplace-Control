@@ -3,6 +3,7 @@ import http from 'node:http';
 import { createDrilldownRoutes } from '../../app/modules/calculation/drilldown.routes.mjs';
 import { createOverviewRoutes } from '../../app/modules/overview/overview.routes.mjs';
 import { skuListPage, skuCardPage, skuSourcesPage } from '../../app/frontend/sku.page.mjs';
+import { situationsListPage, situationDetailPage } from '../../app/frontend/situations.page.mjs';
 import { overviewPage } from '../../app/frontend/pages.mjs';
 import { createSessionToken, hashToken } from '../../app/modules/auth/auth.mjs';
 import { saveSession, findSession, deleteSession } from '../../app/modules/auth/auth.repository.mjs';
@@ -17,8 +18,9 @@ export async function verifyPublishedDrilldownHttp({reader,viewer,storeId,inputs
   const redirect=(res,location)=>{res.writeHead(303,{location,'cache-control':'no-store'});res.end();};
   const listStores=async()=>[{id:storeId,name:'Магазин проверки',connected:true}];
   const never=async()=>{throw new Error('p05_http_must_not_read_current_or_call_external_services');};
-  const drilldown=createDrilldownRoutes({listStores,getFinancialOverview:never,...reader,skuListPage,skuCardPage,skuSourcesPage,send,redirect});
+  const drilldown=createDrilldownRoutes({listStores,getFinancialOverview:never,...reader,skuListPage,skuCardPage,skuSourcesPage,situationsListPage,situationDetailPage,send,redirect});
   const overview=createOverviewRoutes({listStores,getOverviewState:never,readPublishedSkuList:reader.readPublishedSkuList,
+    readPublishedSituations:reader.readPublishedSituations,
     getOperationalOverview:async()=>null,overviewPage,send,redirect});
   const server=http.createServer(async(req,res)=>{
     try{
@@ -39,6 +41,29 @@ export async function verifyPublishedDrilldownHttp({reader,viewer,storeId,inputs
       const snapshot=await reader.readPublishedSkuList(viewer,input);
       const overviewUrl=`${base}/overview?${new URLSearchParams(input)}`;
       const overviewHtml=await read(overviewUrl);
+      const situations=await reader.readPublishedSituations(viewer,input);
+      assert.deepEqual(links(overviewHtml,base,'/situation').map(url=>url.searchParams.get('situationId')),situations.items.slice(0,3).map(item=>item.id),'overview keeps its first-three limit');
+      const situationsUrl=links(overviewHtml,base,'/situations').find(url=>url.searchParams.get('publicationId')===input.publicationId);
+      assert.ok(situationsUrl,'overview opens the complete situation list');
+      const situationsHtml=await read(situationsUrl);
+      const detailUrls=links(situationsHtml,base,'/situation');
+      assert.deepEqual(detailUrls.map(url=>url.searchParams.get('situationId')),situations.items.map(item=>item.id));
+      for(const situation of situations.items){
+        const detailUrl=detailUrls.find(url=>url.searchParams.get('situationId')===situation.id);
+        const detailHtml=await read(detailUrl);
+        const sourceUrls=links(detailHtml,base,'/sku/sources');
+        assert.equal(sourceUrls.length,situation.groups.length);
+        for(const sourceUrl of sourceUrls){
+          assert.equal(sourceUrl.searchParams.get('situationId'),situation.id);
+          const sourceHtml=await read(sourceUrl);
+          const back=links(sourceHtml,base,'/situation').find(url=>url.searchParams.get('situationId')===situation.id);
+          assert.ok(back,'source page returns to its actual situation');
+          for(const url of [situationsUrl,detailUrl,sourceUrl,back])for(const key of ['storeId','publicationId','publicationSource','periodStart','periodEnd'])assert.equal(url.searchParams.get(key),input[key]);
+          const foreignGroup=new URL(sourceUrl);foreignGroup.searchParams.set('groupKey','foreign');
+          assert.equal((await fetch(foreignGroup,{headers})).status,404);
+        }
+      }
+      assert.equal((await fetch(`${base}/situation?${new URLSearchParams({...input,situationId:'return_growth'})}`,{headers})).status,404);
       const listUrl=links(overviewHtml,base,'/sku').find(url=>url.searchParams.get('publicationId')===input.publicationId);
       assert.ok(listUrl,'overview links to the same immutable publication');
       const listHtml=await read(listUrl);

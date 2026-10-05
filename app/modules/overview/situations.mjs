@@ -8,7 +8,8 @@ function unavailable(reason){
   return{status:'unavailable',missingReasons:[reason],evaluatedRules:[],disabledRules:['return_growth'],items:[],total:null};
 }
 
-export function buildSituations(financial){
+export function buildSituations(financial,{limit=3}={}){
+  if(limit!==null&&(!Number.isInteger(limit)||limit<1))throw new Error('situations_invalid_limit');
   if(!financial||financial.status!=='available'||financial.quality==='unavailable'||!financial.situationEvidence){
     return unavailable('financial_situation_inputs_unavailable');
   }
@@ -43,6 +44,6 @@ export function buildSituations(financial){
   const missingReasons=['return_growth_rule_disabled',...(evidence.productLossEligible?[]:['product_loss_inputs_incomplete'])];
   return{
     status:missingReasons.length?'partial':'available',missingReasons,
-    evaluatedRules:['product_loss','penalty'],disabledRules:['return_growth'],items:items.slice(0,3),total:items.length
+    evaluatedRules:['product_loss','penalty'],disabledRules:['return_growth'],items:limit===null?items:items.slice(0,limit),total:items.length
   };
 }

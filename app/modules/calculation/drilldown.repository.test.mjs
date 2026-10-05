@@ -48,3 +48,11 @@ test('a catalog product cannot be read outside frozen publication scope',async()
   const state=fixture();
   await assert.rejects(()=>state.repository.readPublishedSkuCard(user,{...input,productId:user}),/drilldown_not_found/);
 });
+
+test('unsupported publication has unknown situation count and no invented detail',async()=>{
+  const state=fixture();const result=await state.repository.readPublishedSituations(user,input);
+  assert.equal(result.status,'unavailable');assert.equal(result.total,null);assert.deepEqual(result.items,[]);
+  assert.ok(result.context.missingReasons.includes('drilldown_source_unsupported'));
+  await assert.rejects(()=>state.repository.readPublishedSituation(user,{...input,situationId:'penalty'}),/drilldown_not_found/);
+  await assert.rejects(()=>state.repository.readPublishedSituation(user,{...input,situationId:'return_growth'}),/drilldown_not_found/);
+});

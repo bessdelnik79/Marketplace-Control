@@ -1,6 +1,6 @@
 import { validateCalendarPeriod } from '../overview/financial-overview.mjs';
 
-const paths = new Set(['/sku', '/sku/card', '/sku/sources']);
+const paths = new Set(['/sku', '/sku/card', '/sku/sources', '/situations', '/situation']);
 const contextKeys = ['storeId', 'publicationSource', 'publicationId', 'periodStart', 'periodEnd'];
 const messages = {
   drilldown_invalid_request: 'Некорректные параметры расшифровки.',
@@ -20,7 +20,8 @@ function period(params) {
 }
 
 export function createDrilldownRoutes({listStores, getFinancialOverview, readPublishedSkuList, readPublishedSkuCard,
-  readPublishedContributions, skuListPage, skuCardPage, skuSourcesPage, send, redirect}) {
+  readPublishedContributions, readPublishedSituations, readPublishedSituation,
+  skuListPage, skuCardPage, skuSourcesPage, situationsListPage, situationDetailPage, send, redirect}) {
   return async function handleDrilldown(req, res, url, current) {
     if (req.method !== 'GET' || !paths.has(url.pathname)) return false;
     res.setHeader?.('cache-control', 'no-store');
@@ -41,23 +42,29 @@ export function createDrilldownRoutes({listStores, getFinancialOverview, readPub
       if (listState.search.length > 256 || !['result_asc','result_desc','revenue_asc','revenue_desc'].includes(listState.sort)) invalid();
       const options = {listState, selectedStoreId:store?.id ?? null, period:requested};
       if (!explicit) {
-        if (url.pathname !== '/sku') invalid();
+        if (!['/sku','/situations'].includes(url.pathname)) invalid();
         if (params.has('cursor')) invalid();
         const financial = store && !store.demo ? await getFinancialOverview(current.user_id, store.id, requested?.start ?? null, requested?.end ?? null) : null;
         if (!financial?.publicationId || !financial?.period?.start || !financial?.period?.end) {
-          send(res, 200, skuListPage(current, selectedStores, null, options), {'cache-control':'no-store'});
+          const renderer=url.pathname==='/situations'?situationsListPage:skuListPage;
+          send(res, 200, renderer(current, selectedStores, null, options), {'cache-control':'no-store'});
           return true;
         }
         const canonical = new URLSearchParams({storeId:store.id, publicationSource:financial.publicationSource,
           publicationId:financial.publicationId, periodStart:financial.period.start, periodEnd:financial.period.end,
           search:listState.search, sort:listState.sort, limit:String(pageLimit)});
-        redirect(res, `/sku?${canonical}`);
+        redirect(res, `${url.pathname}?${canonical}`);
         return true;
       }
       if (!store || contextKeys.some(key => !params.get(key))) invalid();
       const input = Object.fromEntries(contextKeys.map(key => [key, params.get(key)]));
       let data, renderer;
-      if (url.pathname === '/sku') {
+      if (url.pathname === '/situations') {
+        if(params.has('cursor'))invalid();
+        data=await readPublishedSituations(current.user_id,input);renderer=situationsListPage;
+      } else if (url.pathname === '/situation') {
+        data=await readPublishedSituation(current.user_id,{...input,situationId:params.get('situationId')});renderer=situationDetailPage;
+      } else if (url.pathname === '/sku') {
         data = await readPublishedSkuList(current.user_id, {...input, ...listState});
         renderer = skuListPage;
       } else if (url.pathname === '/sku/card') {
@@ -71,7 +78,15 @@ export function createDrilldownRoutes({listStores, getFinancialOverview, readPub
         const contributionInput = {...input, groupKey:params.get('groupKey'), cursor:params.get('cursor'),
           limit:pageLimit, taxBasis:params.get('taxBasis') === '1',
           ...(scope === 'store' ? {scope} : {productId:params.get('productId')})};
+        let situation=null;
+        if(params.has('situationId')){
+          const detail=await readPublishedSituation(current.user_id,{...input,situationId:params.get('situationId')});
+          if(!detail.item.groups.some(group=>group.groupKey===contributionInput.groupKey&&
+            (scope==='store'?group.scope==='store':group.productId===contributionInput.productId)))throw new Error('drilldown_not_found');
+          situation={id:detail.item.id,kind:detail.item.kind};
+        }
         data = await readPublishedContributions(current.user_id, contributionInput);
+        data.situation=situation;
         if (scope !== 'store') data.product = (await readPublishedSkuCard(current.user_id, {...input, productId:params.get('productId')})).item;
         options.taxBasis = contributionInput.taxBasis;
         renderer = skuSourcesPage;

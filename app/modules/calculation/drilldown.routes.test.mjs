@@ -10,9 +10,12 @@ function setup(overrides={}){
   const handler=createDrilldownRoutes({listStores:async()=>[{id:'store',connected:true},{id:'other'}],
     getFinancialOverview:async()=>{calls.push({name:'overview'});return{publicationId:'new',publicationSource:'daily',period:{start:base.periodStart,end:base.periodEnd}};},
     readPublishedSkuList:record('list'),readPublishedSkuCard:record('card'),readPublishedContributions:record('sources'),
+    readPublishedSituations:record('situations'),readPublishedSituation:record('situation'),
     skuListPage:(_user,stores,data,options)=>({page:'list',stores,data,options}),
     skuCardPage:(_user,stores,data,options)=>({page:'card',stores,data,options}),
     skuSourcesPage:(_user,stores,data,options)=>({page:'sources',stores,data,options}),
+    situationsListPage:(_user,stores,data,options)=>({page:'situations',stores,data,options}),
+    situationDetailPage:(_user,stores,data,options)=>({page:'situation',stores,data,options}),
     send:(res,status,body,headers)=>Object.assign(res,{status,body,headers}),
     redirect:(res,location)=>Object.assign(res,{status:303,location}),...overrides});
   return {calls,response,run:(path='/sku',user=current,method='GET')=>handler({method},response,new URL(path,'http://localhost'),user)};
@@ -64,4 +67,21 @@ test('reader not-found and cursor errors map to uniform private HTTP responses',
 test('no publication renders unavailable instead of a demo or zero result',async()=>{
   const s=setup({getFinancialOverview:async()=>({publicationId:null})});await s.run('/sku?storeId=store');
   assert.equal(s.response.status,200);assert.equal(s.response.body.data,null);
+});
+
+test('situations initial entry resolves publication once and explicit list/detail use pinned readers',async()=>{
+  const initial=setup();await initial.run('/situations?storeId=store');assert.equal(initial.response.status,303);
+  assert.match(initial.response.location,/^\/situations\?/);
+  const list=setup();await list.run(route('/situations'));assert.equal(list.response.body.page,'situations');
+  assert.deepEqual(list.calls.map(call=>call.name),['situations']);assert.equal(list.calls[0].input.publicationId,'old');
+  const detail=setup();await detail.run(route('/situation',{situationId:'penalty'}));
+  assert.equal(detail.calls[0].input.situationId,'penalty');assert.equal(detail.response.body.page,'situation');
+});
+
+test('sources linked from situation must belong to the actual fired rule groups',async()=>{
+  const fired=async()=>({item:{id:'penalty',kind:'penalty',groups:[{scope:'store',groupKey:'penalty-group'}]}});
+  const good=setup({readPublishedSituation:fired});await good.run(route('/sku/sources',{scope:'store',groupKey:'penalty-group',situationId:'penalty'}));
+  assert.equal(good.response.status,200);assert.equal(good.response.body.data.situation.id,'penalty');
+  const foreign=setup({readPublishedSituation:fired});await foreign.run(route('/sku/sources',{scope:'store',groupKey:'revenue-group',situationId:'penalty'}));
+  assert.equal(foreign.response.status,404);assert.ok(!foreign.calls.some(call=>call.name==='sources'));
 });

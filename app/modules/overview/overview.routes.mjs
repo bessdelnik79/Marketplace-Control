@@ -33,6 +33,7 @@ export function createOverviewRoutes({
   listStores,
   getOverviewState,
   readPublishedSkuList,
+  readPublishedSituations,
   getOperationalOverview = async () => null,
   operationalOverviewPanel = () => '',
   requestOperationalRangeRefresh = async () => null,
@@ -144,10 +145,10 @@ export function createOverviewRoutes({
       }
       try {
         const input = Object.fromEntries(fields.map(key => [key,url.searchParams.get(key)]));
-        const snapshot = await readPublishedSkuList(current.user_id,{...input,limit:1});
+        const snapshot = readPublishedSituations?await readPublishedSituations(current.user_id,input):await readPublishedSkuList(current.user_id,{...input,limit:1});
         const state = {store,financial:frozenFinancialOverview(snapshot),
           operational:await getOperationalOverview(current.user_id,store.id),
-          situations:{status:'unavailable',quality:'unavailable',items:[],count:0,
+          situations:readPublishedSituations?{...snapshot,items:snapshot.items.slice(0,3)}:{status:'unavailable',quality:'unavailable',items:[],total:null,
             missingReasons:['frozen_publication_situations_unavailable']}};
         send(res,200,overviewPage(current,stores,state,pageOptions),{'cache-control':'no-store'});
       } catch(error) {
@@ -164,6 +165,12 @@ export function createOverviewRoutes({
     if (!state) {
       send(res, 404, 'Магазин не найден.');
       return true;
+    }
+    if(readPublishedSituations&&state.financial?.status==='available'&&state.financial.publicationId&&state.financial.period?.start&&state.financial.period?.end){
+      const situations=await readPublishedSituations(current.user_id,{storeId:store.id,
+        publicationId:state.financial.publicationId,publicationSource:state.financial.publicationSource,
+        periodStart:state.financial.period.start,periodEnd:state.financial.period.end});
+      state.situations={...situations,items:situations.items.slice(0,3)};
     }
     send(res, 200, overviewPage(current, stores, state, pageOptions),{'cache-control':'no-store'});
     return true;

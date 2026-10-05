@@ -22,6 +22,11 @@ test('creates product losses and net penalty with exact stable priority and thre
   assert.equal(result.items[0].metric.absoluteValue,'30.0000');
   assert.deepEqual(result.evaluatedRules,['product_loss','penalty']);
   assert.deepEqual(result.disabledRules,['return_growth']);
+  const all=buildSituations(financial({situationEvidence:{productLossEligible:true,
+    productResultsBeforeTax:[{productId:'a',amount:'-10.0000'},{productId:'c',amount:'-30.0000'},{productId:'d',amount:'-20.0000'}],
+    penaltyAmount:'-5.2500'}}),{limit:null});
+  assert.deepEqual(all.items.map(item=>item.id),['product_loss:c','product_loss:d','product_loss:a','penalty']);
+  assert.deepEqual(all.items.slice(0,3),result.items);
 });
 
 test('penalty reversals use signed net and zero net creates no situation',()=>{
@@ -42,4 +47,13 @@ test('unavailable financial evidence never becomes a zero situation count',()=>{
   assert.equal(result.status,'unavailable');
   assert.equal(result.total,null);
   assert.deepEqual(result.items,[]);
+});
+
+test('full list preserves tie-breakers, frozen scope and disabled rules',()=>{
+  const result=buildSituations(financial({situationEvidence:{productLossEligible:true,
+    productResultsBeforeTax:[{productId:'d',amount:'-10.0000'},{productId:'a',amount:'-10.0000'},{productId:'foreign',amount:'-999.0000'}],
+    penaltyAmount:'10.0000'}}),{limit:null});
+  assert.deepEqual(result.items.map(item=>item.id),['product_loss:a','product_loss:d','penalty']);
+  assert.equal(result.total,3);assert.ok(!result.items.some(item=>item.kind==='return_growth'));
+  assert.throws(()=>buildSituations(financial(),{limit:0}),/situations_invalid_limit/);
 });

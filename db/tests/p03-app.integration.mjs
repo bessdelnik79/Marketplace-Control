@@ -785,6 +785,13 @@ test('P0.5 readers pin legacy and mixed-generation daily evidence under ordinary
   for(const [publicationSource,publicationId] of [['legacy',publications.legacy],['daily',publications.daily],['daily',publications.mixed]]){
     const input={storeId:ids.store,publicationSource,publicationId,periodStart:'2026-07-13',periodEnd:'2026-07-19'};
     const list=await reader.readPublishedSkuList(viewer,input);
+    const situations=await reader.readPublishedSituations(viewer,input);
+    assert.equal(situations.context.publication.id,publicationId);
+    assert.equal(situations.total,situations.items.length);
+    assert.ok(!situations.items.some(item=>item.kind==='return_growth'));
+    await assert.rejects(()=>reader.readPublishedSituations(randomUUID(),input),/drilldown_not_found/);
+    await assert.rejects(()=>reader.readPublishedSituations(viewer,{...input,storeId:randomUUID()}),/drilldown_not_found/);
+    await assert.rejects(()=>reader.readPublishedSituation(viewer,{...input,situationId:'penalty'}),/drilldown_not_found/);
     assert.equal(list.context.publication.id,publicationId);
     assert.equal(list.reconciliation.status,'matched',JSON.stringify(list.reconciliation));
     assert.ok(list.items.length);assert.ok(list.storeLines.length);
@@ -834,6 +841,8 @@ test('P0.5 readers pin legacy and mixed-generation daily evidence under ordinary
     assert.ok(foreign,'integration has a real second business');
     await assert.rejects(()=>reader.readPublishedSkuList(viewer,{...input,storeId:foreign.store_id}),/drilldown_not_found/);
     await assert.rejects(()=>reader.readPublishedSkuList(foreign.user_id,input),/drilldown_not_found/);
+    await assert.rejects(()=>reader.readPublishedSituations(viewer,{...input,storeId:foreign.store_id}),/drilldown_not_found/);
+    await assert.rejects(()=>reader.readPublishedSituations(foreign.user_id,input),/drilldown_not_found/);
     await assert.rejects(()=>reader.readPublishedSkuCard(viewer,{...input,productId:foreign.product_id}),/drilldown_not_found/);
     await assert.rejects(()=>reader.readPublishedSkuList(viewer,{...input,publicationSource:'legacy',publicationId:foreign.publication_id}),/drilldown_not_found/);
     await assert.rejects(()=>reader.readPublishedContributions(viewer,{...input,productId:item.productId,groupKey:item.groups[0].groupKey,
@@ -881,6 +890,7 @@ test('P0.5 readers pin legacy and mixed-generation daily evidence under ordinary
   await setPointer(publications.daily);
   try{
     const before=await reader.readPublishedSkuList(viewer,pinnedInput);
+    const situationsBefore=await reader.readPublishedSituations(viewer,pinnedInput);
     assert.equal(before.context.update.availablePublicationId,null);
     await setPointer(publications.mixed);
     const after=await reader.readPublishedSkuCard(viewer,{...pinnedInput,productId:before.items[0].productId});
@@ -888,6 +898,10 @@ test('P0.5 readers pin legacy and mixed-generation daily evidence under ordinary
     assert.equal(after.context.update.availablePublicationId,publications.mixed);
     assert.deepEqual(after.item.groups,before.items[0].groups);
     assert.deepEqual(after.context.totals,before.context.totals);
+    const situationsAfter=await reader.readPublishedSituations(viewer,pinnedInput);
+    assert.deepEqual(situationsAfter.items,situationsBefore.items);
+    assert.equal(situationsAfter.total,situationsBefore.total);
+    assert.equal(situationsAfter.context.publication.id,publications.daily);
     const {verifyPublishedDrilldownHttp}=await import('./p05-http.acceptance.mjs');
     const readCounts=()=>context(async client=>(await client.query(`select
       (select count(*)::int from mc.jobs where store_id=$1) jobs,
@@ -915,6 +929,81 @@ test('P0.5 readers pin legacy and mixed-generation daily evidence under ordinary
     assert.ok(incompatible.context.missingReasons.includes('drilldown_publication_incompatible'));
     assert.equal(incompatible.context.totals,null);
   }finally{await replaceMethod(carried.parser_method_version_id);}
+
+  // A separate store exercises actual rule firings through normalization and
+  // calculation, with ordinary-role reads and no manufactured quality flags.
+  const loss={user:randomUUID(),business:randomUUID(),store:randomUUID()};
+  const lossContext=async action=>{
+    const client=await pool.connect();
+    try{
+      await client.query('begin');
+      await client.query("select set_config('app.user_id',$1,true),set_config('app.business_id',$2,true)",[loss.user,loss.business]);
+      const result=await action(client);await client.query('commit');return result;
+    }catch(error){await client.query('rollback');throw error;}finally{client.release();}
+  };
+  const lossFixture=await lossContext(async client=>{
+    await client.query(`insert into mc.users(id,display_name,email_verified_at) values($1,'P05 situations owner',now())`,[loss.user]);
+    await client.query(`insert into mc.businesses(id,name) values($1,'P05 situations')`,[loss.business]);
+    await client.query(`insert into mc.memberships(business_id,user_id,role) values($1,$2,'owner')`,[loss.business,loss.user]);
+    await client.query(`insert into mc.stores(id,business_id,external_account_id,name,status) values($1,$2,'p05-situations','P05 situations','active')`,[loss.store,loss.business]);
+    const catalog=(await client.query(`insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness) values($1,$2,'wb_api','catalog','p05-situations-catalog','complete') returning id`,[loss.business,loss.store])).rows[0];
+    const products=[];
+    for(let i=0;i<3;i+=1){
+      const product=(await client.query(`insert into mc.products(business_id,store_id,wb_article,seller_article) values($1,$2,$3,$4) returning id`,[loss.business,loss.store,730001+i,`P05-LOSS-${i}`])).rows[0];
+      const variant=(await client.query(`insert into mc.variants(business_id,store_id,product_id,external_variant_id) values($1,$2,$3,'default') returning id`,[loss.business,loss.store,product.id])).rows[0];
+      await client.query(`insert into mc.variant_identifiers(business_id,store_id,variant_id,identifier_type,identifier_value) values($1,$2,$3,'barcode',$4)`,[loss.business,loss.store,variant.id,`473000000000${i}`]);
+      products.push({...product,variantId:variant.id});
+    }
+    await client.query(`select mc.confirm_product_selection($1,$2,$3::uuid[])`,[loss.store,catalog.id,products.map(product=>product.id)]);
+    for(const product of products){
+      const cost=(await client.query(`insert into mc.variant_costs(business_id,store_id,product_id,variant_id,effective_from) values($1,$2,$3,$4,'2026-09-01') returning id`,[loss.business,loss.store,product.id,product.variantId])).rows[0];
+      const version=(await client.query(`insert into mc.cost_versions(business_id,store_id,cost_id,version_no,unit_cost,origin,changed_by) values($1,$2,$3,1,200,'manual',$4) returning id`,[loss.business,loss.store,cost.id,loss.user])).rows[0];
+      await client.query(`update mc.variant_costs set current_version_id=$1 where id=$2`,[version.id,cost.id]);
+      product.costId=cost.id;
+    }
+    const setting=(await client.query(`insert into mc.tax_settings(business_id,effective_from) values($1,'2026-01-01') returning id`,[loss.business])).rows[0];
+    const tax=(await client.query(`insert into mc.tax_setting_versions(business_id,tax_setting_id,version_no,regime_code,usn_rate_fraction,vat_mode,changed_by) values($1,$2,1,'usn_income',0.06,'exempt',$3) returning id`,[loss.business,setting.id,loss.user])).rows[0];
+    await client.query(`update mc.tax_settings set current_version_id=$1 where id=$2`,[tax.id,setting.id]);
+    const stream=(await client.query(`insert into mc.sync_streams(business_id,store_id,source_type,status) values($1,$2,'financial_reports','active') returning id`,[loss.business,loss.store])).rows[0];
+    const run=(await client.query(`insert into mc.sync_runs(business_id,store_id,stream_id,requested_from,requested_to,status,started_at) values($1,$2,$3,'2026-09-07','2026-09-13','running',now()) returning id`,[loss.business,loss.store,stream.id])).rows[0];
+    return{products,streamId:stream.id,runId:run.id};
+  });
+  const lossRows=lossFixture.products.map((product,i)=>({externalRowKey:`sale-${i}`,rowChecksum:`p05-sale-${i}`,rawData:{reportId:9300,rrDate:'2026-09-08',docTypeName:'Продажа',sellerOperName:'Продажа',nmId:730001+i,sku:`473000000000${i}`,quantity:1,retailAmount:'100',forPay:'100'}}));
+  for(const [key,penalty] of [['charge','10'],['reversal','-4']])lossRows.push({externalRowKey:key,rowChecksum:`p05-${key}`,rawData:{reportId:9300,rrDate:'2026-09-09',docTypeName:'',sellerOperName:'Штраф',nmId:0,penalty}});
+  await completeFinancialSync(loss.user,{business_id:loss.business,store_id:loss.store,stream_id:lossFixture.streamId,run_id:lossFixture.runId,date_from:'2026-09-07',date_to:'2026-09-13'},
+    {documentId:randomUUID(),reports:[{externalReportId:'9300',periodStart:'2026-09-07',periodEnd:'2026-09-13',checksum:'p05-situations-report',rows:lossRows}]});
+  const lossRun=await runFinancialCalculation(loss.user,loss.store);
+  assert.equal(lossRun.quality,'complete',JSON.stringify(lossRun));
+  const lossPeriod=await getPublishedFinancialPeriod(loss.user,loss.store,'2026-09-07','2026-09-13');
+  const lossInput={storeId:loss.store,publicationSource:'legacy',publicationId:lossPeriod.publication_id,periodStart:'2026-09-07',periodEnd:'2026-09-13'};
+  const fired=await reader.readPublishedSituations(loss.user,lossInput);
+  assert.equal(fired.total,4);assert.equal(fired.items.length,4);
+  assert.deepEqual(fired.items.map(item=>item.kind),['product_loss','product_loss','product_loss','penalty']);
+  assert.deepEqual(fired.items.slice(0,3).map(item=>item.productId),lossFixture.products.map(product=>product.id).sort());
+  assert.ok(fired.items.slice(0,3).every(item=>item.metric.value==='-100.0000'));
+  const penalty=await reader.readPublishedSituation(loss.user,{...lossInput,situationId:'penalty'});
+  assert.equal(penalty.item.metric.value,'-6.0000');
+  assert.equal(penalty.item.groups.length,1);
+  const penaltySources=await reader.readPublishedContributions(loss.user,{...lossInput,scope:'store',groupKey:penalty.item.groups[0].groupKey});
+  assert.equal(penaltySources.evidenceStatus,'matched');assert.equal(penaltySources.items.length,2);
+  assert.deepEqual(penaltySources.items.map(item=>item.contributionAmount).sort(),['-10.0000','4.0000']);
+  await assert.rejects(()=>reader.readPublishedSituations(viewer,lossInput),/drilldown_not_found/);
+  await assert.rejects(()=>reader.readPublishedSituation(loss.user,{...lossInput,situationId:`product_loss:${randomUUID()}`}),/drilldown_not_found/);
+  const {verifyPublishedDrilldownHttp}=await import('./p05-http.acceptance.mjs');
+  await verifyPublishedDrilldownHttp({reader,viewer:loss.user,storeId:loss.store,inputs:[lossInput],availablePublicationId:lossInput.publicationId});
+  await lossContext(async client=>{
+    for(const product of lossFixture.products){
+      const version=(await client.query(`insert into mc.cost_versions(business_id,store_id,cost_id,version_no,unit_cost,origin,changed_by) values($1,$2,$3,2,40,'manual',$4) returning id`,[loss.business,loss.store,product.costId,loss.user])).rows[0];
+      await client.query(`update mc.variant_costs set current_version_id=$1 where id=$2`,[version.id,product.costId]);
+    }
+  });
+  const improved=await runFinancialCalculation(loss.user,loss.store);
+  assert.equal(improved.quality,'complete');
+  const improvedPeriod=await getPublishedFinancialPeriod(loss.user,loss.store,'2026-09-07','2026-09-13');
+  assert.notEqual(improvedPeriod.publication_id,lossInput.publicationId);
+  const currentSituations=await reader.readPublishedSituations(loss.user,{...lossInput,publicationId:improvedPeriod.publication_id});
+  assert.equal(currentSituations.total,1);assert.equal(currentSituations.items[0].id,'penalty');
+  assert.deepEqual((await reader.readPublishedSituations(loss.user,lossInput)).items,fired.items,'old firings remain pinned after the current publication changes');
 });
 
 test.after(async()=>{await pool.end();});

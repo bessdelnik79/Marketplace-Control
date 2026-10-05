@@ -8,6 +8,29 @@ const stores = [
   { id: 'store-2', name: 'Второй', connected: true }
 ];
 
+test('current overview binds all situations to its money publication and only displays first three',async()=>{
+  let input;
+  const items=Array.from({length:5},(_,i)=>({id:`loss-${i}`}));
+  const s=setup({getOverviewState:async()=>({financial:{status:'available',publicationId:'money-publication',publicationSource:'daily',period:{start:'2026-07-13',end:'2026-07-19'}}}),
+    readPublishedSituations:async(_user,value)=>{input=value;return{items,total:5,status:'partial'};}});
+  await s.run('/overview?storeId=store-1');
+  assert.deepEqual(input,{storeId:'store-1',publicationId:'money-publication',publicationSource:'daily',periodStart:'2026-07-13',periodEnd:'2026-07-19'});
+  assert.equal(s.response.body.state.situations.total,5);
+  assert.deepEqual(s.response.body.state.situations.items,items.slice(0,3));
+});
+
+test('frozen overview uses situations from exact publication without resolving current financial state',async()=>{
+  const items=Array.from({length:5},(_,i)=>({id:`loss-${i}`}));
+  const snapshot={context:{publication:{id:'old',source:'daily'},period:{start:'2026-07-13',end:'2026-07-19'},quality:'complete',totals:{},scope:{},method:{version:'financial-result-v36'},coverage:{covered:null}},
+    items,total:5,status:'partial',reconciliation:{checks:[]}};
+  const s=setup({readPublishedSkuList:async()=>assert.fail('SKU list must not be loaded'),
+    readPublishedSituations:async(_user,input)=>{assert.equal(input.publicationId,'old');return snapshot;},
+    getOverviewState:async()=>assert.fail('current state must not be loaded')});
+  await s.run('/overview?storeId=store-1&publicationId=old&publicationSource=daily&periodStart=2026-07-13&periodEnd=2026-07-19');
+  assert.equal(s.response.status,200);assert.equal(s.response.body.state.financial.publicationId,'old');
+  assert.deepEqual(s.response.body.state.situations.items,items.slice(0,3));assert.equal(s.response.body.state.situations.total,5);
+});
+
 test('frozen overview return reads explicit publication and excludes current comparisons and situations',async()=>{
   const snapshot={context:{publication:{id:'old',source:'daily'},period:{start:'2026-07-13',end:'2026-07-19'},
     quality:'partial',resultBasis:'before_tax',totals:{availableResultBeforeTax:'-1.0000',estimatedUsnTax:'0.0000'},coverage:{covered:null},
