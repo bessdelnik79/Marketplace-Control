@@ -73,11 +73,12 @@ export function aggregateDailyPublicationPeriod(periodStart,periodEnd,{days=[],l
   const reasonsByDay=groupBy(reasons,row=>row.accounting_date);
   const generation={
     periodStart,periodEnd,
+    missingReasons:days.some(row=>row.empty_evidence_revoked)?['financial_report_waiting']:[],
     days:days.map(row=>({
-      accountingDate:row.accounting_date,coverageComplete:row.coverage_complete===true,quality:row.quality,
-      taxUsable:row.tax_usable===true,storeLevelResultBeforeTax:row.store_profit_before_tax,
+      accountingDate:row.accounting_date,coverageComplete:row.coverage_complete===true&&!row.empty_evidence_revoked,quality:row.empty_evidence_revoked?'unavailable':row.quality,
+      taxUsable:row.tax_usable===true&&!row.empty_evidence_revoked,storeLevelResultBeforeTax:row.store_profit_before_tax,
       selectedProductsResultBeforeTax:row.selected_profit_before_tax,availableResultBeforeTax:row.available_profit_before_tax,
-      missingReasons:(reasonsByDay.get(row.accounting_date)??[]).map(reason=>reason.reason_code)
+      missingReasons:[...(reasonsByDay.get(row.accounting_date)??[]).map(reason=>reason.reason_code),...(row.empty_evidence_revoked?['financial_report_waiting']:[])]
     })),
     lines:lines.map(row=>({accountingDate:row.accounting_date,scopeCode:row.scope==='store'?'store':'selected_product',
       productId:row.product_id,variantId:row.variant_id,categoryCode:row.category_code,amountSigned:row.amount_signed})),
@@ -701,6 +702,11 @@ async function latestDailyPeriod(client,publicationId){
 async function getDailyPeriodEnvelope(client,publication,periodStart,periodEnd){
   const mapped=(await client.query(
     `select mapped_day.accounting_date::text,mapped_day.generation_id,day.coverage_complete,day.quality,day.tax_usable,
+            exists(select 1 from mc.financial_daily_generation_inputs input
+              join mc.financial_week_coverage coverage on coverage.id=input.financial_week_coverage_id
+              where input.generation_id=mapped_day.generation_id and input.source_kind='empty_week'
+                and mapped_day.accounting_date between coverage.week_start and coverage.week_end
+                and not mc.financial_empty_week_evidence_valid(coverage.id,input.empty_confirmation_job_id)) as empty_evidence_revoked,
             day.store_profit_before_tax::text,day.selected_profit_before_tax::text,day.available_profit_before_tax::text
        from mc.financial_daily_publication_days mapped_day
        join mc.financial_daily_days day on day.generation_id=mapped_day.generation_id and day.accounting_date=mapped_day.accounting_date

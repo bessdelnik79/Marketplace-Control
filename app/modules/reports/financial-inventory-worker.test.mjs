@@ -85,3 +85,25 @@ test('persisted unsupported-country capability skips list API and queues period 
   assert.deepEqual(calls[0].slice(0,3),[job.id,2,job.lease_token]);
   assert.equal(completed[0].outcome,'completed');
 });
+
+test('successful list without the expected report schedules an hourly durable retry',async()=>{
+  const previousKey=process.env.WB_TOKEN_ENCRYPTION_KEY,key=Buffer.alloc(32,9);
+  process.env.WB_TOKEN_ENCRYPTION_KEY=key.toString('base64');
+  const encrypted=encryptSecret(encoded,key),failures=[];
+  const jobs={claimJobs:async()=>[job],heartbeatJob:async()=>true,
+    completeJob:async()=>assert.fail('missing report must remain queued'),failJob:async value=>failures.push(value)};
+  const inventory={getContext:async()=>({seller_id:'seller-1',ciphertext:encrypted.ciphertext,nonce:encrypted.nonce,auth_tag:encrypted.authTag}),
+    reserveRequestSlot:async()=>({waitMs:0}),apply:async()=>({uncovered_weeks:1,superseded:false}),
+    applyPeriodFallback:async()=>assert.fail('fallback is not expected')};
+  try{
+    const worker=createFinancialInventoryWorker({jobs,inventory,fetchImpl:async()=>new Response('[]')});
+    await worker.runOnce();
+    assert.equal(failures.length,1);
+    assert.equal(failures[0].errorCode,'financial_inventory_not_confirmed');
+    assert.equal(failures[0].retryDelaySeconds,3600);
+    assert.equal(failures[0].retryable,true);
+  }finally{
+    if(previousKey===undefined)delete process.env.WB_TOKEN_ENCRYPTION_KEY;
+    else process.env.WB_TOKEN_ENCRYPTION_KEY=previousKey;
+  }
+});

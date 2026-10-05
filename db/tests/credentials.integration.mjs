@@ -39,6 +39,36 @@ await inContext(async client=>{
   await client.query(`insert into mc.stores(id,business_id,external_account_id,name,status) values($1,$2,'credential-new','New token store','paused')`,[ids.store,ids.business]);
 });
 
+async function acceptInventory(reportId){
+  await inContext(async client=>{
+    const inventoryRow=(await client.query(`select id,inventory_checksum,period_start,period_end,external_report_id
+      from mc.financial_week_inventory where store_id=$1 and external_report_id=$2`,[ids.store,reportId])).rows[0];
+    const document=(await client.query(`insert into mc.source_documents(
+      business_id,store_id,origin,document_type,external_document_id,checksum,completeness
+    ) values($1,$2,'wb_api','weekly_realization',$3,$4,'complete') returning id`,
+    [ids.business,ids.store,inventoryRow.external_report_id,inventoryRow.inventory_checksum])).rows[0];
+    const report=(await client.query(`insert into mc.reports(
+      business_id,store_id,external_report_id,period_start,period_end
+    ) values($1,$2,$3,$4,$5) returning id`,
+    [ids.business,ids.store,inventoryRow.external_report_id,inventoryRow.period_start,inventoryRow.period_end])).rows[0];
+    const version=(await client.query(`insert into mc.report_versions(
+      business_id,store_id,report_id,document_id,version_no,checksum,parser_version
+    ) values($1,$2,$3,$4,1,$5,'wb-finance-v11') returning id`,
+    [ids.business,ids.store,report.id,document.id,inventoryRow.inventory_checksum])).rows[0];
+    await client.query(`update mc.report_versions set status='validated' where id=$1`,[version.id]);
+    await client.query(`update mc.report_versions set status='accepted',accepted_at=now() where id=$1`,[version.id]);
+    await client.query(`update mc.reports set current_version_id=$1 where id=$2`,[version.id,report.id]);
+    const method=(await client.query(`select id from mc.method_versions where code='wb_finance_import' and version_no=11`)).rows[0];
+    const normalization=(await client.query(`insert into mc.report_normalizations(
+      business_id,store_id,report_version_id,method_version_id,normalization_key,status
+    ) values($1,$2,$3,$4,$5,'succeeded') returning id`,
+    [ids.business,ids.store,version.id,method.id,`credential-integration:${version.id}`])).rows[0];
+    await client.query(`update mc.financial_week_inventory set fetch_status='accepted',report_version_id=$2,
+      accepted_normalization_id=$3,accepted_inventory_checksum=inventory_checksum,accepted_at=now() where id=$1`,
+    [inventoryRow.id,version.id,normalization.id]);
+  });
+}
+
 const save=(storeId,sellerId,token,scopes=['finance'])=>saveWbConnection(ids.user,{
   storeId,sellerId,scopes,encrypted:encryptSecret(token,encryptionKey),fingerprint:fingerprintSecret(token,fingerprintKey),now:at
 });
@@ -129,46 +159,20 @@ test('inventory context and writes require the current lease and latest credenti
     current.id,3,current.lease_token,'credential-integration-worker',JSON.stringify(inventory)
   ])).rows[0];
   assert.equal(applied.superseded,false);
-  assert.equal(Number(applied.uncovered_weeks),0);
+  assert.equal(Number(applied.uncovered_weeks),51);
   const coverageDistribution=await inContext(async client=>(await client.query(
-    `select count(*)::int total,count(*) filter(where coverage_status='empty')::int empty,
+    `select count(*)::int total,count(*) filter(where coverage_status='retry')::int retry,
       count(*) filter(where coverage_status='fetching')::int fetching
       from mc.financial_week_coverage where store_id=$1 and credential_generation=3`,[ids.store]
   )).rows[0]);
-  assert.deepEqual(coverageDistribution,{total:52,empty:51,fetching:1});
+  assert.deepEqual(coverageDistribution,{total:52,retry:51,fetching:1});
   assert.equal(await inContext(async client=>Number((await client.query(
     `select count(*) from mc.jobs where store_id=$1 and job_type='financial_report_fetch'`,[ids.store]
   )).rows[0].count)),1);
   await completeJob({jobId:current.id,leaseToken:current.lease_token,workerId:'credential-integration-worker',outcome:'completed'});
   for(const old of claimed.filter(item=>item.id!==current.id))await completeJob({jobId:old.id,leaseToken:old.lease_token,workerId:'credential-integration-worker',outcome:'superseded'});
   const [fetchJob]=await claimJobs({workerId:'credential-fetch-worker',jobTypes:['financial_report_fetch'],leaseSeconds:300,limit:1});
-  await inContext(async client=>{
-    const inventoryRow=(await client.query(`select id,inventory_checksum,period_start,period_end,external_report_id
-      from mc.financial_week_inventory where store_id=$1`,[ids.store])).rows[0];
-    const document=(await client.query(`insert into mc.source_documents(
-      business_id,store_id,origin,document_type,external_document_id,checksum,completeness
-    ) values($1,$2,'wb_api','weekly_realization',$3,$4,'complete') returning id`,
-    [ids.business,ids.store,inventoryRow.external_report_id,inventoryRow.inventory_checksum])).rows[0];
-    const report=(await client.query(`insert into mc.reports(
-      business_id,store_id,external_report_id,period_start,period_end
-    ) values($1,$2,$3,$4,$5) returning id`,
-    [ids.business,ids.store,inventoryRow.external_report_id,inventoryRow.period_start,inventoryRow.period_end])).rows[0];
-    const version=(await client.query(`insert into mc.report_versions(
-      business_id,store_id,report_id,document_id,version_no,checksum,parser_version
-    ) values($1,$2,$3,$4,1,$5,'wb-finance-v11') returning id`,
-    [ids.business,ids.store,report.id,document.id,inventoryRow.inventory_checksum])).rows[0];
-    await client.query(`update mc.report_versions set status='validated' where id=$1`,[version.id]);
-    await client.query(`update mc.report_versions set status='accepted',accepted_at=now() where id=$1`,[version.id]);
-    await client.query(`update mc.reports set current_version_id=$1 where id=$2`,[version.id,report.id]);
-    const method=(await client.query(`select id from mc.method_versions where code='wb_finance_import' and version_no=11`)).rows[0];
-    const normalization=(await client.query(`insert into mc.report_normalizations(
-      business_id,store_id,report_version_id,method_version_id,normalization_key,status
-    ) values($1,$2,$3,$4,$5,'succeeded') returning id`,
-    [ids.business,ids.store,version.id,method.id,`credential-integration:${version.id}`])).rows[0];
-    await client.query(`update mc.financial_week_inventory set fetch_status='accepted',report_version_id=$2,
-      accepted_normalization_id=$3,accepted_inventory_checksum=inventory_checksum,accepted_at=now() where id=$1`,
-    [inventoryRow.id,version.id,normalization.id]);
-  });
+  await acceptInventory('90071992547409931');
   await completeJob({jobId:fetchJob.id,leaseToken:fetchJob.lease_token,workerId:'credential-fetch-worker',outcome:'completed'});
   await enqueueJob(ids.user,{storeId:ids.store,jobType:'financial_inventory_refresh',deduplicationKey:`integration-refresh:${ids.store}`,
     payload:{schemaVersion:1,credentialGeneration:3,window:{dateFrom:'2026-09-21',dateTo:'2026-09-27'}},priority:500,maxAttempts:3});
@@ -217,18 +221,21 @@ test('credential update and annual enqueue roll back together',async()=>{
 });
 
 test('manual refresh is durable and mixed pipeline state remains running',async()=>{
+  const gaps=await inContext(async client=>(await client.query(`select min(week_start)::text date_from,
+    max(week_end)::text date_to,count(*)::int count from mc.financial_week_coverage
+    where store_id=$1 and credential_generation=3 and coverage_status in ('partial','retry','unavailable')`,[ids.store])).rows[0]);
   const first=await requestFinancialInventoryRefresh(ids.user,ids.store,{now:new Date('2025-10-06T09:00:00Z')});
   const duplicate=await requestFinancialInventoryRefresh(ids.user,ids.store,{now:new Date('2025-10-06T09:01:00Z')});
   assert.equal(duplicate.id,first.id);
-  assert.equal(first.payload.reason,'manual_refresh');
-  assert.deepEqual(first.payload.window,{dateFrom:'2025-09-01',dateTo:'2025-10-05'});
+  assert.equal(first.payload.reason,'manual_recovery');
+  assert.deepEqual(first.payload.window,{dateFrom:gaps.date_from,dateTo:gaps.date_to});
   const status=await getFinancialSyncState(ids.user,ids.store);
   assert.equal(status.run_status,'running');
   assert.equal(status.stream_status,'active');
   assert.equal(await inContext(async client=>Number((await client.query(
     `select count(*) from mc.financial_week_coverage where store_id=$1 and credential_generation=3
-      and 'manual_refresh'=any(check_reasons)`,[ids.store]
-  )).rows[0].count)),5);
+      and 'manual_recovery'=any(check_reasons)`,[ids.store]
+  )).rows[0].count)),gaps.count);
   for(const jobType of ['financial_report_fetch','financial_inventory_refresh']){
     for(const job of await claimJobs({workerId:`credential-status-${jobType}`,jobTypes:[jobType],leaseSeconds:300,limit:100})){
       await completeJob({jobId:job.id,leaseToken:job.lease_token,workerId:`credential-status-${jobType}`,outcome:'completed'});
@@ -278,7 +285,7 @@ test('manual refresh recovers every terminal week in the current credential gene
     where store_id=$1 and credential_generation=3 and week_start=any($2::date[])`,[ids.store,terminalWeeks.map(week=>week.week_start)]));
 });
 
-test('exhausted inventory job makes its uncovered weeks terminal and visible as incomplete',async()=>{
+test('real inventory failures still make exhausted coverage terminal and visibly incomplete',async()=>{
   await inContext(client=>client.query(`insert into mc.financial_week_coverage(
       business_id,store_id,credential_generation,week_start,week_end,check_reasons,coverage_status,
       freshness_due_at,next_retry_at,last_error_code
@@ -291,16 +298,16 @@ test('exhausted inventory job makes its uncovered weeks terminal and visible as 
   });
   const claimed=(await claimJobs({workerId:'terminal-inventory-worker',jobTypes:['financial_inventory_refresh'],leaseSeconds:300,limit:100})).find(job=>job.id===queued.id);
   assert.ok(claimed);
-  const failed=await failJob({jobId:claimed.id,leaseToken:claimed.lease_token,workerId:'terminal-inventory-worker',errorCode:'financial_inventory_not_confirmed',retryable:true,retryDelaySeconds:900});
+  const failed=await failJob({jobId:claimed.id,leaseToken:claimed.lease_token,workerId:'terminal-inventory-worker',errorCode:'wb_request_failed',retryable:true,retryDelaySeconds:900});
   assert.equal(failed.status,'failed');
   const coverage=await inContext(async client=>(await client.query(`select coverage_status,next_retry_at,last_error_code
     from mc.financial_week_coverage where store_id=$1 and credential_generation=3 and week_start='2024-01-01'`,[ids.store])).rows[0]);
   assert.equal(coverage.coverage_status,'unavailable');
   assert.equal(coverage.next_retry_at,null);
-  assert.equal(coverage.last_error_code,'financial_inventory_not_confirmed');
+  assert.equal(coverage.last_error_code,'wb_request_failed');
   const state=await getFinancialSyncState(ids.user,ids.store);
   assert.equal(state.run_status,'failed');
-  assert.equal(state.error_code,'financial_inventory_not_confirmed');
+  assert.equal(state.error_code,'wb_request_failed');
   assert.ok(Number(state.failed_weeks)>=1);
 });
 
@@ -332,6 +339,143 @@ test('expired final inventory lease also makes uncovered weeks terminal',async()
   assert.equal(result.coverage.coverage_status,'unavailable');
   assert.equal(result.coverage.next_retry_at,null);
   assert.equal(result.coverage.last_error_code,'max_attempts_exhausted');
+});
+
+test('absent reports wait hourly beyond twenty polls without spending real failure attempts',async()=>{
+  const queued=await enqueueJob(ids.user,{
+    storeId:ids.store,jobType:'financial_inventory_refresh',deduplicationKey:`hourly-wait:${ids.store}`,
+    payload:{schemaVersion:1,credentialGeneration:3,window:{dateFrom:'2024-02-05',dateTo:'2024-02-11'}},maxAttempts:20
+  });
+  await inContext(client=>client.query(`insert into mc.financial_week_coverage(
+    business_id,store_id,credential_generation,week_start,week_end,check_reasons,freshness_due_at
+  ) values($1,$2,3,'2024-02-05','2024-02-11',array['hourly_wait_test'],now())`,[ids.business,ids.store]));
+  const workerId='hourly-wait-worker';
+  const first=(await claimJobs({workerId,jobTypes:['financial_inventory_refresh'],leaseSeconds:300,limit:100})).find(job=>job.id===queued.id);
+  const realFailure=await failJob({jobId:first.id,leaseToken:first.lease_token,workerId,errorCode:'wb_request_failed',retryable:true,retryDelaySeconds:0});
+  assert.equal(realFailure.attempt_count,1);
+  for(let i=0;i<25;i++){
+    const claimed=(await claimJobs({workerId,jobTypes:['financial_inventory_refresh'],leaseSeconds:300,limit:100})).find(job=>job.id===queued.id);
+    assert.ok(claimed);
+    assert.equal(claimed.attempt_count,2);
+    const applied=await inventoryRepository.apply(claimed.id,3,claimed.lease_token,workerId,[]);
+    assert.equal(Number(applied.uncovered_weeks),1);
+    const before=Date.now();
+    await assert.rejects(()=>failJob({jobId:claimed.id,leaseToken:randomUUID(),workerId,errorCode:'financial_inventory_not_confirmed',retryable:true,retryDelaySeconds:0}),/lease/);
+    const waited=await failJob({jobId:claimed.id,leaseToken:claimed.lease_token,workerId,errorCode:'financial_inventory_not_confirmed',retryable:true,retryDelaySeconds:0});
+    assert.equal(waited.status,'pending');
+    assert.equal(waited.attempt_count,1);
+    assert.ok(new Date(waited.available_at).getTime()>=before+3599000);
+    const state=await inContext(async client=>({
+      coverage:(await client.query(`select coverage_status,inventory_confirmed_at,empty_confirmed_by_job_id,next_retry_at
+        from mc.financial_week_coverage where store_id=$1 and credential_generation=3 and week_start='2024-02-05'`,[ids.store])).rows[0],
+      dispatch:(await client.query(`select status,attempt_count,available_at from mc.job_dispatch where job_id=$1`,[queued.id])).rows[0]
+    }));
+    assert.equal(state.coverage.coverage_status,'retry');
+    assert.equal(state.coverage.inventory_confirmed_at,null);
+    assert.equal(state.coverage.empty_confirmed_by_job_id,null);
+    assert.ok(new Date(state.coverage.next_retry_at).getTime()>=before+3598000);
+    assert.equal(state.dispatch.status,'pending');
+    assert.equal(state.dispatch.attempt_count,1);
+    assert.equal(new Date(state.dispatch.available_at).getTime(),new Date(waited.available_at).getTime());
+    assert.equal((await claimJobs({workerId,jobTypes:['financial_inventory_refresh'],leaseSeconds:300,limit:100})).some(job=>job.id===queued.id),false);
+    await inContext(async client=>{
+      await client.query(`update mc.jobs set available_at=clock_timestamp()-interval '1 second' where id=$1`,[queued.id]);
+      await client.query(`update mc.job_dispatch set available_at=clock_timestamp()-interval '1 second' where job_id=$1`,[queued.id]);
+    });
+  }
+  const claimed=(await claimJobs({workerId,jobTypes:['financial_inventory_refresh'],leaseSeconds:300,limit:100})).find(job=>job.id===queued.id);
+  const late=await inventoryRepository.apply(claimed.id,3,claimed.lease_token,workerId,[{
+    reportId:'90071992547409933',checksum:'d'.repeat(64),dateFrom:'2024-02-05',dateTo:'2024-02-11',summaryRaw:{sales:0,returns:0}
+  }]);
+  assert.equal(Number(late.uncovered_weeks),0);
+  assert.equal(Number(late.found_reports),1);
+  assert.equal(Number(late.enqueued_fetches),1);
+  assert.equal(await inContext(async client=>(await client.query(`select coverage_status from mc.financial_week_coverage
+    where store_id=$1 and credential_generation=3 and week_start='2024-02-05'`,[ids.store])).rows[0].coverage_status),'fetching');
+  await completeJob({jobId:claimed.id,leaseToken:claimed.lease_token,workerId,outcome:'completed'});
+  const fetch=(await claimJobs({workerId:'late-zero-fetch-worker',jobTypes:['financial_report_fetch'],leaseSeconds:300,limit:100})).find(job=>job.payload.reportId==='90071992547409933');
+  assert.ok(fetch);
+  await acceptInventory('90071992547409933');
+  await completeJob({jobId:fetch.id,leaseToken:fetch.lease_token,workerId:'late-zero-fetch-worker',outcome:'completed'});
+  const persisted=await inContext(async client=>(await client.query(`select fetch_status,summary_raw_data,
+    report_version_id is not null and accepted_normalization_id is not null as accepted_evidence
+    from mc.financial_week_inventory where store_id=$1 and external_report_id='90071992547409933'`,[ids.store])).rows[0]);
+  assert.equal(persisted.fetch_status,'accepted');
+  assert.equal(persisted.accepted_evidence,true);
+  assert.deepEqual(persisted.summary_raw_data,{sales:0,returns:0});
+  const refresh=await enqueueJob(ids.user,{storeId:ids.store,jobType:'financial_inventory_refresh',deduplicationKey:`late-accepted:${ids.store}`,payload:queued.payload,maxAttempts:20});
+  const acceptedJob=(await claimJobs({workerId,jobTypes:['financial_inventory_refresh'],leaseSeconds:300,limit:100})).find(job=>job.id===refresh.id);
+  const accepted=await inventoryRepository.apply(acceptedJob.id,3,acceptedJob.lease_token,workerId,[{
+    reportId:'90071992547409933',checksum:'d'.repeat(64),dateFrom:'2024-02-05',dateTo:'2024-02-11',summaryRaw:{sales:0,returns:0}
+  }]);
+  assert.equal(Number(accepted.uncovered_weeks),0);
+  // An explicit later list refresh rechecks detail freshness even at the same checksum.
+  assert.equal(Number(accepted.enqueued_fetches),1);
+  assert.equal(await inContext(async client=>(await client.query(`select coverage_status from mc.financial_week_coverage
+    where store_id=$1 and credential_generation=3 and week_start='2024-02-05'`,[ids.store])).rows[0].coverage_status),'fetching');
+  await completeJob({jobId:acceptedJob.id,leaseToken:acceptedJob.lease_token,workerId,outcome:'completed'});
+});
+
+test('hourly waits retain confirmed report evidence while another week is missing',async()=>{
+  const workerId='mixed-hourly-worker';
+  const queued=await enqueueJob(ids.user,{storeId:ids.store,jobType:'financial_inventory_refresh',
+    deduplicationKey:`mixed-hourly:${ids.store}`,maxAttempts:20,
+    payload:{schemaVersion:1,credentialGeneration:3,window:{dateFrom:'2024-03-04',dateTo:'2024-03-17'}}});
+  await inContext(client=>client.query(`insert into mc.financial_week_coverage(
+    business_id,store_id,credential_generation,week_start,week_end,check_reasons,freshness_due_at
+  ) select $1,$2,3,day::date,day::date+6,array['mixed_hourly_test'],now()
+    from generate_series('2024-03-04'::date,'2024-03-11'::date,interval '7 days') day`,[ids.business,ids.store]));
+  const known={reportId:'90071992547409934',checksum:'e'.repeat(64),dateFrom:'2024-03-04',dateTo:'2024-03-10',summaryRaw:{marker:'confirmed'}};
+  const changedKnown={...known,checksum:'a'.repeat(64),summaryRaw:{marker:'changed'}};
+  const late={reportId:'90071992547409935',checksum:'f'.repeat(64),dateFrom:'2024-03-11',dateTo:'2024-03-17'};
+  const lateForeign={...late,reportId:'90071992547409936',checksum:'b'.repeat(64),reportType:'2'};
+  const claim=async()=>(await claimJobs({workerId,jobTypes:['financial_inventory_refresh'],leaseSeconds:300,limit:100})).find(job=>job.id===queued.id);
+  const retryNow=async()=>inContext(async client=>{
+    await client.query(`update mc.jobs set available_at=clock_timestamp()-interval '1 second' where id=$1`,[queued.id]);
+    await client.query(`update mc.job_dispatch set available_at=clock_timestamp()-interval '1 second' where job_id=$1`,[queued.id]);
+  });
+  const evidence=async()=>inContext(async client=>(await client.query(`select last_seen_at,fetch_status,
+    report_version_id,accepted_normalization_id,accepted_inventory_checksum,accepted_at,inventory_checksum,summary_raw_data
+    from mc.financial_week_inventory where store_id=$1 and external_report_id=$2`,[ids.store,known.reportId])).rows[0]);
+  let claimed=await claim();
+  const initial=await inventoryRepository.apply(claimed.id,3,claimed.lease_token,workerId,[known]);
+  assert.equal(Number(initial.uncovered_weeks),1);
+  assert.equal(Number(initial.enqueued_fetches),1);
+  const fetch=(await claimJobs({workerId:'mixed-hourly-fetch',jobTypes:['financial_report_fetch'],leaseSeconds:300,limit:100})).find(job=>job.payload.reportId===known.reportId);
+  assert.ok(fetch);
+  await acceptInventory(known.reportId);
+  await completeJob({jobId:fetch.id,leaseToken:fetch.lease_token,workerId:'mixed-hourly-fetch',outcome:'completed'});
+  const confirmed=await evidence();
+  assert.equal(confirmed.fetch_status,'accepted');
+  for(let i=0;i<2;i++){
+    const waiting=await failJob({jobId:claimed.id,leaseToken:claimed.lease_token,workerId,
+      errorCode:'financial_inventory_not_confirmed',retryable:true,retryDelaySeconds:3600});
+    assert.equal(waiting.payload.awaitingReportsOnly,true);
+    await retryNow();
+    claimed=await claim();
+    const result=await inventoryRepository.apply(claimed.id,3,claimed.lease_token,workerId,i===0?[changedKnown]:[changedKnown,late,lateForeign]);
+    assert.equal(Number(result.uncovered_weeks),i===0?1:0);
+    assert.equal(Number(result.found_reports),i===0?0:2);
+    assert.equal(Number(result.enqueued_fetches),i===0?0:2);
+    assert.deepEqual(await evidence(),confirmed);
+  }
+  const lateRows=await inContext(async client=>(await client.query(`select external_report_id,fetch_status
+    from mc.financial_week_inventory where store_id=$1 and external_report_id=any($2::text[])
+    order by external_report_id`,[ids.store,[late.reportId,lateForeign.reportId]])).rows);
+  assert.deepEqual(lateRows,[{external_report_id:late.reportId,fetch_status:'pending'},{external_report_id:lateForeign.reportId,fetch_status:'pending'}]);
+  await completeJob({jobId:claimed.id,leaseToken:claimed.lease_token,workerId,outcome:'completed'});
+  const manual=await enqueueJob(ids.user,{storeId:ids.store,jobType:'financial_inventory_refresh',
+    deduplicationKey:`mixed-manual:${ids.store}`,maxAttempts:20,
+    payload:{schemaVersion:1,credentialGeneration:3,window:{dateFrom:known.dateFrom,dateTo:known.dateTo}}});
+  const manualJob=(await claimJobs({workerId,jobTypes:['financial_inventory_refresh'],leaseSeconds:300,limit:100})).find(job=>job.id===manual.id);
+  const refreshed=await inventoryRepository.apply(manualJob.id,3,manualJob.lease_token,workerId,[changedKnown]);
+  assert.equal(Number(refreshed.found_reports),1);
+  assert.equal(Number(refreshed.enqueued_fetches),1);
+  const newEvidence=await evidence();
+  assert.equal(newEvidence.inventory_checksum,changedKnown.checksum);
+  assert.deepEqual(newEvidence.summary_raw_data,changedKnown.summaryRaw);
+  assert.equal(newEvidence.fetch_status,'pending');
+  await completeJob({jobId:manualJob.id,leaseToken:manualJob.lease_token,workerId,outcome:'completed'});
 });
 
 test.after(async()=>{await pool.end();});

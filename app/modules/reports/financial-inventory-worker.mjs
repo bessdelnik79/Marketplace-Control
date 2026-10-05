@@ -91,7 +91,7 @@ export function createFinancialInventoryWorker({
       }
       await jobs.failJob({
         jobId: job.id, leaseToken: job.lease_token, workerId, errorCode,
-        retryable: !terminalErrors.has(errorCode), retryDelaySeconds: errorCode === 'financial_summary_rate_limited' ? 300 : 900
+        retryable: !terminalErrors.has(errorCode), retryDelaySeconds: errorCode === 'financial_inventory_not_confirmed' ? 3600 : errorCode === 'financial_summary_rate_limited' ? 300 : 900
       }).catch(() => {});
     }
     return true;

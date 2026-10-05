@@ -206,6 +206,20 @@ test('daily publication aggregation fails closed when one requested date is unma
   assert.ok(result.missing_reasons.includes('report_coverage_incomplete'));
 });
 
+test('revoked empty-week evidence hides published zero until a report is received',()=>{
+  const day={accounting_date:'2026-09-28',coverage_complete:true,quality:'complete',tax_usable:true,
+    store_profit_before_tax:'0.0000',selected_profit_before_tax:'0.0000',available_profit_before_tax:'0.0000'};
+  const original=aggregateDailyPublicationPeriod(day.accounting_date,day.accounting_date,{days:[day]});
+  assert.equal(original.quality,'complete');
+  const waiting=aggregateDailyPublicationPeriod(day.accounting_date,day.accounting_date,{days:[{...day,empty_evidence_revoked:true}]});
+  assert.equal(waiting.quality,'unavailable');
+  assert.equal(waiting.totals,null);
+  assert.ok(waiting.missing_reasons.includes('financial_report_waiting'));
+  assert.ok(waiting.missing_reasons.includes('report_coverage_incomplete'));
+  assert.equal(waiting.taxReference.usable,false);
+  assert.equal(buildFinancialPeriodOverview({...waiting,publication_id:'publication-1',method_version:'financial-result-v36',scope:'selected_products'}).displayResult.amount,null);
+});
+
 test('daily publication keeps a fully mapped unavailable period authoritative',()=>{
   const result=aggregateDailyPublicationPeriod('2026-09-01','2026-09-01',{
     days:[{accounting_date:'2026-09-01',coverage_complete:true,quality:'unavailable',tax_usable:false,store_profit_before_tax:null,selected_profit_before_tax:null,available_profit_before_tax:null}],

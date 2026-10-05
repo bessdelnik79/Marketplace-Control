@@ -21,6 +21,7 @@ test('inventory raw summary persistence stays inside the claimed job generation 
   assert.ok(rawUpdate);
   assert.match(rawUpdate.sql,/wc\.id=wi\.coverage_id/);
   assert.match(rawUpdate.sql,/wc\.credential_generation=\$3/);
+  assert.match(rawUpdate.sql,/wi\.inventory_checksum=item\.value->>'checksum'/);
   assert.match(rawUpdate.sql,/wc\.week_start<=\(j\.payload->'window'->>'dateTo'\)::date/);
   assert.match(rawUpdate.sql,/wc\.week_end>=\(j\.payload->'window'->>'dateFrom'\)::date/);
   assert.equal(rawUpdate.params[2],7);

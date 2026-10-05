@@ -36,7 +36,8 @@ export function createFinancialInventoryRepository({ pool }) {
               and wc.id=wi.coverage_id and wc.credential_generation=$3
               and wc.week_start<=(j.payload->'window'->>'dateTo')::date
               and wc.week_end>=(j.payload->'window'->>'dateFrom')::date
-              and wi.external_report_id=item.value->>'reportId'`,
+              and wi.external_report_id=item.value->>'reportId'
+              and wi.inventory_checksum=item.value->>'checksum'`,
           [jobId, encoded, credentialGeneration]
         );
       }

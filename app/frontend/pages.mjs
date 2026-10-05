@@ -66,6 +66,7 @@ export function emptyOverviewPage(user, stores=[]) {
 const overviewReasonLabels={
   cost_missing:'не указана себестоимость части товаров',tax_setting_missing:'не настроен налог',operation_unclassified:'есть неразобранные операции WB',
   report_coverage_incomplete:'выбранный период покрыт финансовыми отчётами не полностью',
+  financial_report_waiting:'ожидаем финансовый отчёт WB; повторная проверка — раз в час',
   calculation_period_coverage_incomplete:'для выбранного периода ещё нет непрерывного покрытия обработанными финансовыми отчётами',
   financial_method_upgrade_pending:'точный расчёт обновляется по исходным значениям WB',
   published_period_missing:'нет опубликованного расчёта точно за выбранный период',published_financial_result_missing:'финансовый расчёт ещё не опубликован',

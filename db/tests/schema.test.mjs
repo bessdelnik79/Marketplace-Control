@@ -36,6 +36,16 @@ try {
   assert.match(selectionDispatch,/financial_daily_publication_days/);
   assert.match(selectionDispatch,/financial_empty_week_evidence_valid/);
   pass('selection changes recalculate published and proven empty dates without widening immutable event evidence');
+  const hourlyApply=(await one(`select pg_get_functiondef('mc.apply_financial_inventory(uuid,bigint,uuid,text,jsonb)'::regprocedure) definition`)).definition;
+  const hourlyFail=(await one(`select pg_get_functiondef('mc.fail_job(uuid,uuid,text,text,boolean,integer)'::regprocedure) definition`)).definition;
+  assert.doesNotMatch(hourlyApply,/coverage_status='empty'/);
+  assert.match(hourlyApply,/next_retry_at=clock_timestamp\(\)\+interval '1 hour'/);
+  assert.match(hourlyFail,/greatest\(attempt_count-1,0\)/);
+  assert.match(hourlyFail,/target.job_type='financial_inventory_refresh'/);
+  assert.match(hourlyFail,/CASE WHEN inventory_wait THEN 3600/);
+  assert.match(hourlyFail,/jsonb_build_object\('awaitingReportsOnly',true\)/);
+  assert.match(hourlyApply,/target_job.payload->>'awaitingReportsOnly'/);
+  pass('missing weekly reports remain hourly durable waits without exhausting real failure attempts');
   const version = (await one('select version()')).version;
   console.log(version);
   const tables = await q("select table_name from information_schema.tables where table_schema='mc' and table_type='BASE TABLE' order by table_name");
@@ -43,7 +53,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,71);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,72);
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.recover_historical_catalog(uuid,uuid)'::regprocedure"));
   const transportRoundingDefinition=(await one(
   `select pg_get_functiondef(
@@ -1582,6 +1592,26 @@ assert.match(
       where event_key='daily-publication-legacy-shadow-recovery:v1:store:'||$1`,[inactiveStore.id])).n,0);
     assert.equal((await eone(`select max(version)::int version from mc.schema_migrations`)).version,48);
     pass('migration 48 replays a no-pointer cutover without WB API and skips archived stores');
+    await eq(`select set_config('app.user_id','',false),set_config('app.business_id','',false)`);
+    await emptyCoverageUpgradeDb.exec(await readFile(path.join(root,'db/migrations/072_financial_report_hourly_wait.sql'),'utf8'));
+    await eq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[emptyUser.id,emptyBusiness.id]);
+    const reopened=await eone(`select coverage_status,inventory_confirmed_at,empty_confirmed_by_job_id,
+      next_retry_at is not null as retry_scheduled from mc.financial_week_coverage where id=$1`,[legacyEmpty.id]);
+    assert.deepEqual(reopened,{coverage_status:'retry',inventory_confirmed_at:null,empty_confirmed_by_job_id:null,retry_scheduled:true});
+    assert.equal((await eone(`select mc.financial_empty_week_evidence_valid($1,$2) valid`,[legacyEmpty.id,confirmationJob.id])).valid,false);
+    assert.equal((await eone(`select coverage_status from mc.financial_week_coverage where id=$1`,[staleLegacyEmpty.id])).coverage_status,'unavailable');
+    const recoveredJob=await eone(`select payload,status,max_attempts from mc.jobs
+      where store_id=$1 and payload->>'reason'='hourly_wait_recovery'`,[emptyStore.id]);
+    assert.equal(recoveredJob.status,'pending');
+    assert.equal(recoveredJob.max_attempts,20);
+    assert.deepEqual(recoveredJob.payload.window,{dateFrom:'2026-09-07',dateTo:'2026-09-13'});
+    assert.equal((await eone(`select count(*)::int n from mc.financial_input_events
+      where source_financial_week_coverage_id=$1`,[legacyEmpty.id])).n,1);
+    await eq(`select set_config('app.user_id',$1,false),set_config('app.business_id',$2,false)`,[inactiveUser.id,inactiveBusiness.id]);
+    assert.equal((await eone(`select coverage_status from mc.financial_week_coverage where id=$1`,[inactiveLegacyEmpty.id])).coverage_status,'unavailable');
+    assert.equal((await eone(`select relforcerowsecurity forced from pg_class where oid='mc.stores'::regclass`)).forced,true);
+    pass('migration 72 reopens current unproven empty weeks, queues recovery, preserves frozen events and restores FORCE RLS');
+
   }finally{await emptyCoverageUpgradeDb.close();}
 
   const transportUpgradeDb=new PGlite();
