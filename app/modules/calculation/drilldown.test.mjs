@@ -113,9 +113,25 @@ test('unavailable publication does not infer zero from absent operations',()=>{
   assert.equal(model.items[0].metrics.revenue.amount,null);assert.equal(model.items[0].metrics.availableResultBeforeTax.amount,null);
 });
 
-test('equal amounts sort by product ID and unavailable values always sort last',()=>{
-  const args=input({quality:'partial',lines:[line('a','revenue','0.0000','1')],selected:'0.0000',store:'0.0000',before:'0.0000'}),model=buildPublishedDrilldownModel(args);
-  for(const sort of ['result_asc','result_desc','revenue_asc','revenue_desc'])assert.deepEqual(paginatePublishedSkuList(model,{sort}).items.map(item=>item.productId),['a','b']);
+test('SKU list hides zero and unknown-only metrics before search and pagination',()=>{
+  const model=buildPublishedDrilldownModel(input());
+  const zero={...model.items[0],productId:'zero',name:'Zero',metrics:Object.fromEntries(Object.entries(model.items[0].metrics).map(([key,metric])=>[key,{...metric,amount:metric.amount===null?null:'0.0000'}]))};
+  model.items.unshift(zero);
+  const first=paginatePublishedSkuList(model,{limit:1});
+  assert.equal(first.totalItems,2);assert.equal(first.items[0].productId,'b');
+  const second=paginatePublishedSkuList(model,{limit:1,cursor:first.nextCursor});
+  assert.equal(second.items[0].productId,'a');assert.equal(second.nextCursor,null);
+  assert.equal(paginatePublishedSkuList(model,{search:'Zero'}).totalItems,0);
+  assert.strictEqual(first.reconciliation,model.reconciliation);
+  assert.equal(model.items.length,3);
+  const unavailable=buildPublishedDrilldownModel(input({quality:'unavailable',lines:[]}));
+  assert.equal(paginatePublishedSkuList(unavailable).totalItems,0);
+});
+
+test('zero result with nonzero revenue and tiny or negative metrics remain visible',()=>{
+  const model=buildPublishedDrilldownModel(input({lines:[line('a','revenue','10.0000','1'),line('a','cost_of_goods','-10.0000','2'),line('b','logistics','-0.0001','3')],selected:'-0.0001',store:'0.0000',before:'-0.0001'}));
+  assert.equal(model.items[0].metrics.availableResultBeforeTax.amount,'0.0000');
+  for(const sort of ['result_asc','result_desc','revenue_asc','revenue_desc'])assert.equal(paginatePublishedSkuList(model,{sort}).totalItems,2);
   const complete=buildPublishedDrilldownModel(input({lines:[],selected:'0.0000',store:'0.0000',before:'0.0000'}));
-  for(const sort of ['result_asc','result_desc'])assert.deepEqual(paginatePublishedSkuList(complete,{sort}).items.map(item=>item.productId),['a','b']);
+  assert.equal(paginatePublishedSkuList(complete).totalItems,0);
 });

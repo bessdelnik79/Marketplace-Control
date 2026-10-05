@@ -139,7 +139,8 @@ export function paginatePublishedSkuList(model,{search='',sort='result_asc',curs
   const filter=search.trim().toLocaleLowerCase('ru'),binding=digest({context:{contractVersion,publication,storeId,period,method,scope},search:filter,sort});
   const metricKey=sort.startsWith('revenue_')?'revenue':model.context.resultBasis==='after_tax'?'availableResultAfterTax':'availableResultBeforeTax';
   const amount=item=>item.metrics[metricKey].amount;
-  const ordered=model.items.filter(item=>!filter||[item.name,item.sellerArticle,item.wbArticle].some(value=>String(value??'').toLocaleLowerCase('ru').includes(filter))).sort((a,b)=>{
+  const ordered=model.items.filter(item=>Object.values(item.metrics).some(metric=>metric.amount!==null&&metric.amount!==undefined&&money(metric.amount)!==0n))
+    .filter(item=>!filter||[item.name,item.sellerArticle,item.wbArticle].some(value=>String(value??'').toLocaleLowerCase('ru').includes(filter))).sort((a,b)=>{
     const left=amount(a),right=amount(b);if(left===null&&right!==null)return 1;if(right===null&&left!==null)return -1;
     const comparison=left===null?0:money(left)<money(right)?-1:money(left)>money(right)?1:0;
     return comparison*(sort.endsWith('_desc')?-1:1)||a.productId.localeCompare(b.productId);
