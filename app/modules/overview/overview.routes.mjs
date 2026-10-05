@@ -1,4 +1,5 @@
 import { calendarWeekForDate, validateCalendarPeriod } from './financial-overview.mjs';
+import { frozenFinancialOverview } from './frozen-overview.mjs';
 
 function requestedWeek(url) {
   const value = url.searchParams.get('week');
@@ -31,6 +32,7 @@ function requestedPeriod(url) {
 export function createOverviewRoutes({
   listStores,
   getOverviewState,
+  readPublishedSkuList,
   getOperationalOverview = async () => null,
   operationalOverviewPanel = () => '',
   requestOperationalRangeRefresh = async () => null,
@@ -133,6 +135,25 @@ export function createOverviewRoutes({
     }
     if (!store.connected) {
       send(res, 200, overviewPage(current, stores, null, pageOptions));
+      return true;
+    }
+    if (url.searchParams.has('publicationId') || url.searchParams.has('publicationSource')) {
+      const fields = ['storeId','publicationId','publicationSource','periodStart','periodEnd'];
+      if (!readPublishedSkuList || fields.some(key => !url.searchParams.get(key) || url.searchParams.getAll(key).length !== 1) || !period) {
+        send(res,400,'Некорректные параметры расшифровки.',{'cache-control':'no-store'}); return true;
+      }
+      try {
+        const input = Object.fromEntries(fields.map(key => [key,url.searchParams.get(key)]));
+        const snapshot = await readPublishedSkuList(current.user_id,{...input,limit:1});
+        const state = {store,financial:frozenFinancialOverview(snapshot),
+          operational:await getOperationalOverview(current.user_id,store.id),
+          situations:{status:'unavailable',quality:'unavailable',items:[],count:0,
+            missingReasons:['frozen_publication_situations_unavailable']}};
+        send(res,200,overviewPage(current,stores,state,pageOptions),{'cache-control':'no-store'});
+      } catch(error) {
+        if(!['drilldown_invalid_request','drilldown_not_found','drilldown_cursor_context_mismatch'].includes(error.message))throw error;
+        send(res,error.message==='drilldown_not_found'?404:400,error.message==='drilldown_not_found'?'Расшифровка не найдена.':'Некорректные параметры расшифровки.',{'cache-control':'no-store'});
+      }
       return true;
     }
     const state = await getOverviewState(current.user_id, {

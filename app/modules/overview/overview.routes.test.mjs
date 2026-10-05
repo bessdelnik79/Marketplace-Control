@@ -8,6 +8,32 @@ const stores = [
   { id: 'store-2', name: 'Второй', connected: true }
 ];
 
+test('frozen overview return reads explicit publication and excludes current comparisons and situations',async()=>{
+  const snapshot={context:{publication:{id:'old',source:'daily'},period:{start:'2026-07-13',end:'2026-07-19'},
+    quality:'partial',resultBasis:'before_tax',totals:{availableResultBeforeTax:'-1.0000',estimatedUsnTax:'0.0000'},coverage:{covered:null},
+    scope:{productIds:['p']},method:{version:'financial-result-v36'},missingReasons:['cost_missing'],update:{availablePublicationId:'new'}},
+    reconciliation:{checks:[{code:'overview_revenue',expected:'10.0000'},{code:'overview_wbExpenses',expected:'2.0000'}]}};
+  let input;
+  const s=setup({readPublishedSkuList:async(_user,value)=>{input=value;return snapshot;},
+    getOverviewState:async()=>{throw new Error('current publication must not be read');}});
+  await s.run('/overview?storeId=store-1&publicationId=old&publicationSource=daily&periodStart=2026-07-13&periodEnd=2026-07-19');
+  assert.equal(s.response.status,200);assert.equal(input.publicationId,'old');
+  const state=s.response.body.state;assert.equal(state.financial.displayResult.amount,'-1.0000');
+  assert.equal(state.financial.totals.revenue,'10.0000');assert.equal(state.financial.frozen,true);
+  assert.equal(state.financial.totals.tax,null,'an unusable persisted zero tax remains unavailable');
+  assert.equal(state.financial.comparison.comparable,false);assert.equal(state.situations.status,'unavailable');
+});
+
+test('invalid or foreign frozen overview never silently substitutes current publication',async()=>{
+  for(const code of ['drilldown_not_found','drilldown_invalid_request']){
+    const s=setup({readPublishedSkuList:async()=>{throw new Error(code);},getOverviewState:async()=>{throw new Error('fallback');}});
+    await s.run('/overview?storeId=store-1&publicationId=old&publicationSource=daily&periodStart=2026-07-13&periodEnd=2026-07-19');
+    assert.equal(s.response.status,code==='drilldown_not_found'?404:400);
+  }
+  const s=setup();await s.run('/overview?storeId=store-1&publicationId=old&periodStart=2026-07-13&periodEnd=2026-07-19');
+  assert.equal(s.response.status,400);
+});
+
 function setup(overrides = {}) {
   const calls = [];
   const response = {};

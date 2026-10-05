@@ -752,7 +752,7 @@ test('P0.5 readers pin legacy and mixed-generation daily evidence under ordinary
   const role=`mc_drilldown_${randomUUID().replaceAll('-','').slice(0,12)}`;
   const viewer=randomUUID();
   await context(async client=>{
-    await client.query(`insert into mc.users(id,display_name) values($1,'P05 viewer')`,[viewer]);
+    await client.query(`insert into mc.users(id,display_name,email_verified_at) values($1,'P05 viewer',now())`,[viewer]);
     await client.query(`insert into mc.memberships(business_id,user_id,role) values($1,$2,'viewer')`,[ids.business,viewer]);
     await client.query(`create role ${role} nologin nosuperuser nobypassrls`);
     await client.query(`grant usage on schema mc to ${role}`);
@@ -888,6 +888,15 @@ test('P0.5 readers pin legacy and mixed-generation daily evidence under ordinary
     assert.equal(after.context.update.availablePublicationId,publications.mixed);
     assert.deepEqual(after.item.groups,before.items[0].groups);
     assert.deepEqual(after.context.totals,before.context.totals);
+    const {verifyPublishedDrilldownHttp}=await import('./p05-http.acceptance.mjs');
+    const readCounts=()=>context(async client=>(await client.query(`select
+      (select count(*)::int from mc.jobs where store_id=$1) jobs,
+      (select count(*)::int from mc.report_versions where store_id=$1) reports`,[ids.store])).rows[0]);
+    const countsBefore=await readCounts();
+    await verifyPublishedDrilldownHttp({reader,viewer,storeId:ids.store,availablePublicationId:publications.mixed,
+      inputs:[pinnedInput,{...pinnedInput,publicationId:publications.legacy,publicationSource:'legacy'},
+        {...pinnedInput,publicationId:publications.mixed}]});
+    assert.deepEqual(await readCounts(),countsBefore,'HTTP reads do not enqueue work or load WB reports');
   }finally{await setPointer(originalPointer);}
   const mixedInput={storeId:ids.store,publicationSource:'daily',publicationId:publications.mixed,periodStart:'2026-07-13',periodEnd:'2026-07-19'};
   const carried=await context(async client=>(await client.query(`select g.id,g.parser_method_version_id,

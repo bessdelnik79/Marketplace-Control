@@ -171,7 +171,7 @@ export function createPublishedDrilldownRepository({pool=defaultPool}={}){
       for(const item of model.items)for(const group of item.groups){
         if(publication.source==='legacy'&&group.categoryCode==='estimated_usn_tax')group.taxBasisAvailable=true;
       }
-      const result=await action({client,input,context,model,lines,taxFacts});
+      const result=await action({client,input,context,model,lines,taxFacts,businessId});
       await client.query('commit');return result;
     }catch(error){await client.query('rollback');throw error;}finally{client.release();}
   }
@@ -191,12 +191,26 @@ export function createPublishedDrilldownRepository({pool=defaultPool}={}){
     if(input?.scope==='store'){if(input.productId!==undefined&&input.productId!==null)invalid();}
     else uuid(input?.productId);
     if(typeof input?.groupKey!=='string'||input.groupKey.length>500)invalid();
-    return read(userId,input,async({client,context,model,lines,taxFacts})=>{
+    return read(userId,input,async({client,context,model,lines,taxFacts,businessId})=>{
       const item=input.scope==='store'?null:model.items.find(row=>row.productId===input.productId.toLowerCase());
       if(input.scope!=='store'&&!item)invalid('drilldown_not_found');
       const group=(input.scope==='store'?model.storeLines:item.groups).find(row=>row.groupKey===input.groupKey);
       if(!group)invalid('drilldown_not_found');
       const page=await readContributionPage(client,{context,lines,taxFacts,group,lineRef:input.lineRef??null,cursor:input.cursor??null,limit:input.limit??25,taxBasis:input.taxBasis??false});
+      const sources=page.items.flatMap(item=>item.source?[item.source,...(item.source.originalSale?[item.source.originalSale]:[])]:[]);
+      const variantIds=[...new Set(sources.map(source=>source.variantId).filter(Boolean))];
+      if(variantIds.length){
+        const variants=(await client.query(`select v.id,v.product_id,v.size_label,v.color_label,v.status,v.historical_report_only,
+          coalesce((select jsonb_agg(i.identifier_value order by i.identifier_value) from mc.variant_identifiers i
+            where i.business_id=v.business_id and i.store_id=v.store_id and i.variant_id=v.id and i.identifier_type='barcode'),'[]'::jsonb) barcodes
+          from mc.variants v where v.business_id=$1 and v.store_id=$2 and v.id=any($3::uuid[])`,
+        [businessId,context.storeId,variantIds])).rows;
+        for(const source of sources){
+          const variant=variants.find(row=>row.id===source.variantId&&row.product_id===source.productId);
+          source.variant=variant?{sizeLabel:variant.size_label,colorLabel:variant.color_label,barcodes:variant.barcodes,
+            isHistorical:variant.historical_report_only||variant.status!=='active'}:null;
+        }
+      }
       return{context,group:publicGroup(group),...page,moneyReconciliation:model.reconciliation};
     });
   };
