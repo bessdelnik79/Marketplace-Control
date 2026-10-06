@@ -2208,6 +2208,72 @@
 - `CHECK ((status = ANY (ARRAY['active'::text, 'paused'::text, 'blocked'::text])))`
 - `UNIQUE (store_id, source_type)`
 
+## tariff_profile_products
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| business_id | uuid | нет | — |
+| profile_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| product_id | uuid | нет | — |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, profile_id, store_id) REFERENCES mc.tariff_profile_stores(business_id, profile_id, store_id)`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.product_selection_items(business_id, store_id, product_id)`
+- `PRIMARY KEY (business_id, profile_id, store_id, product_id)`
+
+## tariff_profile_state
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| business_id | uuid | нет | — |
+| free_profile_id | uuid | нет | — |
+| active_profile_id | uuid | нет | — |
+| revision | bigint | нет | 1 |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, active_profile_id) REFERENCES mc.tariff_profiles(business_id, id)`
+- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id)`
+- `FOREIGN KEY (business_id, free_profile_id) REFERENCES mc.tariff_profiles(business_id, id)`
+- `PRIMARY KEY (business_id)`
+- `CHECK ((revision > 0))`
+
+## tariff_profile_stores
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| business_id | uuid | нет | — |
+| profile_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, profile_id) REFERENCES mc.tariff_profiles(business_id, id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `PRIMARY KEY (business_id, profile_id, store_id)`
+
+## tariff_profiles
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | gen_random_uuid() |
+| business_id | uuid | нет | — |
+| plan_id | uuid | нет | — |
+| selection_confirmed | boolean | нет | false |
+| revision | bigint | нет | 1 |
+| created_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id)`
+- `UNIQUE (business_id, id)`
+- `UNIQUE (business_id, plan_id)`
+- `PRIMARY KEY (id)`
+- `FOREIGN KEY (plan_id) REFERENCES mc.billing_plans(id)`
+- `CHECK ((revision > 0))`
+
 ## tax_basis_evidence
 
 | Поле | Тип | NULL | По умолчанию |
