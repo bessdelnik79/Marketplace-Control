@@ -10,6 +10,8 @@ const item = {id:'product_loss:product',productId:'product',product:{name:'Ча�
 const row = {id:'evidence',groupKey:'revenue',categoryCode:'revenue',contributionAmount:'1089.0000',source:{accountingDate:'2026-09-11',quantity:'1.000000'}};
 const data = {context,item,reconciliation:{status:'matched'},revenuePreview:{soldQuantity:'3',rows:[row],hasMore:false}};
 const render = overrides => productLossDetail({...data,...overrides},{},'<p>Технические сведения</p>','');
+const expense = (categoryCode, amountSigned) => ({categoryCode,amountSigned,groupKey:categoryCode});
+const wbTable = html => html.match(/<table class="situation-wb-table"[\s\S]*?<\/table>/)?.[0] ?? '';
 
 test('accepted layout explains exact saved loss before tax and uses native revenue disclosure',()=>{
   const html=render();
@@ -63,4 +65,46 @@ test('returns keep signs and unsafe catalogue, dates and source identifiers are 
   assert.match(html,/Дата не подтверждена/);
   assert.doesNotMatch(html,/<script>|<img>|javascript:/);
   assert.match(html,/#contribution-%22%3Cimg%3E/);
+});
+
+test('WB expenses combine four reward components in a flat table without changing the saved total',()=>{
+  const groups=[expense('acquiring','-36.2800'),expense('logistics','-268.4000'),expense('pickup_reward','-26.7500'),
+    expense('wb_reward_vat','-62.3000'),expense('wb_reward_without_vat','-283.1800'),expense('wb_row_rounding_adjustment','0.0000')];
+  const before=structuredClone(groups);
+  const html=render({item:{...item,groups,metrics:{...item.metrics,wbExpenses:metric('676.9100')}}});
+  const table=wbTable(html);
+  assert.match(table,/>Вознаграждение WB<\/th><td>.*−381,76 ₽/);
+  assert.match(table,/>Логистика<\/th><td>.*−268,40 ₽/);
+  assert.match(table,/>Вознаграждение ПВЗ<\/th><td>.*−26,75 ₽/);
+  assert.match(table,/Итого расходы WB<\/th><td>.*−676,91 ₽/);
+  assert.equal((table.match(/<tr>/g)??[]).length,5);
+  assert.doesNotMatch(table,/<details|Эквайринг|без НДС|НДС вознаграждения|Коррекция|Источники|href=/);
+  assert.match(html,/<details class="situation-wb"><summary>/);
+  assert.deepEqual(groups,before);
+});
+
+test('WB reward preserves signed corrections and rounds only the combined exact amount',()=>{
+  const table=wbTable(render({item:{...item,groups:[expense('acquiring','-0.0049'),expense('wb_reward_vat','-0.0049'),
+    expense('wb_reward_without_vat','-9007199254740993.0000'),expense('wb_row_rounding_adjustment','9007199254740993.0200')]}}));
+  assert.match(table,/>Вознаграждение WB<\/th><td>.*0,01 ₽/);
+  assert.doesNotMatch(table,/−0,01 ₽|0,02 ₽/);
+});
+
+test('missing or invalid WB reward components stay unavailable, not a known subtotal or zero',()=>{
+  for(const amount of [null,'invalid']){
+    const table=wbTable(render({item:{...item,groups:[expense('acquiring','-10.0000'),expense('wb_reward_vat',amount)]}}));
+    assert.match(table,/>Вознаграждение WB<\/th><td><span class="sku-unavailable">Недоступно/);
+    assert.doesNotMatch(table,/10,00 ₽|0,00 ₽/);
+    assert.match(table,/Итого расходы WB<\/th><td>.*−1 299,38 ₽/);
+  }
+  const table=wbTable(render({item:{...item,groups:[expense('logistics','-10.0000')]}}));
+  assert.match(table,/Логистика/);
+  assert.doesNotMatch(table,/Вознаграждение WB/);
+});
+
+test('cost of goods is a plain amount row while technical evidence remains separate',()=>{
+  const html=productLossDetail(data,{},'<a href="/sku/evidence?groupKey=cost">Сохранённая себестоимость</a>','');
+  assert.match(html,/<div class="situation-accounting-row situation-cost"><span>Себестоимость<\/span><span>.*−1 065,00 ₽/);
+  assert.doesNotMatch(html,/<details class="situation-cost"/);
+  assert.match(html,/<details class="situation-technical">[\s\S]*href="\/sku\/evidence\?groupKey=cost"/);
 });
