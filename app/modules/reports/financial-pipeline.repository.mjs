@@ -333,8 +333,8 @@ export function createFinancialPipelineRepository({pool}){
               and result_event.event_key='financial-result-upgrade:v30:store:'||$2
             where least(pointer_range.affected_from,report_range.affected_from) is not null
               and coalesce(pointer_range.current_result_version_no,0)<30
-              and exists(select 1 from mc.product_selections selection
-                where selection.business_id=$1 and selection.store_id=$2 and selection.status='confirmed')
+              and exists(select 1 from mc.active_profile_products selection
+                where selection.business_id=$1 and selection.store_id=$2)
               and not exists(
                 select 1 from mc.reports pending_report
                 join mc.report_versions pending_version on pending_version.id=pending_report.current_version_id

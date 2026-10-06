@@ -441,7 +441,7 @@ export async function getFinancialSyncState(userId,storeId){
                   where newer.report_version_id=rn.report_version_id and newer.status='succeeded'
                     and newer_method.code=current_method.code and (newer_method.version_no>current_method.version_no or (newer_method.version_no=current_method.version_no and newer.catalog_revision>rn.catalog_revision))
                 )) as issue_count,
-            exists(select 1 from mc.product_selections ps where ps.business_id=store.business_id and ps.store_id=store.id and ps.status='confirmed') as selection_ready
+            exists(select 1 from mc.active_profile_products ps where ps.business_id=store.business_id and ps.store_id=store.id) as selection_ready
        from mc.stores store
        join mc.connections connection on connection.business_id=store.business_id and connection.store_id=store.id
        left join lateral (

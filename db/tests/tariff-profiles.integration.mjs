@@ -8,8 +8,18 @@ const integrationUrl=process.env.TARIFF_PROFILES_INTEGRATION_DATABASE_URL;
 if(!integrationUrl)throw new Error('Set TARIFF_PROFILES_INTEGRATION_DATABASE_URL to an empty disposable PostgreSQL database whose name contains "test".');
 if(!new URL(integrationUrl).pathname.slice(1).toLowerCase().includes('test'))throw new Error('Refusing tariff profiles integration outside a database whose name contains "test".');
 process.env.DATABASE_URL=integrationUrl;
-const {migrate,pool}=await import('../../app/infrastructure/database/client.mjs');
+const {pool}=await import('../../app/infrastructure/database/client.mjs');
 test.after(async()=>{await pool.end();});
+
+// This scenario verifies the deliberately inert stage-073 contract. Later
+// runtime cutover and reconciliation have their own lifecycle integration.
+async function migrateFoundation(){
+  const applied=new Set((await pool.query('select version from mc.schema_migrations')).rows.map(row=>row.version));
+  const directory=path.resolve('db/migrations');
+  for(const file of (await readdir(directory)).filter(name=>/^\d+_.+\.sql$/.test(name)&&Number(name.slice(0,3))<=73).sort()){
+    if(!applied.has(Number(file.slice(0,3))))await pool.query(await readFile(path.join(directory,file),'utf8'));
+  }
+}
 
 async function context(scope,action,role){
   const client=await pool.connect();
@@ -69,7 +79,8 @@ test('tariff foundation preserves runtime and history, creates isolated snapshot
   const paid=await fixture(true),free=await fixture(),empty=await fixture(false,false);
   const scopes=[paid,free,empty];
   const before=await Promise.all(scopes.map(snapshot));
-  await migrate();
+  await migrateFoundation();
+  assert.equal((await pool.query('select max(version)::int version from mc.schema_migrations')).rows[0].version,73,'foundation scenario must not enable the later runtime cutover');
   const states=[];
   for(const [index,scope] of scopes.entries()){
     assert.deepEqual(await snapshot(scope),before[index],'migration must not change historical data, subscriptions or financial jobs');
@@ -133,7 +144,7 @@ test('tariff foundation preserves runtime and history, creates isolated snapshot
 
   // Migration runner skips completed versions. Direct SQL reapplication is not
   // supported, following the existing migration contract.
-  await migrate();
+  await migrateFoundation();
   for(const [index,scope] of scopes.entries()){
     assert.deepEqual(await snapshot(scope),before[index]);
     const state=await context(scope,async client=>(await client.query(`select * from mc.tariff_profile_state where business_id=$1`,[scope.business])).rows[0]);

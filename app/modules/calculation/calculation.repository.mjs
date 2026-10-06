@@ -1,4 +1,5 @@
 import { pool, withOwnedBusinessContext } from '../../infrastructure/database/client.mjs';
+import {readTariffContext,tariffPublicationAllowed} from '../billing/tariff-access.mjs';
 import { financialParserVersion } from '../reports/finance.mjs';
 import { calculateFinancialResult, calculateStoreTaxReference, createInputFingerprint, isVerifiedWbResultComponent } from './calculation.mjs';
 import { aggregateDailyFinancialGeneration } from './daily-generation.mjs';
@@ -323,6 +324,8 @@ export async function acknowledgeFinancialCalculationInvalidation(userId,storeId
 
 export async function getCurrentFinancialResult(userId,storeId){
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
+    const scope=await getCurrentPublicationContext(client,businessId,storeId);
+    if(!scope)return null;
     const publication=(await client.query(
       `select p.id as publication_id,p.created_at as published_at,r.id as run_id,r.request_id,
               r.period_start::text as period_start,r.period_end::text as period_end,r.quality,r.missing_reasons,
@@ -377,9 +380,10 @@ export async function getCurrentFinancialResult(userId,storeId){
 
 async function getCurrentPublicationContext(client,businessId,storeId){
   const publication=(await client.query(
-    `select p.id as publication_id,p.created_at as published_at,r.id as run_id,r.request_id,
+    `select p.id as publication_id,p.created_at as published_at,r.id as run_id,r.request_id,q.tariff_scope_token,
             m.code as method_code,m.implementation_version as method_version,b.timezone
        from mc.publications p join mc.calculation_runs r on r.id=p.run_id
+       left join mc.calculation_requests q on q.id=r.request_id
        join mc.method_versions m on m.id=r.method_version_id
        join mc.businesses b on b.id=p.business_id
       where p.business_id=$1 and p.store_id=$2 and p.is_current
@@ -389,6 +393,7 @@ async function getCurrentPublicationContext(client,businessId,storeId){
   const productIds=(await client.query(
     `select product_id from mc.calculation_request_products where request_id=$1 order by product_id`,[publication.request_id]
   )).rows.map(row=>row.product_id);
+  if(!await tariffPublicationAllowed(client,storeId,productIds,publication.tariff_scope_token))return null;
   return{...publication,scope:{type:'selected_products',productIds}};
 }
 
@@ -404,9 +409,10 @@ async function getHistoricalPublishedPeriod(client,businessId,storeId,periodStar
          join mc.method_versions m on m.id=r.method_version_id
         where p.business_id=$1 and p.store_id=$2 and m.implementation_version<>all($5::text[])
      )
-     select p.id as publication_id,p.created_at as published_at,r.id as run_id,r.request_id,
+     select p.id as publication_id,p.created_at as published_at,r.id as run_id,r.request_id,q.tariff_scope_token,
             m.code as method_code,m.implementation_version as method_version,b.timezone
        from mc.publications p join mc.calculation_runs r on r.id=p.run_id
+       left join mc.calculation_requests q on q.id=r.request_id
        join mc.method_versions m on m.id=r.method_version_id join mc.businesses b on b.id=p.business_id
        cross join ordinary_baseline baseline
       where p.business_id=$1 and p.store_id=$2 and p.is_current=false
@@ -420,6 +426,7 @@ async function getHistoricalPublishedPeriod(client,businessId,storeId,periodStar
       const productIds=(await client.query(
         `select product_id from mc.calculation_request_products where request_id=$1 order by product_id`,[publication.request_id]
       )).rows.map(row=>row.product_id);
+      if(!await tariffPublicationAllowed(client,storeId,productIds,publication.tariff_scope_token))continue;
       return{publication:{...publication,scope:{type:'selected_products',productIds}},period};
     }
   }
@@ -662,7 +669,7 @@ async function getPeriodEnvelope(client,runId,periodStart,periodEnd){
 async function getCurrentDailyPublicationContext(client,businessId,storeId){
   const publication=(await client.query(
     `select publication.id as publication_id,publication.created_at as published_at,
-            publication.watermark_generation,method.code as method_code,
+            publication.watermark_generation,generation.tariff_scope_token,method.code as method_code,
             method.implementation_version as method_version,
             expected_method.implementation_version as expected_method_version,business.timezone
        from mc.financial_daily_current_publications current_publication
@@ -685,6 +692,8 @@ async function getCurrentDailyPublicationContext(client,businessId,storeId){
        join mc.financial_daily_generation_products product on product.generation_id=mapped_day.generation_id and product.selected
       where mapped_day.publication_id=$1 order by product.product_id`,[publication.publication_id]
   )).rows.map(row=>row.product_id);
+  if(!await tariffPublicationAllowed(client,storeId,productIds,publication.tariff_scope_token))return null;
+  if((await client.query('select mc.financial_daily_publication_tariff_allowed($1) allowed',[publication.publication_id])).rows[0]?.allowed!==true)return null;
   return{...publication,publication_source:'daily',
     method_upgrade_pending:Boolean(publication.expected_method_version&&publication.expected_method_version!==publication.method_version),
     scope:{type:'selected_products',productIds}};
@@ -936,11 +945,14 @@ export async function wakeFinancialDailyAfterCompatibility(userId,storeId){
 export async function prepareFinancialCalculation(userId,storeId,{targetPeriod=null}={}){
   const target=normalizeTargetPeriod(targetPeriod);
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
+    await client.query('select 1 from mc.businesses where id=$1 for update',[businessId]);
     const store=(await client.query(`select id from mc.stores where business_id=$1 and id=$2 and status='active' for update`,[businessId,storeId])).rows[0];
     if(!store)throw new Error('calculation_store_unavailable');
     const selection=(await client.query(`select id from mc.product_selections where business_id=$1 and store_id=$2 and status='confirmed'`,[businessId,storeId])).rows[0];
     if(!selection)throw new Error('calculation_selection_missing');
-    const products=(await client.query(`select product_id from mc.product_selection_items where selection_id=$1 order by product_id`,[selection.id])).rows.map(row=>row.product_id);
+    const tariff=await readTariffContext(client,businessId);
+    const products=(await client.query(`select product_id from mc.active_profile_products where business_id=$1 and store_id=$2 order by product_id`,[businessId,storeId])).rows.map(row=>row.product_id);
+    if(!products.length)throw new Error('calculation_selection_missing');
     const reportCandidates=await loadCalculationReportCandidates(client,businessId,storeId);
     let reports=selectFullyNormalizedReportPeriods(reportCandidates);
     if(!reports.length)throw new Error('calculation_financial_inputs_missing');
@@ -969,11 +981,12 @@ export async function prepareFinancialCalculation(userId,storeId,{targetPeriod=n
     if(!method)throw new Error('calculation_method_missing');
     const operationLinks=await createConfirmedReturnLinks(client,businessId,storeId,normalized.map(row=>row.normalization_id),method.id);
     const operationLinkIds=operationLinks.map(link=>link.id);
-    const fingerprint=createInputFingerprint({resultMethodVersion:`${method.id}:${method.implementation_version}`,selectedProductIds:products,reportVersionIds:reports.map(row=>row.report_version_id),reportNormalizationIds:normalized.map(row=>row.normalization_id),costVersionIds:costs,operationLinkIds,expenseVersionIds:expenses,taxSettingVersionIds:taxes,periodStart,periodEnd});
+    const fingerprint=createInputFingerprint({tariffScopeToken:tariff.scope_token,resultMethodVersion:`${method.id}:${method.implementation_version}`,selectedProductIds:products,reportVersionIds:reports.map(row=>row.report_version_id),reportNormalizationIds:normalized.map(row=>row.normalization_id),costVersionIds:costs,operationLinkIds,expenseVersionIds:expenses,taxSettingVersionIds:taxes,periodStart,periodEnd});
     const current=(await client.query(`select id,input_fingerprint,status from mc.calculation_requests where business_id=$1 and store_id=$2 and is_latest for update`,[businessId,storeId])).rows[0];
     if(current?.input_fingerprint===fingerprint)return{id:current.id,status:current.status,changed:false};
     if(current)await client.query(`update mc.calculation_requests set is_latest=false,status='superseded',updated_at=now() where id=$1`,[current.id]);
     const generation=(await client.query(`select coalesce(max(generation_no),0)+1 as n from mc.calculation_requests where store_id=$1`,[storeId])).rows[0].n;
+    await client.query("select set_config('app.financial_tariff_scope',$1,true)",[tariff.scope_token]);
     const request=(await client.query(
       `insert into mc.calculation_requests(business_id,store_id,generation_no,selection_id,method_version_id,period_start,period_end,input_fingerprint)
        values($1,$2,$3,$4,$5,$6,$7,$8) returning id,status`,[businessId,storeId,generation,selection.id,method.id,periodStart,periodEnd,fingerprint]
@@ -991,6 +1004,7 @@ export async function prepareFinancialCalculation(userId,storeId,{targetPeriod=n
 
 async function executeFinancialCalculation(userId,requestId){
   const outcome=await withOwnedBusinessContext(userId,async(client,businessId)=>{
+    await client.query('select 1 from mc.businesses where id=$1 for update',[businessId]);
     const request=(await client.query(`select q.*,q.period_start::text as period_start,q.period_end::text as period_end,m.implementation_version
       from mc.calculation_requests q join mc.method_versions m on m.id=q.method_version_id
       where q.business_id=$1 and q.id=$2 and q.is_latest for update of q`,[businessId,requestId])).rows[0];

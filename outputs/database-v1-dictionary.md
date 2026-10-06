@@ -372,6 +372,7 @@
 | last_error_code | text | да | — |
 | requested_at | timestamp with time zone | нет | now() |
 | updated_at | timestamp with time zone | нет | now() |
+| tariff_scope_token | text | да | — |
 
 Ограничения и связи:
 
@@ -834,6 +835,7 @@
 | failure_code | text | да | — |
 | created_at | timestamp with time zone | нет | clock_timestamp() |
 | finished_at | timestamp with time zone | да | — |
+| tariff_scope_token | text | да | — |
 
 Ограничения и связи:
 
@@ -2207,6 +2209,52 @@
 - `CHECK ((source_type = ANY (ARRAY['catalog'::text, 'financial_reports'::text, 'operational_sales_funnel'::text])))`
 - `CHECK ((status = ANY (ARRAY['active'::text, 'paused'::text, 'blocked'::text])))`
 - `UNIQUE (store_id, source_type)`
+
+## tariff_expiry_days
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| moscow_date | date | нет | — |
+| processed_at | timestamp with time zone | нет | clock_timestamp() |
+
+Ограничения и связи:
+
+- `PRIMARY KEY (moscow_date)`
+
+## tariff_expiry_dispatch
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| business_id | uuid | нет | — |
+| period_end | timestamp with time zone | нет | — |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id)`
+- `PRIMARY KEY (business_id)`
+
+## tariff_lifecycle_events
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| event_key | text | нет | — |
+| business_id | uuid | нет | — |
+| event_type | text | нет | — |
+| plan_id | uuid | нет | — |
+| profile_id | uuid | нет | — |
+| confirmed_at | timestamp with time zone | нет | — |
+| period_end | timestamp with time zone | да | — |
+| details | jsonb | нет | '{}'::jsonb |
+| created_at | timestamp with time zone | нет | clock_timestamp() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id)`
+- `FOREIGN KEY (business_id, profile_id) REFERENCES mc.tariff_profiles(business_id, id)`
+- `CHECK (((length(event_key) >= 1) AND (length(event_key) <= 200)))`
+- `CHECK ((event_type = ANY (ARRAY['period_confirmed'::text, 'expired'::text, 'selection_confirmed'::text])))`
+- `PRIMARY KEY (event_key)`
+- `FOREIGN KEY (plan_id) REFERENCES mc.billing_plans(id)`
 
 ## tariff_profile_products
 

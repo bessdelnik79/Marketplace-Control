@@ -6,11 +6,12 @@ const FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
 export async function listStores(userId) {
   return withOwnedBusinessContext(userId, async (client, businessId) => (await client.query(
     `select s.id,s.name,s.status,s.external_account_id,
+            exists(select 1 from mc.active_profile_stores a where a.business_id=s.business_id and a.store_id=s.id) as entitled,
             (c.status='active') as connected,c.status as connection_status,c.scopes,c.last_checked_at
        from mc.stores s
        left join mc.connections c on c.business_id=s.business_id and c.store_id=s.id
       where s.business_id=$1 and s.status<>'archived'
-      order by s.created_at,s.id`,
+      order by entitled desc,s.created_at,s.id`,
     [businessId]
   )).rows);
 }
@@ -32,9 +33,10 @@ export async function getBillingSummary(userId) {
   return withOwnedBusinessContext(userId, async (client, businessId) => {
     const current=(await client.query(
       `select p.code,p.name,v.id as plan_version_id,v.product_limit,v.store_limit,
-              v.price::text,v.currency,v.billing_period,s.status,s.period_end,s.cancel_at_period_end
-         from mc.subscriptions s
-         join mc.billing_plan_versions v on v.id=s.plan_version_id
+              v.price::text,v.currency,v.billing_period,'active' as status,c.period_end,s.cancel_at_period_end,
+              c.selection_confirmed,c.scope_token
+         from mc.effective_tariff_context($1) c join mc.subscriptions s on s.business_id=c.business_id
+         join mc.billing_plan_versions v on v.id=c.plan_version_id
          join mc.billing_plans p on p.id=v.plan_id
         where s.business_id=$1`,[businessId]
     )).rows[0]??null;
@@ -48,7 +50,9 @@ export async function getBillingSummary(userId) {
          ) v on true
         order by case p.code when 'free' then 1 when 'minimum' then 2 when 'plus' then 3 when 'pro' then 4 else 5 end`
     )).rows;
-    return {current,plans};
+    const requested=(await client.query(`select safe_details->>'planCode' as code from mc.audit_events
+      where business_id=$1 and action='tariff_requested' order by created_at desc,id desc limit 1`,[businessId])).rows[0];
+    return {current,plans,requestedCode:requested?.code??null};
   });
 }
 

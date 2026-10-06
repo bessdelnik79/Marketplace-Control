@@ -75,10 +75,10 @@ export async function getOperationalCachedSources(userId,job,{now=new Date()}={}
   return withBusinessContext(userId,job.business_id,async(client,businessId)=>{
     const store=(await client.query(`select s.id,c.credential_generation from mc.stores s
       join mc.connections c on c.business_id=s.business_id and c.store_id=s.id and c.status='active'
-      where s.business_id=$1 and s.id=$2 and s.status='active'`,[businessId,job.store_id])).rows[0];
+      where s.business_id=$1 and s.id=$2 and s.status='active' and exists(select 1 from mc.active_profile_stores a where a.business_id=s.business_id and a.store_id=s.id)`,[businessId,job.store_id])).rows[0];
     if(!store||Number(store.credential_generation)!==job.credential_generation)throw new Error('operational_sync_superseded');
     const selected=(await client.query(`select p.id product_id,p.wb_article::text nm_id from mc.product_selections s
-      join mc.product_selection_items i on i.selection_id=s.id and i.business_id=s.business_id and i.store_id=s.store_id
+      join mc.active_profile_products i on i.selection_id=s.id and i.business_id=s.business_id and i.store_id=s.store_id
       join mc.products p on p.business_id=i.business_id and p.store_id=i.store_id and p.id=i.product_id
       where s.business_id=$1 and s.store_id=$2 and s.status='confirmed' order by p.wb_article,p.id`,[businessId,job.store_id])).rows;
     if(selected.length!==job.products.length||selected.some((row,index)=>`${row.product_id}:${row.nm_id}`!==`${job.products[index].productId}:${job.products[index].nmId}`))throw new Error('operational_selection_changed');
@@ -90,7 +90,7 @@ export async function acquireOperationalSyncLease(userId,storeId,{businessId:tar
   const inContext=targetBusinessId?action=>withBusinessContext(userId,targetBusinessId,action):action=>withOwnedBusinessContext(userId,action);
   const businessId=await inContext(async(client,businessId,role)=>{
     if(!['owner','editor'].includes(role))throw new Error('operational_refresh_forbidden');
-    if(!(await client.query(`select 1 from mc.stores where business_id=$1 and id=$2 and status='active'`,[businessId,storeId])).rowCount)throw new Error('operational_connection_unavailable');
+    if(!(await client.query(`select 1 from mc.stores where business_id=$1 and id=$2 and status='active' and exists(select 1 from mc.active_profile_stores a where a.business_id=$1 and a.store_id=$2)`,[businessId,storeId])).rowCount)throw new Error('operational_connection_unavailable');
     return businessId;
   });
   const client=await leasePool.connect(),key=`operational:${businessId}:${storeId}`;
@@ -132,7 +132,7 @@ export async function beginOperationalSync(userId,storeId,{force=false,dateFrom,
       `insert into mc.sync_streams(business_id,store_id,source_type,next_run_at,status)
        select s.business_id,s.id,'operational_sales_funnel',now(),'active'
          from mc.stores s join mc.connections c on c.business_id=s.business_id and c.store_id=s.id and c.status='active'
-        where s.business_id=$1 and s.id=$2 and s.marketplace_code='wb' and s.status='active'
+        where s.business_id=$1 and s.id=$2 and s.marketplace_code='wb' and s.status='active' and exists(select 1 from mc.active_profile_stores a where a.business_id=s.business_id and a.store_id=s.id)
        on conflict(store_id,source_type) do nothing`,[businessId,storeId]
     );
     const row=(await client.query(
@@ -142,7 +142,7 @@ export async function beginOperationalSync(userId,storeId,{force=false,dateFrom,
          join mc.connection_secrets cs on cs.business_id=c.business_id and cs.connection_id=c.id
          join mc.sync_streams ss on ss.business_id=s.business_id and ss.store_id=s.id
            and ss.source_type='operational_sales_funnel' and ss.status='active'
-        where s.business_id=$1 and s.id=$2 and s.status='active'
+        where s.business_id=$1 and s.id=$2 and s.status='active' and exists(select 1 from mc.active_profile_stores a where a.business_id=s.business_id and a.store_id=s.id)
         for update of ss`,[businessId,storeId]
     )).rows[0];
     if(!row)throw new Error('operational_connection_unavailable');
@@ -152,7 +152,7 @@ export async function beginOperationalSync(userId,storeId,{force=false,dateFrom,
     const products=(await client.query(
       `select p.id as product_id,p.wb_article::text as nm_id
          from mc.product_selections ps
-         join mc.product_selection_items i on i.business_id=ps.business_id and i.store_id=ps.store_id and i.selection_id=ps.id
+         join mc.active_profile_products i on i.business_id=ps.business_id and i.store_id=ps.store_id and i.selection_id=ps.id
          join mc.products p on p.business_id=i.business_id and p.store_id=i.store_id and p.id=i.product_id
         where ps.business_id=$1 and ps.store_id=$2 and ps.status='confirmed'
         order by p.wb_article,p.id`,[businessId,storeId]
@@ -229,12 +229,12 @@ export async function completeOperationalSync(userId,job,{documentId,snapshotId,
     const stream=(await client.query(`select id from mc.sync_streams where id=$1 and business_id=$2 and store_id=$3 for update`,[job.stream_id,businessId,job.store_id])).rows[0];
     const run=stream&&(await client.query(`select status from mc.sync_runs where id=$1 and business_id=$2 and store_id=$3 and stream_id=$4 for update`,[job.run_id,businessId,job.store_id,job.stream_id])).rows[0];
     if(run?.status!=='running')throw new Error('operational_sync_superseded');
-    const connection=(await client.query(`select credential_generation from mc.connections where business_id=$1 and store_id=$2 and status='active'`,[businessId,job.store_id])).rows[0];
+    const connection=(await client.query(`select credential_generation from mc.connections where business_id=$1 and store_id=$2 and status='active' and exists(select 1 from mc.active_profile_stores a where a.business_id=$1 and a.store_id=$2)`,[businessId,job.store_id])).rows[0];
     if(!connection||Number(connection.credential_generation)!==job.credential_generation)throw new Error('operational_sync_superseded');
     const currentProducts=(await client.query(
       `select p.id as product_id,p.wb_article::text as nm_id
          from mc.product_selections ps
-         join mc.product_selection_items i on i.business_id=ps.business_id and i.store_id=ps.store_id and i.selection_id=ps.id
+         join mc.active_profile_products i on i.business_id=ps.business_id and i.store_id=ps.store_id and i.selection_id=ps.id
          join mc.products p on p.business_id=i.business_id and p.store_id=i.store_id and p.id=i.product_id
         where ps.business_id=$1 and ps.store_id=$2 and ps.status='confirmed'
         order by p.wb_article,p.id`,[businessId,job.store_id]
@@ -368,7 +368,7 @@ export async function getOperationalSyncState(userId,storeId){
     `with selected as (
        select count(*)::int as product_count
          from mc.product_selections ps
-         join mc.product_selection_items i
+         join mc.active_profile_products i
            on i.business_id=ps.business_id and i.store_id=ps.store_id and i.selection_id=ps.id
         where ps.business_id=$1 and ps.store_id=$2 and ps.status='confirmed'
      ),history as (
@@ -383,7 +383,7 @@ export async function getOperationalSyncState(userId,storeId){
               and m.metric_date<date_trunc('week',clock_timestamp() at time zone 'Europe/Moscow')::date
               and exists (
                 select 1 from mc.product_selections ps
-                join mc.product_selection_items i
+                join mc.active_profile_products i
                   on i.business_id=ps.business_id and i.store_id=ps.store_id and i.selection_id=ps.id
                where ps.business_id=m.business_id and ps.store_id=m.store_id and ps.status='confirmed' and i.product_id=m.product_id
               )
@@ -424,11 +424,11 @@ export async function requestOperationalRangeRefresh(userId,storeId,start,end,{n
   return withOwnedBusinessContext(userId,async(client,businessId,role)=>{
     if(!['owner','editor'].includes(role))throw new Error('operational_refresh_forbidden');
     await client.query(`select 1 from mc.businesses where id=$1 for share`,[businessId]);
-    const store=(await client.query(`select s.id,c.scopes from mc.stores s join mc.connections c on c.business_id=s.business_id and c.store_id=s.id and c.status='active' where s.business_id=$1 and s.id=$2 and s.status='active' and s.marketplace_code='wb'`,[businessId,storeId])).rows[0];
+    const store=(await client.query(`select s.id,c.scopes from mc.stores s join mc.connections c on c.business_id=s.business_id and c.store_id=s.id and c.status='active' where s.business_id=$1 and s.id=$2 and s.status='active' and exists(select 1 from mc.active_profile_stores a where a.business_id=s.business_id and a.store_id=s.id) and s.marketplace_code='wb'`,[businessId,storeId])).rows[0];
     if(!store)throw new Error('operational_connection_unavailable');
     if(earliest>range.end)return {queued:0,pendingDays:0,status:'unavailable',errorCode:'operational_history_out_of_range'};
     const products=(await client.query(`select i.product_id,p.wb_article::text nm_id from mc.product_selections ps
-      join mc.product_selection_items i on i.selection_id=ps.id and i.business_id=ps.business_id and i.store_id=ps.store_id
+      join mc.active_profile_products i on i.selection_id=ps.id and i.business_id=ps.business_id and i.store_id=ps.store_id
       join mc.products p on p.business_id=i.business_id and p.store_id=i.store_id and p.id=i.product_id
       where ps.business_id=$1 and ps.store_id=$2 and ps.status='confirmed'`,[businessId,storeId])).rows;
     if(!products.length)return {queued:0,status:'unavailable'};
@@ -540,10 +540,10 @@ export async function getOperationalOverviewData(userId,storeId,options={}){
       `select s.id,s.name,s.status,s.marketplace_code,(c.status='active') as connected
          from mc.stores s
          left join mc.connections c on c.business_id=s.business_id and c.store_id=s.id
-        where s.business_id=$1 and s.id=$2 and s.status<>'archived'`,[businessId,storeId]
+        where s.business_id=$1 and s.id=$2 and s.status<>'archived' and exists(select 1 from mc.active_profile_stores a where a.business_id=s.business_id and a.store_id=s.id)`,[businessId,storeId]
     )).rows[0];
     if(!store)return null;
-    const products=(await client.query(`select i.product_id from mc.product_selections ps join mc.product_selection_items i on i.business_id=ps.business_id and i.store_id=ps.store_id and i.selection_id=ps.id where ps.business_id=$1 and ps.store_id=$2 and ps.status='confirmed' order by i.product_id`,[businessId,storeId])).rows;
+    const products=(await client.query(`select i.product_id from mc.product_selections ps join mc.active_profile_products i on i.business_id=ps.business_id and i.store_id=ps.store_id and i.selection_id=ps.id where ps.business_id=$1 and ps.store_id=$2 and ps.status='confirmed' order by i.product_id`,[businessId,storeId])).rows;
     if(!products.length)return {store,current:null,rows:[],today:range.today,period:{start:range.start,end:range.end,timezone:'Europe/Moscow'},
       updateStatus:await readOperationalProgress(client,businessId,storeId,range,products,[],options.now??new Date())};
     const current={period_start:range.start,period_end:range.end,quality:'complete',missing_reasons:[],product_ids:products.map(row=>row.product_id),fetched_at:options.now??new Date()};
@@ -588,5 +588,5 @@ export async function getOperationalOverviewData(userId,storeId,options={}){
 
 export async function listOperationalSyncCandidates(limit=50){
   if(!Number.isInteger(limit)||limit<1||limit>100)throw new Error('operational_invalid_candidate_limit');
-  return (await pool.query(`select * from mc.list_operational_sync_candidates($1)`,[limit])).rows;
+  return(await pool.query(`select * from mc.list_operational_sync_candidates($1)`,[limit])).rows;
 }

@@ -29,6 +29,7 @@ async function fixture({current='100.0000',amounts=['10.0000','20.0000','30.0000
     await client.query(`insert into mc.businesses(id,name) values($1,'Comparison test')`,[ids.business]);
     await client.query(`insert into mc.memberships(business_id,user_id,role) values($1,$2,'owner')`,[ids.business,ids.user]);
     await client.query(`insert into mc.stores(id,business_id,external_account_id,name,status) values($1,$2,$3,'Comparison store','active')`,[ids.store,ids.business,ids.store]);
+    await client.query(`select mc.apply_tariff_period($1,'plus',$2,clock_timestamp())`,[ids.business,`scope:${randomUUID()}`]);
     await client.query(`insert into mc.products(id,business_id,store_id,wb_article,seller_article) values($1,$2,$3,720001,'Comparison')`,[ids.product,ids.business,ids.store]);
     const stream=(await client.query(`insert into mc.sync_streams(business_id,store_id,source_type) values($1,$2,'catalog') returning id`,[ids.business,ids.store])).rows[0];
     const run=(await client.query(`insert into mc.sync_runs(business_id,store_id,stream_id,status) values($1,$2,$3,'succeeded') returning id`,[ids.business,ids.store,stream.id])).rows[0];

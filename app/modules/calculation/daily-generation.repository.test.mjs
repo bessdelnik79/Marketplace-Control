@@ -23,7 +23,7 @@ test('repository supersedes an older event before loading financial inputs',asyn
   const client={
     async query(sql){
       calls.push(String(sql));
-      if(sql==='begin'||sql==='commit'||sql==='rollback')return{rows:[]};
+      if(sql==='begin'||sql==='commit'||sql==='rollback'||String(sql).includes('mc.businesses'))return{rows:[]};
       if(String(sql).includes('establish_financial_daily_context'))return{rows:[{
         business_id:'business-1',store_id:'store-1',event_generation:'3',watermark_generation:'4',
         affected_from:'2026-09-21',affected_to:'2026-09-27'

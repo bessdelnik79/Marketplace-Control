@@ -3,11 +3,12 @@ export function createCostsRepository({
 }) {
   async function getCostState(userId, storeId) {
     return withOwnedBusinessContext(userId, async(client, businessId, role) => {
+      if(!(await client.query('select 1 from mc.active_profile_stores where business_id=$1 and store_id=$2',[businessId,storeId])).rowCount)return{canEdit:false,products:[],rows:[],summary:{totalVariants:0,configuredVariants:0},lastImport:null};
       const products =(await client.query(`select p.id,p.wb_article,p.seller_article,p.title,p.image_url,p.historical_deleted,
               v.id as variant_id,coalesce(v.wb_external_variant_id,v.external_variant_id) as external_variant_id,v.size_label,v.color_label,
               barcode.identifier_value as barcode,cv.id as cost_version_id,
               cv.unit_cost::text,c.effective_from
-         from mc.product_selection_items i
+         from mc.active_profile_products i
          join mc.products p on (p.business_id,p.store_id,p.id)=(i.business_id,i.store_id,i.product_id)
          join mc.variants v on (v.business_id,v.store_id,v.product_id)=(p.business_id,p.store_id,p.id) and v.status='active'
          left join lateral (
@@ -116,10 +117,10 @@ export function createCostsRepository({
     if (!date || date.startsWith('0000-')) throw new Error('cost_invalid_date');
     return withOwnedBusinessContext(userId, async(client, businessId, role) => {
       if (!['owner', 'editor'].includes(role)) throw new Error('cost_write_forbidden');
-      const store = (await client.query(`select id from mc.stores where business_id=$1 and id=$2 and status='active' for share`,[businessId, storeId])).rows[0];
+      const store = (await client.query(`select id from mc.stores where business_id=$1 and id=$2 and status='active' and exists(select 1 from mc.active_profile_stores a where a.business_id=$1 and a.store_id=$2) for share`,[businessId, storeId])).rows[0];
       if (!store) throw new Error('store_not_found');
       const variant = (await client.query(`select v.id,v.product_id from mc.variants v
-        join mc.product_selection_items i on (i.business_id,i.store_id,i.product_id)=(v.business_id,v.store_id,v.product_id)
+        join mc.active_profile_products i on (i.business_id,i.store_id,i.product_id)=(v.business_id,v.store_id,v.product_id)
         where v.business_id=$1 and v.store_id=$2 and v.id=$3 and v.status='active' for share of v`,[businessId, storeId, variantId])).rows[0];
       if (!variant) throw new Error('cost_variant_not_found');
       await client.query(`insert into mc.variant_costs(business_id,store_id,product_id,variant_id,effective_from)
@@ -146,7 +147,7 @@ export function createCostsRepository({
     if (!storeId || !cleanName || !Array.isArray(rows) || !rows.length || rows.length > 10000 || !/^[a-f0-9]{64}$/.test(cleanChecksum)) throw new Error('cost_import_invalid');
     return withOwnedBusinessContext(userId, async(client, businessId, role) => {
       if (!['owner', 'editor'].includes(role)) throw new Error('cost_write_forbidden');
-      const store =(await client.query(`select id from mc.stores where business_id=$1 and id=$2 and status='active'`,[businessId, storeId])).rows[0];
+      const store =(await client.query(`select id from mc.stores where business_id=$1 and id=$2 and status='active' and exists(select 1 from mc.active_profile_stores a where a.business_id=$1 and a.store_id=$2)`,[businessId, storeId])).rows[0];
       if (!store) throw new Error('store_not_found');
       const document =(await client.query(`insert into mc.source_documents(business_id,store_id,origin,document_type,external_document_id,checksum,completeness)
        values($1,$2,'user_file','variant_costs',$3,$4,'unknown') returning id`,[businessId, storeId, cleanName, cleanChecksum])).rows[0];
@@ -157,7 +158,7 @@ export function createCostsRepository({
       })])).rows[0];
       const variants =(await client.query(`select p.id as product_id,p.wb_article::text,v.id as variant_id,coalesce(v.wb_external_variant_id,v.external_variant_id) as external_variant_id,
               array_remove(array_agg(vi.identifier_value),null) as barcodes
-         from mc.product_selection_items i
+         from mc.active_profile_products i
          join mc.products p on (p.business_id,p.store_id,p.id)=(i.business_id,i.store_id,i.product_id)
          join mc.variants v on (v.business_id,v.store_id,v.product_id)=(p.business_id,p.store_id,p.id) and v.status='active'
          left join mc.variant_identifiers vi on (vi.business_id,vi.store_id,vi.variant_id)=(v.business_id,v.store_id,v.id)

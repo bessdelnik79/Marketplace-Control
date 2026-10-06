@@ -117,14 +117,17 @@ export async function getCatalogState(userId,storeId){
     )).rows[0]??null;
     const products=(await client.query(
       `select p.id,p.wb_article,p.seller_article,p.title,p.image_url,p.status,p.historical_deleted,
-              exists(select 1 from mc.product_selection_items i where i.business_id=p.business_id and i.store_id=p.store_id and i.product_id=p.id) as selected
+              exists(select 1 from mc.active_profile_products i where i.business_id=p.business_id and i.store_id=p.store_id and i.product_id=p.id) as selected
          from mc.products p where p.business_id=$1 and p.store_id=$2
-          and (p.status='active' or exists(select 1 from mc.product_selection_items i where i.business_id=p.business_id and i.store_id=p.store_id and i.product_id=p.id))
+          and (p.status='active' or exists(select 1 from mc.active_profile_products i where i.business_id=p.business_id and i.store_id=p.store_id and i.product_id=p.id))
         order by coalesce(p.title,p.seller_article),p.wb_article`,[businessId,storeId]
     )).rows;
-    const selection=(await client.query(`select id,status,product_limit_snapshot from mc.product_selections where business_id=$1 and store_id=$2`,[businessId,storeId])).rows[0]??null;
-    const plan=(await client.query(`select v.product_limit from mc.subscriptions s join mc.billing_plan_versions v on v.id=s.plan_version_id where s.business_id=$1`,[businessId])).rows[0];
-    return {stream,products,selection,productLimit:plan?.product_limit??0};
+    const plan=(await client.query(`select c.*,p.code,v.product_limit,
+      (select count(*)::int from mc.active_profile_products where business_id=$1 and store_id<>$2) other_product_count
+      from mc.effective_tariff_context($1) c join mc.billing_plan_versions v on v.id=c.plan_version_id
+      join mc.billing_plans p on p.id=v.plan_id`,[businessId,storeId])).rows[0];
+    const selection=plan?.selection_confirmed?(await client.query(`select id,status,product_limit_snapshot from mc.product_selections where business_id=$1 and store_id=$2`,[businessId,storeId])).rows[0]??null:null;
+    return {stream,products,selection,productLimit:Math.max(0,(plan?.product_limit??0)-(plan?.other_product_count??0)),freeSelectionLocked:plan?.code==='free'&&plan?.selection_confirmed===true};
   });
 }
 
@@ -136,7 +139,7 @@ export async function confirmProductSelection(userId,{storeId,productIds}){
       [businessId,storeId]
     )).rows[0];
     if(!document)throw new Error('catalog_not_ready');
-    return (await client.query(`select mc.confirm_product_selection($1,$2,$3::uuid[]) as id`,[storeId,document.id,productIds])).rows[0];
+    return (await client.query(`select mc.choose_tariff_profile_products($1,$2,$3::uuid[],'replace') as id`,[storeId,document.id,productIds])).rows[0];
   });
 }
 

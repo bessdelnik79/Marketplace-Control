@@ -53,7 +53,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,73);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,75);
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.recover_historical_catalog(uuid,uuid)'::regprocedure"));
   const transportRoundingDefinition=(await one(
   `select pg_get_functiondef(
@@ -376,14 +376,14 @@ assert.match(
   const selection = await one(selectSql,[store.id,doc.id,products.slice(0,3).map(p=>p.id)]);
   assert.equal((await one('select count(*)::int as n from mc.product_selection_items')).n,3);
   pass('three articles selected; variant count does not consume quota');
-  await rejects(selectSql,[store.id,doc.id,[products[3].id]],/already selected/,'selection cannot be replaced');
+  await rejects(selectSql,[store.id,doc.id,[products[3].id]],/initial free selection is frozen/,'initial free selection cannot be replaced');
   await rejects('delete from mc.product_selection_items where product_id=$1',[products[0].id],/immutable/,'selected product cannot be removed');
   await rejects('update mc.product_selection_items set product_id=$1 where product_id=$2',[products[3].id,products[0].id],/immutable/,'selected product cannot be swapped');
-  await rejects('insert into mc.product_selection_items(business_id,store_id,selection_id,product_id) values($1,$2,$3,$4)',[b.id,store.id,selection.id,products[3].id],/unavailable/,'confirmed selection cannot be extended outside the guarded function');
+  await rejects('insert into mc.product_selection_items(business_id,store_id,selection_id,product_id) values($1,$2,$3,$4)',[b.id,store.id,selection.id,products[3].id],/profile selection API/,'confirmed selection cannot be extended outside the guarded function');
   await rejects('delete from mc.product_selections where id=$1',[selection.id],/immutable/,'selection cannot be reset by deleting header');
   await q('update mc.stores set status=$1 where id=$2',['archived',store.id]);
   await q('update mc.stores set status=$1 where id=$2',['active',store.id]);
-  await rejects(selectSql,[store.id,doc.id,[products[3].id]],/already selected/,'reconnecting same store retains selection');
+  await rejects(selectSql,[store.id,doc.id,[products[3].id]],/initial free selection is frozen/,'reconnecting same store retains initial free selection');
 
   await rejects("insert into mc.sync_streams(business_id,store_id,source_type) values($1,$2,'unknown')",[b.id,store.id],/check constraint/,'unknown operational source type is rejected');
   const operationalStream=await insert('sync_streams',{business_id:b.id,store_id:store.id,source_type:'operational_sales_funnel'});
@@ -433,11 +433,13 @@ assert.match(
 
   const b2 = await insert('businesses',{name:'Business B'});
   await insert('memberships',{business_id:b2.id,user_id:user.id});
+  await context(b2.id,user.id);
   const store2 = await insert('stores',{business_id:b2.id,external_account_id:'cabinet-b',name:'B',status:'active'});
   const foreign = await product(store2,123451);
+  await context(b.id,user.id);
   await rejects('insert into mc.variants(business_id,store_id,product_id,external_variant_id) values($1,$2,$3,$4)',[b.id,store.id,foreign.id,'X'],/foreign key/,'foreign store product cannot be linked');
   pass('same WB article is allowed in a different store');
-  await rejects(selectSql,[store2.id,doc.id,[foreign.id]],/store not available/,'selection function checks tenant and store');
+  await rejects(selectSql,[store2.id,doc.id,[foreign.id]],/active store from current business/,'selection function checks tenant and store');
 
   const base = {business_id:b.id,store_id:store.id};
   const cost = await insert('variant_costs',{...base,product_id:products[0].id,variant_id:small.id,effective_from:'2026-09-01'});
@@ -688,16 +690,22 @@ assert.match(
   await insert('result_evidence',{...base,result_line_id:combinedStoreLine.id,expense_version_id:storeExpenseVersion.id,contribution_amount:'-123.4567'});
   await q("update mc.calculation_runs set status='succeeded',quality='complete',missing_reasons='[]',finished_at=now() where id=$1",[combinedRun.id]);
   pass('financial-result-v8 seals selected plus store totals without weakening evidence guards');
-  const run = await insert('calculation_runs',{...base,selection_id:selection.id,method_version_id:method.id,period_start:'2026-08-31',period_end:'2026-09-06',input_fingerprint:'inputs-1'});
+  const publicationRequest=await insert('calculation_requests',{...base,generation_no:10000,selection_id:selection.id,method_version_id:method.id,period_start:'2026-08-31',period_end:'2026-09-06',input_fingerprint:'inputs-1',is_latest:false});
+  for(const selected of products.slice(0,3))await insert('calculation_request_products',{...base,request_id:publicationRequest.id,product_id:selected.id});
+  await insert('calculation_request_inputs',{...base,request_id:publicationRequest.id,report_normalization_id:normalization.id});
+  await insert('calculation_request_inputs',{...base,request_id:publicationRequest.id,report_version_id:rv.id});
+  await insert('calculation_request_inputs',{...base,request_id:publicationRequest.id,cost_version_id:costV1.id});
+  const run = await insert('calculation_runs',{...base,selection_id:selection.id,method_version_id:method.id,period_start:'2026-08-31',period_end:'2026-09-06',input_fingerprint:'inputs-1',request_id:publicationRequest.id,attempt_no:1});
+  await insert('calculation_inputs',{...base,run_id:run.id,report_normalization_id:normalization.id});
   await insert('calculation_inputs',{...base,run_id:run.id,report_version_id:rv.id});
   await insert('calculation_inputs',{...base,run_id:run.id,cost_version_id:costV1.id});
   const line = await insert('result_lines',{...base,run_id:run.id,product_id:products[0].id,variant_id:small.id,accounting_date:'2026-09-01',category_code:'revenue',amount_signed:2000,quality:'complete'});
   await rejects("update mc.calculation_runs set status='succeeded',finished_at=now() where id=$1",[run.id],/reconcile/,'cannot finish a result without evidence');
   await insert('result_evidence',{...base,result_line_id:line.id,financial_component_id:component.id,contribution_amount:2000});
   const costLine = await insert('result_lines',{...base,run_id:run.id,product_id:products[0].id,variant_id:small.id,accounting_date:'2026-09-01',category_code:'cost_of_goods',amount_signed:-900,quality:'complete'});
-  await rejects('insert into mc.result_evidence(business_id,store_id,result_line_id,cost_version_id,quantity,contribution_amount) values($1,$2,$3,$4,2,-940)',[b.id,store.id,costLine.id,costMV.id],/match product, variant/,'cannot use another size cost in financial evidence');
-  await insert('result_evidence',{...base,result_line_id:costLine.id,cost_version_id:costV1.id,quantity:2,contribution_amount:-900});
-  await rejects('insert into mc.result_lines(business_id,store_id,run_id,product_id,accounting_date,category_code,amount_signed,quality) values($1,$2,$3,$4,$5,$6,1,$7)',[b.id,store.id,run.id,products[3].id,'2026-09-01','revenue','complete'],/foreign key/,'results cannot include unselected products');
+  await rejects('insert into mc.result_evidence(business_id,store_id,result_line_id,cost_version_id,source_operation_version_id,quantity,contribution_amount) values($1,$2,$3,$4,$5,2,-940)',[b.id,store.id,costLine.id,costMV.id,ov.id],/match product, variant/,'cannot use another size cost in financial evidence');
+  await insert('result_evidence',{...base,result_line_id:costLine.id,cost_version_id:costV1.id,source_operation_version_id:ov.id,quantity:2,contribution_amount:-900});
+  await rejects('insert into mc.result_lines(business_id,store_id,run_id,product_id,accounting_date,category_code,amount_signed,quality) values($1,$2,$3,$4,$5,$6,1,$7)',[b.id,store.id,run.id,products[3].id,'2026-09-01','revenue','complete'],/outside frozen request snapshot/,'results cannot include unselected products');
   await rejects('insert into mc.result_lines(business_id,store_id,run_id,product_id,accounting_date,category_code,amount_signed,quality) values($1,$2,$3,$4,$5,$6,1,$7)',[b.id,store.id,run.id,products[0].id,'2026-10-01','revenue','complete'],/outside/,'result date must be within run');
   await rejects('insert into mc.result_lines(business_id,store_id,run_id,product_id,accounting_date,category_code,amount_signed,quality) values($1,$2,$3,$4,$5,$6,1,$7)',[b.id,store.id,run.id,products[0].id,'2026-09-01','payout','complete'],/cannot be profit/,'settlements cannot be counted as profit');
   await q("update mc.calculation_runs set status='succeeded',finished_at=now(),quality='partial',missing_reasons=$2 where id=$1",[run.id,JSON.stringify(['Only selected products; external costs not calculated in fixture'])]);
@@ -1069,7 +1077,7 @@ assert.match(
   pass('financial scheduler discovery and worker functions stay closed to public');
 
   // Deliberately use a non-owner role: superusers bypass row-level security.
-  await db.exec('create role mc_test_reader; grant usage on schema mc to mc_test_reader; grant select on all tables in schema mc to mc_test_reader; grant execute on function mc.context_business_id(),mc.context_user_id() to mc_test_reader; set role mc_test_reader;');
+  await db.exec('create role mc_test_reader; grant usage on schema mc to mc_test_reader; grant select on all tables in schema mc to mc_test_reader; grant execute on function mc.context_business_id(),mc.context_user_id(),mc.effective_tariff_context(uuid),mc.financial_tariff_scope_matches(uuid,uuid[],text),mc.financial_daily_publication_tariff_allowed(uuid) to mc_test_reader; set role mc_test_reader;');
   await context(b.id,user.id);
   assert.equal((await one('select count(*)::int as n from mc.stores')).n,1);
   assert.equal((await one('select count(*)::int as n from mc.products where store_id=$1',[store2.id])).n,0);
@@ -1112,19 +1120,23 @@ assert.match(
   pass('forced RLS permits valid non-owner tax and expense workflows with audit while isolating foreign writes');
   await db.exec('reset role;');
   await context(b.id,user.id);
+  await one(`select mc.apply_tariff_period($1,'minimum','schema-ended-paid',clock_timestamp())`,[b.id]);
+  await one(selectSql,[store.id,doc.id,products.map(p=>p.id)]);
   await q("update mc.subscriptions set status='ended' where business_id=$1",[b.id]);
-  assert.equal((await one('select count(*)::int as n from mc.selected_products')).n,0);
-  assert.equal((await one('select count(*)::int as n from mc.current_daily_results')).n,0);
-  assert.equal((await one('select count(*)::int as n from mc.product_selection_items where business_id=$1',[b.id])).n,3);
-  pass('ended subscription hides analytical views without deleting selected history');
-  await q("update mc.subscriptions set status='active' where business_id=$1",[b.id]);
   assert.equal((await one('select count(*)::int as n from mc.selected_products')).n,3);
-  pass('reactivation restores the same selection');
+  assert.equal((await one('select count(*)::int as n from mc.selected_products where id=$1',[products[3].id])).n,0);
+  assert.equal((await one('select count(*)::int as n from mc.product_selection_items where business_id=$1',[b.id])).n,4);
+  pass('ended paid subscription restores frozen free scope without deleting paid history');
+  await q("update mc.subscriptions set status='active' where business_id=$1",[b.id]);
+  assert.equal((await one('select count(*)::int as n from mc.selected_products')).n,4);
+  pass('reactivation restores the saved paid selection');
 
   // A new plan proves counts are data, not hardcoded tariff names.
   const custom = await insert('billing_plans',{code:'test_four',name:'Four products / two stores'});
   const customV = await insert('billing_plan_versions',{plan_id:custom.id,version_no:1,product_limit:4,store_limit:2,price:123,billing_period:'month'});
-  await q('update mc.subscriptions set plan_version_id=$1 where business_id=$2',[customV.id,b.id]);
+  await q(`update mc.subscriptions set period_start='2020-01-01',period_end='2020-02-01' where business_id=$1`,[b.id]);
+  await one(`select mc.apply_tariff_period($1,'test_four','schema-custom-four',clock_timestamp())`,[b.id]);
+  await one(selectSql,[store.id,doc.id,products.slice(0,3).map(p=>p.id)]);
   const extra = await insert('stores',{business_id:b.id,external_account_id:'a-second',name:'A second',status:'active'});
   const ep1 = await product(extra,9991), ep2 = await product(extra,9992);
   const extraDoc = await insert('source_documents',{business_id:b.id,store_id:extra.id,origin:'wb_api',document_type:'catalog',checksum:'cat-extra',completeness:'partial'});
@@ -1134,7 +1146,12 @@ assert.match(
   await one(selectSql,[extra.id,extraDoc.id,[ep1.id]]);
   pass('new plan permits another store with remaining product allowance');
   await rejects('insert into mc.expenses(business_id,store_id,product_id) values($1,$2,$3)',[b.id,store.id,ep1.id],/foreign key/,'expense cannot use a selected product from another store of the same business');
-  await rejects('update mc.subscriptions set plan_version_id=$1 where business_id=$2',[byCode.free.id,b.id],/downgrade/,'unresolved downgrade cannot silently remove selected products');
+  await rejects('update mc.subscriptions set plan_version_id=$1 where business_id=$2',[byCode.free.id,b.id],/saved profile exceeds target tariff limits/,'raw subscription change cannot bypass the atomic profile transition');
+  await q(`update mc.subscriptions set period_start='2020-01-01',period_end='2020-02-01' where business_id=$1`,[b.id]);
+  await one(`select mc.expire_tariff_subscription($1)`,[b.id]);
+  assert.equal((await one('select count(*)::int as n from mc.selected_products')).n,3);
+  assert.equal((await one('select count(*)::int as n from mc.product_selection_items where business_id=$1',[b.id])).n,5);
+  pass('expiry restores initial free quota while retaining every paid historical product');
   await rejects('update mc.billing_plan_versions set product_limit=999 where id=$1',[byCode.free.id],/immutable/,'published plan conditions require a new version');
 
   const extensionBusiness = await insert('businesses',{name:'Selection extension test'});
@@ -1146,17 +1163,23 @@ assert.match(
   const extensionProducts=[];
   for(let i=1;i<=4;i++) extensionProducts.push(await product(extensionStore,880000+i));
   await one(selectSql,[extensionStore.id,extensionDoc.id,extensionProducts.slice(0,3).map(p=>p.id)]);
-  await q('update mc.subscriptions set plan_version_id=$1 where business_id=$2',[byCode.minimum.id,extensionBusiness.id]);
+  await one(`select mc.apply_tariff_period($1,'minimum','schema-extension-paid',clock_timestamp())`,[extensionBusiness.id]);
+  await one(selectSql,[extensionStore.id,extensionDoc.id,extensionProducts.slice(0,3).map(p=>p.id)]);
   const extensionOperationalStream=await insert('sync_streams',{business_id:extensionBusiness.id,store_id:extensionStore.id,source_type:'operational_sales_funnel',next_run_at:new Date(Date.now()+3600000)});
   await one('select mc.add_products_to_selection($1,$2::uuid[]) as id',[extensionStore.id,[extensionProducts[3].id]]);
   assert.equal((await one('select count(*)::int as n from mc.product_selection_items where business_id=$1',[extensionBusiness.id])).n,4);
   assert.ok(new Date((await one('select next_run_at from mc.sync_streams where id=$1',[extensionOperationalStream.id])).next_run_at)<=new Date(Date.now()+5000));
   assert.ok(new Date((await one('select next_run_at from mc.operational_sync_targets where store_id=$1',[extensionStore.id])).next_run_at)<=new Date(Date.now()+5000));
   pass('upgraded plan can extend a confirmed selection without replacing prior products');
-  await rejects('select mc.add_products_to_selection($1,$2::uuid[])',[extensionStore.id,[extensionProducts[3].id]],/already selected/,'selected product cannot be added twice');
+  const extensionScope=await one('select scope_token from mc.effective_tariff_context()');
+  await one('select mc.add_products_to_selection($1,$2::uuid[])',[extensionStore.id,[extensionProducts[3].id]]);
+  assert.equal((await one('select scope_token from mc.effective_tariff_context()')).scope_token,extensionScope.scope_token);
+  assert.equal((await one('select count(*)::int as n from mc.active_profile_products')).n,4);
+  pass('adding an already active paid product is idempotent without duplicating quota');
 
   const isolated = await insert('businesses',{name:'Deferred selection test'});
   await insert('memberships',{business_id:isolated.id,user_id:user.id});
+  await context(isolated.id,user.id);
   const isolatedStore = await insert('stores',{business_id:isolated.id,external_account_id:'isolated',name:'isolated',status:'active'});
   const isolatedDoc = await insert('source_documents',{business_id:isolated.id,store_id:isolatedStore.id,origin:'wb_api',document_type:'catalog',checksum:'isolated',completeness:'complete'});
   await rejects('insert into mc.product_selections(business_id,store_id,plan_version_id,catalog_document_id,confirmed_by,product_limit_snapshot) values($1,$2,$3,$4,$5,3)',[isolated.id,isolatedStore.id,byCode.free.id,isolatedDoc.id,user.id],/nonempty and confirmed/,'cannot commit an unfinished selection header');

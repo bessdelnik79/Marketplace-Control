@@ -11,11 +11,11 @@ const exactPositiveAmount=value=>{
 };
 export async function getExpenseState(userId,storeId){
   return withOwnedBusinessContext(userId,async(client,businessId)=>{
-    const store=(await client.query(`select id from mc.stores where business_id=$1 and id=$2 and status<>'archived'`,[businessId,storeId])).rows[0];
+    const store=(await client.query(`select id from mc.stores where business_id=$1 and id=$2 and status<>'archived' and exists(select 1 from mc.active_profile_stores a where a.business_id=$1 and a.store_id=$2)`,[businessId,storeId])).rows[0];
     if(!store)throw new Error('store_not_found');
     const products=(await client.query(
       `select p.id,p.wb_article::text,p.seller_article,p.title
-         from mc.product_selection_items i
+         from mc.active_profile_products i
          join mc.products p on (p.business_id,p.store_id,p.id)=(i.business_id,i.store_id,i.product_id)
         where i.business_id=$1 and i.store_id=$2 order by coalesce(p.title,p.seller_article),p.wb_article`,[businessId,storeId]
     )).rows;
@@ -26,14 +26,14 @@ export async function getExpenseState(userId,storeId){
          from mc.expenses e
          join mc.expense_versions v on (v.business_id,v.store_id,v.expense_id,v.id)=(e.business_id,e.store_id,e.id,e.current_version_id)
          left join mc.products p on (p.business_id,p.store_id,p.id)=(e.business_id,e.store_id,e.product_id)
-        where e.business_id=$1 and e.store_id=$2
+        where e.business_id=$1 and e.store_id=$2 and (e.product_id is null or exists(select 1 from mc.active_profile_products a where a.business_id=e.business_id and a.store_id=e.store_id and a.product_id=e.product_id))
         order by v.period_start desc,v.created_at desc,e.id`,[businessId,storeId]
     )).rows;
     const history=(await client.query(
       `select v.id as version_id,v.expense_id,v.version_no,v.category,v.amount::text,v.period_start,v.period_end,
               v.channel_name,v.description,v.recognition_method,v.state,v.origin,v.created_at
          from mc.expense_versions v join mc.expenses e on (e.business_id,e.store_id,e.id)=(v.business_id,v.store_id,v.expense_id)
-        where v.business_id=$1 and v.store_id=$2 order by v.created_at desc,v.version_no desc`,[businessId,storeId]
+        where v.business_id=$1 and v.store_id=$2 and (e.product_id is null or exists(select 1 from mc.active_profile_products a where a.business_id=e.business_id and a.store_id=e.store_id and a.product_id=e.product_id)) order by v.created_at desc,v.version_no desc`,[businessId,storeId]
     )).rows;
     const lastImport=(await client.query(
       `select b.id,d.external_document_id as file_name,b.status,b.created_at,b.applied_at,
@@ -66,8 +66,8 @@ export async function saveExpense(userId,{storeId,expenseId,...input}){
   if(id&&!uuidPattern.test(id))throw new Error('expense_id_invalid');
   return withOwnedBusinessContext(userId,async(client,businessId,role)=>{
     if(!['owner','editor'].includes(role))throw new Error('expense_write_forbidden');
-    const store=(await client.query(`select id from mc.stores where business_id=$1 and id=$2 and status='active'`,[businessId,storeId])).rows[0];if(!store)throw new Error('store_not_found');
-    if(value.productId){const product=(await client.query(`select product_id from mc.product_selection_items where business_id=$1 and store_id=$2 and product_id=$3`,[businessId,storeId,value.productId])).rows[0];if(!product)throw new Error('expense_product_invalid');}
+    const store=(await client.query(`select id from mc.stores where business_id=$1 and id=$2 and status='active' and exists(select 1 from mc.active_profile_stores a where a.business_id=$1 and a.store_id=$2)`,[businessId,storeId])).rows[0];if(!store)throw new Error('store_not_found');
+    if(value.productId){const product=(await client.query(`select product_id from mc.active_profile_products where business_id=$1 and store_id=$2 and product_id=$3`,[businessId,storeId,value.productId])).rows[0];if(!product)throw new Error('expense_product_invalid');}
     let expense=id?(await client.query(`select id,product_id,current_version_id from mc.expenses where business_id=$1 and store_id=$2 and id=$3 for update`,[businessId,storeId,id])).rows[0]:null;
     if(id&&!expense)throw new Error('expense_not_found');
     if(expense&&expense.product_id!==value.productId)throw new Error('expense_scope_immutable');
@@ -94,7 +94,9 @@ export async function voidExpense(userId,{storeId,expenseId}){
     if(!['owner','editor'].includes(role))throw new Error('expense_write_forbidden');
     const row=(await client.query(
       `select e.id,e.current_version_id,v.* from mc.expenses e join mc.expense_versions v on v.id=e.current_version_id
-        where e.business_id=$1 and e.store_id=$2 and e.id=$3 for update of e`,[businessId,storeId,expenseId]
+        where e.business_id=$1 and e.store_id=$2 and e.id=$3
+          and exists(select 1 from mc.active_profile_stores a where a.business_id=e.business_id and a.store_id=e.store_id)
+          and (e.product_id is null or exists(select 1 from mc.active_profile_products a where a.business_id=e.business_id and a.store_id=e.store_id and a.product_id=e.product_id)) for update of e`,[businessId,storeId,expenseId]
     )).rows[0];if(!row)throw new Error('expense_not_found');if(row.state==='voided')return{expenseId,versionId:row.current_version_id,changed:false};
     const versionNo=(await client.query(`select coalesce(max(version_no),0)+1 as n from mc.expense_versions where expense_id=$1`,[expenseId])).rows[0].n;
     const version=(await client.query(
@@ -113,7 +115,7 @@ export async function importExpenses(userId,{storeId,fileName,checksum,rows}){
   if(!storeId||!cleanName||!Array.isArray(rows)||!rows.length||rows.length>10000||!/^[a-f0-9]{64}$/.test(cleanChecksum))throw new Error('expense_import_invalid');
   return withOwnedBusinessContext(userId,async(client,businessId,role)=>{
     if(!['owner','editor'].includes(role))throw new Error('expense_write_forbidden');
-    const store=(await client.query(`select id from mc.stores where business_id=$1 and id=$2 and status='active'`,[businessId,storeId])).rows[0];if(!store)throw new Error('store_not_found');
+    const store=(await client.query(`select id from mc.stores where business_id=$1 and id=$2 and status='active' and exists(select 1 from mc.active_profile_stores a where a.business_id=$1 and a.store_id=$2)`,[businessId,storeId])).rows[0];if(!store)throw new Error('store_not_found');
     const document=(await client.query(
       `insert into mc.source_documents(business_id,store_id,origin,document_type,external_document_id,checksum,completeness)
        values($1,$2,'user_file','additional_expenses',$3,$4,'unknown') returning id`,[businessId,storeId,cleanName,cleanChecksum]
@@ -123,7 +125,7 @@ export async function importExpenses(userId,{storeId,fileName,checksum,rows}){
        values($1,$2,$3,'expenses',$4,'validating',$5::jsonb) returning id`,[businessId,storeId,document.id,userId,JSON.stringify({fileName:cleanName,checksum:cleanChecksum})]
     )).rows[0];
     const products=(await client.query(
-      `select p.id,p.wb_article::text from mc.product_selection_items i join mc.products p on (p.business_id,p.store_id,p.id)=(i.business_id,i.store_id,i.product_id)
+      `select p.id,p.wb_article::text from mc.active_profile_products i join mc.products p on (p.business_id,p.store_id,p.id)=(i.business_id,i.store_id,i.product_id)
         where i.business_id=$1 and i.store_id=$2`,[businessId,storeId]
     )).rows,productsByArticle=new Map(products.map(row=>[row.wb_article,row]));
     const requestedIds=[...new Set(rows.map(row=>String(row?.expenseId??'').trim()).filter(Boolean))];

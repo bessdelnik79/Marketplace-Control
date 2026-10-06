@@ -35,6 +35,7 @@ await context(ids.user,ids.business,async client=>{
   await client.query(`insert into mc.businesses(id,name) values($1,'P04 test'),($2,'Foreign test')`,[ids.business,ids.foreignBusiness]);
   await client.query(`insert into mc.memberships(business_id,user_id,role) values($1,$2,'owner'),($3,$4,'owner')`,[ids.business,ids.user,ids.foreignBusiness,ids.foreignUser]);
   await client.query(`insert into mc.stores(id,business_id,external_account_id,name,status) values($1,$2,'p04-seller','P04 store','active')`,[ids.store,ids.business]);
+  await client.query(`select mc.apply_tariff_period($1,'plus',$2,clock_timestamp())`,[ids.business,`operational:${randomUUID()}`]);
   const connection=(await client.query(`insert into mc.connections(business_id,store_id,secret_ref,scopes,status) values($1,$2,'database:p04','["analytics","statistics"]'::jsonb,'active') returning id`,[ids.business,ids.store])).rows[0];
   await client.query(`insert into mc.connection_secrets(business_id,connection_id,ciphertext,nonce,auth_tag) values($1,$2,decode('abcd','hex'),decode(repeat('01',12),'hex'),decode(repeat('02',16),'hex'))`,[ids.business,connection.id]);
   const catalog=(await client.query(`insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness) values($1,$2,'wb_api','catalog','p04-catalog','complete') returning id`,[ids.business,ids.store])).rows[0];

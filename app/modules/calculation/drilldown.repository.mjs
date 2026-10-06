@@ -1,4 +1,5 @@
 import { pool as defaultPool } from '../../infrastructure/database/client.mjs';
+import {tariffPublicationAllowed} from '../billing/tariff-access.mjs';
 import { aggregateDailyPublicationPeriod, aggregatePublishedPeriodEnvelopes, loadPublishedPeriodEnvelopes } from './calculation.repository.mjs';
 import { buildFinancialPeriodOverview, financialResultIncludesStore, validateCalendarPeriod } from '../overview/financial-overview.mjs';
 import { buildSituations } from '../overview/situations.mjs';
@@ -151,9 +152,17 @@ export function createPublishedDrilldownRepository({pool=defaultPool}={}){
       if(!membership||!['owner','editor','viewer'].includes(membership.role))invalid('drilldown_not_found');
       const businessId=membership.business_id;
       await client.query("select set_config('app.business_id',$1,true)",[businessId]);
-      if(!(await client.query(`select id from mc.stores where business_id=$1 and id=$2`,[businessId,input.storeId])).rows.length)invalid('drilldown_not_found');
+      if(!(await client.query(`select id from mc.stores where business_id=$1 and id=$2
+        and exists(select 1 from mc.active_profile_stores a where a.business_id=$1 and a.store_id=$2)`,[businessId,input.storeId])).rows.length)invalid('drilldown_not_found');
       const snapshot=await(input.publicationSource==='legacy'?legacySnapshot:dailySnapshot)(client,businessId,input);
       const {envelope,productIds,publication,method,lines,taxFacts}=snapshot;
+      if(!await tariffPublicationAllowed(client,input.storeId,productIds))invalid('drilldown_not_found');
+      const allowed=(await client.query(input.publicationSource==='daily'
+        ?'select mc.financial_daily_publication_tariff_allowed($1) allowed'
+        :`select mc.financial_tariff_scope_matches($2,array(select product_id from mc.calculation_request_products where request_id=r.request_id order by product_id),q.tariff_scope_token) allowed
+          from mc.publications p join mc.calculation_runs r on r.id=p.run_id left join mc.calculation_requests q on q.id=r.request_id where p.id=$1`,
+      input.publicationSource==='daily'?[input.publicationId]:[input.publicationId,input.storeId])).rows[0]?.allowed;
+      if(allowed!==true)invalid('drilldown_not_found');
       if(envelope.quality==='unavailable'&&!envelope.missing_reasons.includes('drilldown_period_unavailable')&&!envelope.missing_reasons.includes('drilldown_publication_incompatible'))envelope.missing_reasons.push('drilldown_period_unavailable');
       const products=(await client.query(`select id,title,seller_article,wb_article::text,image_url,historical_deleted,status from mc.products
         where business_id=$1 and store_id=$2 and id=any($3::uuid[]) order by id`,[businessId,input.storeId,productIds])).rows.map(row=>({

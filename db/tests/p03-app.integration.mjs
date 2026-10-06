@@ -1006,4 +1006,170 @@ test('P0.5 readers pin legacy and mixed-generation daily evidence under ordinary
   assert.deepEqual((await reader.readPublishedSituations(loss.user,lossInput)).items,fired.items,'old firings remain pinned after the current publication changes');
 });
 
+test('tariff lifecycle gates actual published results and pinned evidence, preserves inputs and rejects expiry after a publication lock wait',async t=>{
+  const scope={user:randomUUID(),business:randomUUID(),store:randomUUID()};
+  const periodStart='2026-09-07',periodEnd='2026-09-13';
+  const scoped=async action=>{
+    const client=await pool.connect();
+    try{
+      await client.query('begin');
+      await client.query("select set_config('app.user_id',$1,true),set_config('app.business_id',$2,true)",[scope.user,scope.business]);
+      const value=await action(client);await client.query('commit');return value;
+    }catch(error){await client.query('rollback');throw error;}finally{client.release();}
+  };
+  const fixture=await scoped(async client=>{
+    await client.query(`insert into mc.users(id,display_name,email_verified_at) values($1,'Tariff financial owner',now())`,[scope.user]);
+    await client.query(`insert into mc.businesses(id,name) values($1,'Tariff financial lifecycle')`,[scope.business]);
+    await client.query(`insert into mc.memberships(business_id,user_id,role) values($1,$2,'owner')`,[scope.business,scope.user]);
+    await client.query(`insert into mc.stores(id,business_id,external_account_id,name,status) values($1,$2,$3,'Tariff financial store','active')`,[scope.store,scope.business,scope.store]);
+    const catalog=(await client.query(`insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness) values($1,$2,'wb_api','catalog',$3,'complete') returning id`,[scope.business,scope.store,randomUUID()])).rows[0].id;
+    const products=[];
+    for(let index=0;index<5;index++){
+      const product=(await client.query(`insert into mc.products(business_id,store_id,wb_article,seller_article) values($1,$2,$3,$4) returning id`,[scope.business,scope.store,790001+index,`TARIFF-FIN-${index}`])).rows[0];
+      const variant=(await client.query(`insert into mc.variants(business_id,store_id,product_id,external_variant_id) values($1,$2,$3,'default') returning id`,[scope.business,scope.store,product.id])).rows[0];
+      const barcode=`479000000000${index}`;
+      await client.query(`insert into mc.variant_identifiers(business_id,store_id,variant_id,identifier_type,identifier_value) values($1,$2,$3,'barcode',$4)`,[scope.business,scope.store,variant.id,barcode]);
+      products.push({...product,variantId:variant.id,barcode});
+    }
+    await client.query(`select mc.confirm_product_selection($1,$2,$3::uuid[])`,[scope.store,catalog,products.slice(0,2).map(product=>product.id)]);
+    const free=(await client.query(`select * from mc.effective_tariff_context()`)).rows[0];
+    await client.query(`select mc.apply_tariff_period($1,'plus',$2,clock_timestamp())`,[scope.business,randomUUID()]);
+    await client.query(`select mc.choose_tariff_profile_products($1,$2,$3::uuid[])`,[scope.store,catalog,products.slice(2).map(product=>product.id)]);
+    for(const product of products){
+      const cost=(await client.query(`insert into mc.variant_costs(business_id,store_id,product_id,variant_id,effective_from) values($1,$2,$3,$4,'2026-01-01') returning id`,[scope.business,scope.store,product.id,product.variantId])).rows[0];
+      const version=(await client.query(`insert into mc.cost_versions(business_id,store_id,cost_id,version_no,unit_cost,origin,changed_by) values($1,$2,$3,1,40,'manual',$4) returning id`,[scope.business,scope.store,cost.id,scope.user])).rows[0];
+      await client.query(`update mc.variant_costs set current_version_id=$1 where id=$2`,[version.id,cost.id]);
+    }
+    const setting=(await client.query(`insert into mc.tax_settings(business_id,effective_from) values($1,'2026-01-01') returning id`,[scope.business])).rows[0];
+    const tax=(await client.query(`insert into mc.tax_setting_versions(business_id,tax_setting_id,version_no,regime_code,usn_rate_fraction,vat_mode,changed_by) values($1,$2,1,'usn_income',0.06,'exempt',$3) returning id`,[scope.business,setting.id,scope.user])).rows[0];
+    await client.query(`update mc.tax_settings set current_version_id=$1 where id=$2`,[tax.id,setting.id]);
+    const stream=(await client.query(`insert into mc.sync_streams(business_id,store_id,source_type,status) values($1,$2,'financial_reports','active') returning id`,[scope.business,scope.store])).rows[0];
+    const run=(await client.query(`insert into mc.sync_runs(business_id,store_id,stream_id,requested_from,requested_to,status,started_at) values($1,$2,$3,$4,$5,'running',now()) returning id`,[scope.business,scope.store,stream.id,periodStart,periodEnd])).rows[0];
+    return{products,catalog,free,streamId:stream.id,runId:run.id};
+  });
+  const rows=fixture.products.map((product,index)=>({externalRowKey:`sale-${index}`,rowChecksum:`tariff-sale-${index}`,rawData:{reportId:979000,rrDate:'2026-09-08',docTypeName:'Продажа',sellerOperName:'Продажа',nmId:790001+index,sku:product.barcode,quantity:1,retailAmount:'100',forPay:'100'}}));
+  await completeFinancialSync(scope.user,{business_id:scope.business,store_id:scope.store,stream_id:fixture.streamId,run_id:fixture.runId,date_from:periodStart,date_to:periodEnd},
+    {documentId:randomUUID(),reports:[{externalReportId:'979000',periodStart,periodEnd,checksum:'tariff-financial-report',rows}]});
+  const retained=()=>scoped(async client=>({
+    reports:(await client.query(`select id,current_version_id from mc.reports where business_id=$1 order by id`,[scope.business])).rows,
+    rows:(await client.query(`select id,report_version_id,row_checksum from mc.report_rows where business_id=$1 order by id`,[scope.business])).rows,
+    costs:(await client.query(`select id,cost_id,unit_cost::text from mc.cost_versions where business_id=$1 order by id`,[scope.business])).rows,
+    fetchJobs:(await client.query(`select count(*)::int count from mc.jobs where business_id=$1 and job_type='financial_report_fetch'`,[scope.business])).rows[0].count
+  }));
+  const saved=await retained();
+  const oldFetch=globalThis.fetch;
+  globalThis.fetch=async()=>assert.fail('tariff financial lifecycle must use saved sources without WB requests');
+  t.after(()=>{globalThis.fetch=oldFetch;});
+  const paidRun=await runFinancialCalculation(scope.user,scope.store);
+  assert.equal(paidRun.quality,'complete',JSON.stringify(paidRun));
+  const paid=await getPublishedFinancialPeriod(scope.user,scope.store,periodStart,periodEnd);
+  assert.equal(paid.totals.availableResultAfterTax,'162.0000');
+  const paidInput={storeId:scope.store,publicationSource:'legacy',publicationId:paid.publication_id,periodStart,periodEnd};
+  const role=`tariff_financial_${randomUUID().replaceAll('-','')}`;
+  await pool.query(`create role ${role} nologin nosuperuser nobypassrls`);
+  await pool.query(`grant usage on schema mc to ${role}`);
+  await pool.query(`grant select on all tables in schema mc to ${role}`);
+  for(const signature of ['mc.context_business_id()','mc.context_user_id()','mc.effective_tariff_context(uuid)','mc.financial_tariff_scope_matches(uuid,uuid[],text)','mc.financial_daily_publication_tariff_allowed(uuid)'])await pool.query(`grant execute on function ${signature} to ${role}`);
+  t.after(async()=>{await pool.query(`drop owned by ${role}`);await pool.query(`drop role ${role}`);});
+  const runtimePool={async connect(){
+    const client=await pool.connect();await client.query(`set role ${role}`);
+    return{query:client.query.bind(client),release(){client.query('reset role').then(()=>client.release(),error=>client.release(error));}};
+  }};
+  const {createPublishedDrilldownRepository}=await import('../../app/modules/calculation/drilldown.repository.mjs');
+  const reader=createPublishedDrilldownRepository({pool:runtimePool});
+  const paidList=await reader.readPublishedSkuList(scope.user,paidInput);
+  assert.deepEqual(paidList.items.map(item=>item.productId).sort(),fixture.products.slice(2).map(product=>product.id).sort());
+  const paidItem=paidList.items[0],revenue=paidItem.groups.find(group=>group.categoryCode==='revenue');
+  const evidence=await reader.readPublishedContributions(scope.user,{...paidInput,productId:paidItem.productId,groupKey:revenue.groupKey});
+  assert.equal(evidence.evidenceStatus,'matched');
+  assert.ok(evidence.items[0].source);
+  const sourceInput={...paidInput,productId:paidItem.productId,groupKey:revenue.groupKey,lineRef:evidence.items[0].lineRef};
+  await scoped(client=>client.query(`update mc.subscriptions set period_start='2020-01-01',period_end='2020-02-01' where business_id=$1`,[scope.business]));
+  const audits=await scoped(async client=>(await client.query(`select count(*)::int count from mc.tariff_lifecycle_events where business_id=$1`,[scope.business])).rows[0].count);
+  const expired=await getPublishedFinancialPeriod(scope.user,scope.store,periodStart,periodEnd);
+  assert.ok(expired===null||expired.quality==='unavailable'&&expired.totals===null,'paid aggregate is never relabeled as the free result');
+  for(const read of [()=>reader.readPublishedSkuList(scope.user,paidInput),()=>reader.readPublishedSkuCard(scope.user,{...paidInput,productId:paidItem.productId}),()=>reader.readPublishedContributions(scope.user,sourceInput)])await assert.rejects(read,/drilldown_not_found/);
+  assert.equal(await scoped(async client=>(await client.query(`select count(*)::int count from mc.tariff_lifecycle_events where business_id=$1`,[scope.business])).rows[0].count),audits,'expiry GETs do not write a transition');
+  assert.deepEqual(await retained(),saved);
+  const freeRun=await runFinancialCalculation(scope.user,scope.store);
+  assert.equal(freeRun.quality,'complete');
+  const freePeriod=await getPublishedFinancialPeriod(scope.user,scope.store,periodStart,periodEnd);
+  assert.equal(freePeriod.totals.availableResultAfterTax,'108.0000');
+  const freeInput={...paidInput,publicationId:freePeriod.publication_id};
+  assert.deepEqual((await reader.readPublishedSkuList(scope.user,freeInput)).items.map(item=>item.productId).sort(),fixture.products.slice(0,2).map(product=>product.id).sort());
+  await scoped(client=>client.query(`select mc.expire_tariff_subscription($1)`,[scope.business]));
+  await scoped(client=>client.query(`select mc.apply_tariff_period($1,'plus',$2,clock_timestamp())`,[scope.business,randomUUID()]));
+  assert.deepEqual(await scoped(async client=>(await client.query(`select product_id from mc.active_profile_products order by product_id`)).rows.map(row=>row.product_id)),fixture.products.slice(2).map(product=>product.id).sort());
+  const renewedRun=await runFinancialCalculation(scope.user,scope.store);
+  assert.equal(renewedRun.quality,'complete');
+  assert.deepEqual(await retained(),saved,'repayment keeps exact saved source and cost identities');
+  const renewed=await getPublishedFinancialPeriod(scope.user,scope.store,periodStart,periodEnd);
+  assert.equal(renewed.totals.availableResultAfterTax,'162.0000');
+  const renewedInput={...paidInput,publicationId:renewed.publication_id};
+  assert.deepEqual((await reader.readPublishedSkuList(scope.user,renewedInput)).items.map(item=>item.productId).sort(),fixture.products.slice(2).map(product=>product.id).sort());
+
+  // Actual legacy calculation/publishing and a same-tariff renewal acquire the
+  // business lock in the same order. Both must finish, rather than deadlock.
+  await scoped(client=>client.query(`select mc.choose_tariff_profile_products($1,$2,$3::uuid[])`,
+    [scope.store,fixture.catalog,fixture.products.slice(2,4).map(product=>product.id)]));
+  const concurrent=await Promise.allSettled([
+    scoped(async client=>{await client.query(`set local statement_timeout='15s'`);return client.query(`select mc.apply_tariff_period($1,'plus',$2,clock_timestamp())`,[scope.business,randomUUID()]);}),
+    runFinancialCalculation(scope.user,scope.store,{targetPeriod:{periodStart,periodEnd}})
+  ]);
+  assert.ok(concurrent.every(result=>result.status==='fulfilled'),concurrent.map(result=>result.reason?.message).join(', '));
+  assert.equal(concurrent[1].value.changed,true,'changed scope must reach the legacy publisher');
+  assert.notEqual(concurrent[1].value.publicationId,renewed.publication_id);
+
+  // Build through the real daily worker using a lease assigned only to this
+  // disposable fixture's outbox job; do not drain other integration tenants.
+  const workerId=`tariff-lockwait:${randomUUID()}`,leaseToken=randomUUID();
+  const job=await scoped(async client=>{
+    const event=(await client.query(`select dispatch_job_id from mc.financial_input_events where business_id=$1 and store_id=$2 order by event_generation desc limit 1`,[scope.business,scope.store])).rows[0];
+    const leased=(await client.query(`update mc.jobs set status='running',attempt_count=attempt_count+1,worker_id=$2,lease_token=$3,
+      lease_until=clock_timestamp()+interval '5 minutes',heartbeat_at=clock_timestamp(),updated_at=clock_timestamp()
+      where id=$1 returning *`,[event.dispatch_job_id,workerId,leaseToken])).rows[0];
+    await client.query(`update mc.job_dispatch set status='running',attempt_count=$2,lease_until=$3 where job_id=$1`,[leased.id,leased.attempt_count,leased.lease_until]);
+    return leased;
+  });
+  const built=await financialDailyGenerationRepository.build(job.id,leaseToken,workerId);
+  assert.equal(built.superseded,false,JSON.stringify(built));
+  const generation=await scoped(async client=>(await client.query(`select g.*,p.id publication_id from mc.financial_daily_generations g
+    join mc.financial_daily_publications p on p.generation_id=g.id where g.business_id=$1 and g.job_id=$2`,[scope.business,job.id])).rows[0]);
+  assert.ok(generation,'fixture must have a real successful published daily generation');
+  const publish=client=>client.query(`select p.id from mc.publish_financial_daily_generation($1,$2,$3,$4,$5) p`,[job.id,leaseToken,workerId,generation.id,generation.source_event_generation]);
+  assert.equal((await scoped(publish)).rows[0].id,generation.publication_id,'idempotent publication succeeds while paid scope is live');
+  const ending=await scoped(async client=>(await client.query(`update mc.subscriptions set period_start=clock_timestamp()-interval '1 day',period_end=clock_timestamp()+interval '5 seconds'
+    where business_id=$1 returning period_end`,[scope.business])).rows[0].period_end);
+  const lockClient=await pool.connect(),publisher=await pool.connect();
+  let pending;
+  try{
+    await lockClient.query('begin');
+    await lockClient.query(`select id from mc.businesses where id=$1 for update`,[scope.business]);
+    await publisher.query('begin');
+    await publisher.query(`set local statement_timeout='12s'`);
+    const pid=(await publisher.query(`select pg_backend_pid() pid`)).rows[0].pid;
+    pending=publish(publisher).then(value=>({value}),error=>({error}));
+    const deadline=Date.now()+3000;
+    let waiting=false;
+    while(Date.now()<deadline){
+      waiting=(await pool.query(`select wait_event_type='Lock' waiting from pg_stat_activity where pid=$1`,[pid])).rows[0]?.waiting===true;
+      if(waiting)break;
+      await new Promise(resolve=>setTimeout(resolve,25));
+    }
+    assert.equal(waiting,true,'publication must actually wait on the held business lock');
+    await lockClient.query(`select pg_sleep(greatest(0,extract(epoch from ($1::timestamptz-clock_timestamp())))+0.1)`,[ending]);
+    await lockClient.query('commit');
+    const outcome=await pending;
+    assert.match(outcome.error?.message??'publication incorrectly succeeded',/financial_tariff_scope_stale/,
+      'a statement started before expiry must use the fresh post-lock access clock');
+    await publisher.query('rollback');
+  }finally{
+    await lockClient.query('rollback').catch(()=>{});
+    if(pending)await pending;
+    await publisher.query('rollback').catch(()=>{});
+    lockClient.release();publisher.release();
+  }
+  assert.deepEqual(await retained(),saved);
+});
+
 test.after(async()=>{await pool.end();});

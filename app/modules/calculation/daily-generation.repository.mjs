@@ -1,4 +1,5 @@
 import { financialParserVersion } from '../reports/finance.mjs';
+import {readTariffContext} from '../billing/tariff-access.mjs';
 import {
   calculateFinancialResult,calculateStoreTaxReference,createInputFingerprint,isVerifiedWbResultComponent
 } from './calculation.mjs';
@@ -62,7 +63,8 @@ async function loadSnapshot(client,context){
   const{business_id:businessId,store_id:storeId}=context;
   const selection=(await client.query(`select id from mc.product_selections where business_id=$1 and store_id=$2 and status='confirmed'`,[businessId,storeId])).rows[0];
   if(!selection)throw new Error('financial_daily_selection_missing');
-  const products=(await client.query(`select product_id from mc.product_selection_items where selection_id=$1 order by product_id`,[selection.id])).rows.map(row=>row.product_id);
+  const tariff=await readTariffContext(client,businessId);
+  const products=(await client.query(`select product_id from mc.active_profile_products where business_id=$1 and store_id=$2 order by product_id`,[businessId,storeId])).rows.map(row=>row.product_id);
   if(!products.length)throw new Error('financial_daily_selection_missing');
   const candidates=await loadCalculationReportCandidates(client,businessId,storeId);
   const reports=selectFullyNormalizedReportPeriods(candidates).filter(row=>row.period_start<=context.affected_to);
@@ -133,12 +135,12 @@ async function loadSnapshot(client,context){
     `select v.id,s.effective_from::text,v.regime_code,v.usn_rate_fraction::text,v.vat_mode,v.state
        from mc.tax_settings s join mc.tax_setting_versions v on v.id=s.current_version_id
       where s.business_id=$1 and s.effective_from<=$2 order by s.effective_from,v.id`,[businessId,affectedEnd])).rows;
-  const fingerprint=createInputFingerprint({resultMethodVersion:`${method.id}:${method.implementation_version}`,selectedProductIds:products,
+  const fingerprint=createInputFingerprint({tariffScopeToken:tariff.scope_token,resultMethodVersion:`${method.id}:${method.implementation_version}`,selectedProductIds:products,
     reportVersionIds:reports.map(row=>row.report_version_id),reportNormalizationIds:normalizationIds,costVersionIds:costs.map(row=>row.id),
     emptyWeekCoverageIds:emptyWeeks.map(row=>`${row.id}:${row.empty_confirmed_by_job_id}`),
     operationLinkIds:operationLinks.map(link=>link.id),expenseVersionIds:expenses.map(row=>row.id),taxSettingVersionIds:taxSettings.map(row=>row.id),
     periodStart:affectedStart,periodEnd:affectedEnd});
-  return{businessId,storeId,selection,products,reports,affectedReports,emptyWeeks,affectedStart,affectedEnd,method,
+  return{businessId,storeId,selection,products,reports,affectedReports,emptyWeeks,affectedStart,affectedEnd,method,tariff,
     parserMethod:parserMethods[0],operationLinks,components,operations,costs,expenses,taxSettings,fingerprint};
 }
 
@@ -251,9 +253,12 @@ export function createFinancialDailyGenerationRepository({pool,publicationReposi
     return transaction(pool,async client=>{
       const context=await establish(client,jobId,leaseToken,workerId);
       if(!context)return{superseded:true};
+      await client.query('select 1 from mc.businesses where id=$1 for update',[context.business_id]);
       if(Number(context.event_generation)<Number(context.watermark_generation))return{superseded:true};
+      if(!(await client.query('select 1 from mc.active_profile_products where business_id=$1 and store_id=$2 limit 1',[context.business_id,context.store_id])).rowCount)return{superseded:true};
       const snapshot=await loadSnapshot(client,context);
       const daily=fillCoverageGaps(combineDailyFinancialGenerations(calculateFinancialPeriods(snapshot)),context.affected_from,context.affected_to);
+      await client.query("select set_config('app.financial_tariff_scope',$1,true)",[snapshot.tariff.scope_token]);
       const generation=(await client.query(`select * from mc.start_financial_daily_generation($1,$2,$3,$4,$5,$6,$7)`,
         [jobId,leaseToken,workerId,context.event_generation,snapshot.fingerprint,snapshot.parserMethod.method_version_id,snapshot.method.id])).rows[0];
       if(generation.status!=='building'){
@@ -268,6 +273,9 @@ export function createFinancialDailyGenerationRepository({pool,publicationReposi
       if(final.status!=='succeeded')return{superseded:final.status==='superseded',generationId:final.id,quality:final.quality};
       const publication=await publicationRepository.publish(client,{jobId,leaseToken,workerId,generationId:final.id,eventGeneration:context.event_generation});
       return{superseded:false,generationId:final.id,publicationId:publication.id,quality:final.quality};
+    }).catch(error=>{
+      if(error.code==='23514'&&error.message==='financial_tariff_scope_stale')return{superseded:true};
+      throw error;
     });
   }
   return{build};

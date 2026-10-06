@@ -184,6 +184,7 @@ function sortedUnique(values) {
 
 export function createInputFingerprint({
   resultMethodVersion,
+  tariffScopeToken = null,
   selectedProductIds = [],
   reportVersionIds = [],
   reportNormalizationIds = [],
@@ -197,6 +198,7 @@ export function createInputFingerprint({
 }) {
   const range = period(periodStart, periodEnd);
   const payload = {
+    ...(tariffScopeToken?{tariff_scope_token:requiredId(tariffScopeToken)}:{}),
     result_method_version: requiredId(resultMethodVersion),
     selection_snapshot_product_ids_sorted: sortedUnique(selectedProductIds),
     report_version_ids_sorted: sortedUnique(reportVersionIds),
