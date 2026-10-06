@@ -90,3 +90,35 @@ test('inactive tariff store is rejected before resolving the current or pinned p
  const h=setup({listStores:async()=>[{id:'store',selectable:false}]});
  await h.run('/sku?storeId=store');assert.equal(h.response.status,404);assert.deepEqual(h.calls,[]);
 });
+
+test('product-loss detail reads only first revenue pages with the exact pinned context',async()=>{
+  const groups=[{groupKey:'sales',categoryCode:'revenue'}, {groupKey:'returns',categoryCode:'revenue_return'},
+    {groupKey:'cost',categoryCode:'cogs'}];
+  const sources=[];
+  const s=setup({readPublishedSituation:async(user,input)=>({context:{publication:{id:input.publicationId}},
+    item:{id:input.situationId,kind:'product_loss',productId:'product',groups}}),
+    readPublishedContributions:async(user,input)=>{sources.push({user,input});return{items:[],totalItems:0,nextCursor:null,
+      evidenceStatus:'matched',reconciliation:{status:'matched'},moneyReconciliation:{status:'matched'}};}});
+  await s.run(route('/situation',{situationId:'product_loss:product',limit:'1',cursor:'ignored'}));
+  assert.deepEqual(sources.map(call=>call.input),groups.slice(0,2).map(group=>({...base,productId:'product',
+    groupKey:group.groupKey,cursor:null,limit:100})));
+  assert.ok(sources.every(call=>call.user==='viewer'));
+  assert.equal(s.response.body.data.revenuePreview.soldQuantity,'0');
+  assert.equal(s.response.body.data.revenuePreview.rows.length,0);
+  assert.ok(!s.calls.some(call=>call.name==='overview'));
+});
+
+test('penalty detail does not read contributions or add a revenue preview',async()=>{
+  const s=setup({readPublishedSituation:async()=>({item:{id:'penalty',kind:'penalty',groups:[]}})});
+  await s.run(route('/situation',{situationId:'penalty'}));
+  assert.equal(s.response.status,200);
+  assert.equal(Object.hasOwn(s.response.body.data,'revenuePreview'),false);
+  assert.ok(!s.calls.some(call=>call.name==='sources'));
+});
+
+test('product-loss preview does not hide unexpected reader failures',async()=>{
+  const s=setup({readPublishedSituation:async()=>({item:{kind:'product_loss',productId:'product',
+    groups:[{categoryCode:'revenue',groupKey:'sales'}]}}),
+    readPublishedContributions:async()=>{throw new Error('unexpected database error');}});
+  await assert.rejects(s.run(route('/situation',{situationId:'product_loss:product'})),/unexpected database error/);
+});

@@ -207,10 +207,12 @@ export function createPublishedDrilldownRepository({pool=defaultPool}={}){
       imageUrl:item.imageUrl,isHistorical:item.isHistorical}:null;};
     const allGroups=[...model.items.flatMap(item=>item.groups),...model.storeLines];
     const items=result.items.map(item=>{
+      const sku=item.kind==='product_loss'?model.items.find(row=>row.productId===item.productId):null;
       const groups=allGroups.filter(group=>item.kind==='product_loss'
         ?group.scope==='selected_product'&&group.productId===item.productId&&group.categoryCode!=='estimated_usn_tax'
         :group.categoryCode==='penalty').map(group=>({...publicGroup(group),product:productFor(group.productId)}));
-      return{...item,product:productFor(item.productId),groups,rule:item.kind==='product_loss'?{
+      return{...item,...(sku?{metrics:sku.metrics,quality:sku.quality,missingReasons:sku.missingReasons}:{}),
+        product:productFor(item.productId),groups,rule:item.kind==='product_loss'?{
         description:'Сохранённый результат выбранного SKU до налога отрицателен. Правило оценивается только при полном финансовом результате и подтверждённой связи товара.',
         comparison:'less_than_zero',inputs:[{label:'Результат SKU до налога',value:item.metric.value,unit:'RUB'}]
       }:{description:'Знаковое сальдо сохранённых строк штрафов и пени не равно нулю. Обратные операции включены со своим знаком, общие строки магазина учтены отдельно.',

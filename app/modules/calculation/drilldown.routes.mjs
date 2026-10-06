@@ -1,4 +1,5 @@
 import { validateCalendarPeriod } from '../overview/financial-overview.mjs';
+import { readSituationRevenuePreview } from './situation-preview.mjs';
 
 const paths = new Set(['/sku', '/sku/card', '/sku/sources', '/situations', '/situation']);
 const contextKeys = ['storeId', 'publicationSource', 'publicationId', 'periodStart', 'periodEnd'];
@@ -64,6 +65,7 @@ export function createDrilldownRoutes({listStores, getFinancialOverview, readPub
         data=await readPublishedSituations(current.user_id,input);renderer=situationsListPage;
       } else if (url.pathname === '/situation') {
         data=await readPublishedSituation(current.user_id,{...input,situationId:params.get('situationId')});renderer=situationDetailPage;
+        if(data.item.kind==='product_loss')data.revenuePreview=await readSituationRevenuePreview(current.user_id,input,data.item,readPublishedContributions);
       } else if (url.pathname === '/sku') {
         data = await readPublishedSkuList(current.user_id, {...input, ...listState});
         renderer = skuListPage;

@@ -1,5 +1,6 @@
 import { frame, esc } from './pages.mjs';
 import { publishedPageView } from './sku.page.mjs';
+import { productLossDetail } from './situation-detail.mjs';
 
 const { money, metadata, reasonList, badge, reconciliation, productTitle, productMeta, contextParams, query, categories }=publishedPageView;
 const ruleNames={product_loss:'Отрицательный результат SKU до налога',penalty:'Штрафы и пени',return_growth:'Рост возвратов'};
@@ -47,5 +48,6 @@ export function situationsListPage(user,stores=[],data=null,options={}){
 export function situationDetailPage(user,stores=[],data=null,options={}){
   options={...options,publicationPath:'/situations'};
   const context=data?.context,item=data?.item;
+  if(item?.kind==='product_loss')return render(user,stores,data,options,'/situation',productLossDetail(data,options,`${metadata(context,options)}${state(data)}${rule(item)}${data.reconciliation?reconciliation(data.reconciliation):''}`,groups(item,context,options)));
   return render(user,stores,data,options,'/situation',`${anchor('/situations','Вернуться ко всем ситуациям',context,options)} · ${anchor('/overview','Вернуться к обзору',context,options)}<h1>${esc(item?itemTitle(item):'Подробности ситуации')}</h1>${metadata(context,options)}${state(data)}${item?`${item.kind==='product_loss'?`<h2>${esc(productTitle(item.product))}</h2>${productMeta(item.product??{})}`:''}${metric(item)}${rule(item)}${item.productId?anchor('/sku/card','Состав результата SKU',context,options,{productId:item.productId}):''}<h2>${item.kind==='penalty'?'Состав знакового сальдо штрафов и пени':'Состав результата до налога'}</h2>${item.kind==='penalty'?'<p>Сальдо включает начисления и обратные операции со своими знаками, включая SKU и общие строки магазина.</p>':'<p>Показаны сохранённые вклады результата SKU до налога.</p>'}${groups(item,context,options)}${data?.reconciliation?reconciliation(data.reconciliation):''}`:'<p>Подробности ситуации недоступны. Неизвестный результат не заменён нулём.</p>'}`);
 }

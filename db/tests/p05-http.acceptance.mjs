@@ -52,10 +52,16 @@ export async function verifyPublishedDrilldownHttp({reader,viewer,storeId,inputs
         const detailUrl=detailUrls.find(url=>url.searchParams.get('situationId')===situation.id);
         const detailHtml=await read(detailUrl);
         const sourceUrls=links(detailHtml,base,'/sku/sources');
-        assert.equal(sourceUrls.length,situation.groups.length);
+        assert.deepEqual(new Set(sourceUrls.map(url=>url.searchParams.get('groupKey'))),new Set(situation.groups.map(group=>group.groupKey)), 'detail exposes every saved category and no foreign groups');
+        if(situation.kind==='product_loss'){
+          assert.ok(detailHtml.includes('Из чего сложился убыток'));
+          assert.ok(detailHtml.includes('Продано с выручкой:'));
+          assert.ok(detailHtml.includes('Число заказов пока не подтверждено.'));
+        }
         for(const sourceUrl of sourceUrls){
           assert.equal(sourceUrl.searchParams.get('situationId'),situation.id);
           const sourceHtml=await read(sourceUrl);
+          if(sourceUrl.hash)assert.ok(sourceHtml.includes(`id="${decodeURIComponent(sourceUrl.hash.slice(1))}"`),'revenue row detail targets its frozen contribution');
           const back=links(sourceHtml,base,'/situation').find(url=>url.searchParams.get('situationId')===situation.id);
           assert.ok(back,'source page returns to its actual situation');
           for(const url of [situationsUrl,detailUrl,sourceUrl,back])for(const key of ['storeId','publicationId','publicationSource','periodStart','periodEnd'])assert.equal(url.searchParams.get(key),input[key]);
