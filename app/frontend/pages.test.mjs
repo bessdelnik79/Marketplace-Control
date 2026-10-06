@@ -229,3 +229,23 @@ test('retained store outside the tariff is visible without a switching or creati
  assert.doesNotMatch(html,/href="[^" ]*storeId=retained|Создать новый магазин/);
  assert.match(html,/href="\/tariff">Сменить тариф/);
 });
+
+test('attention card links its entire content to the frozen situation and escapes product metadata',()=>{
+  const stores=[{id:'store-1',name:'WB',connected:true}],state={store:{id:'store-1'},financial:{status:'unavailable'},operational:{status:'unavailable'},situations:{status:'partial',context:{storeId:'store-1',period:{start:'2026-09-28',end:'2026-10-04'},publication:{id:'publication-1',source:'daily'}},items:[{id:'loss&1',kind:'product_loss',severity:'danger',productId:'p1',product:{name:'Watch <script>',sellerArticle:'A"B',wbArticle:'517676382'},metric:{absoluteValue:'258.8800'}}]}};
+  const html=overviewPage(user,stores,state,{selectedStoreId:'store-1'});
+  const card=html.match(/<a class="design-attention-card" href="([^"]+)">([\s\S]*?)<\/a>/);
+  assert.ok(card);
+  const url=new URL(card[1].replaceAll('&amp;','&'),'http://localhost');
+  assert.equal(url.pathname,'/situation');
+  for(const [key,value] of Object.entries({storeId:'store-1',periodStart:'2026-09-28',periodEnd:'2026-10-04',publicationId:'publication-1',publicationSource:'daily',situationId:'loss&1'}))assert.equal(url.searchParams.get(key),value);
+  assert.match(card[2],/Убыток по товару до налога/);
+  assert.match(card[2],/Watch &lt;script&gt;/);
+  assert.match(card[2],/Арт. продавца: A&quot;B · WB: 517676382/);
+  assert.match(card[2],/258,88 ₽/);
+  assert.doesNotMatch(card[2],/<a |Подробности →|<script>/);
+});
+test('attention card without a publication remains noninteractive',()=>{
+  const html=overviewPage(user,[{id:'store-1',name:'WB',connected:true}],{store:{id:'store-1'},financial:{status:'unavailable'},operational:{status:'unavailable'},situations:{status:'partial',items:[{id:'penalty',kind:'penalty',metric:{absoluteValue:'12.0000'}}]}},{selectedStoreId:'store-1'});
+  assert.match(html,/<article class="design-attention-card">[\s\S]*?Подробности недоступны[\s\S]*?<\/article>/);
+  assert.doesNotMatch(html,/<a class="design-attention-card"/);
+});
