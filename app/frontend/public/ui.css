@@ -74,3 +74,5 @@
 
 /* Keep metric details compact and fit chart rows inside both border lines. */
 .operational-panel .design-current-total{margin:16px 0 4px}.operational-panel .overview-comparison{min-height:0;margin:4px 0 8px;line-height:1.4}.operational-panel .design-legend{margin:6px 0 0}.operational-panel .design-orders-chart{height:auto;padding-top:12px;overflow-y:hidden}.operational-panel .design-chart-grid{height:168px}.operational-panel .design-chart-day{grid-template-rows:140px 26px}.operational-panel .design-bar-pair{height:140px}
+
+.dialog-actions{display:flex;justify-content:flex-end;gap:12px;margin-top:24px;flex-wrap:wrap}.dialog-actions button{min-width:128px}@media(max-width:480px){.dialog-actions button{flex:1;min-width:0}}

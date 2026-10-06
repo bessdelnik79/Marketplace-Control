@@ -107,5 +107,31 @@
   const form=$('#account-form');
   if(form){storage.remove(accountKey);const saved={name:form.elements.displayName.value,theme};form.addEventListener('submit',e=>{const name=form.elements.displayName.value.trim();if(name.length<2){e.preventDefault();form.elements.displayName.setCustomValidity('Введите имя от двух символов');form.elements.displayName.reportValidity();return}form.elements.displayName.setCustomValidity('')});form.elements.displayName.addEventListener('input',e=>e.target.setCustomValidity(''));$('[data-reset-settings]').addEventListener('click',()=>{form.elements.displayName.value=saved.name;applyTheme(saved.theme);storage.set('mc-theme',saved.theme);toast('Изменения отменены')});$('[data-logout]').addEventListener('click',()=>{const f=document.createElement('form');f.method='post';f.action='/logout';document.body.append(f);f.submit()})}
   const selectionForm=$('[data-selection-form]');
-  if(selectionForm){const boxes=all('input[type=checkbox]',selectionForm),limit=Number(selectionForm.dataset.limit),base=Number(selectionForm.dataset.selectedCount||0),counter=$('[data-selection-count]',selectionForm),submit=$('[data-confirm-selection]',selectionForm),update=()=>{const added=boxes.filter(box=>box.checked).length,count=base+added;counter.textContent=count;boxes.forEach(box=>box.disabled=!box.checked&&count>=limit);submit.disabled=added===0};boxes.forEach(box=>box.addEventListener('change',update));selectionForm.addEventListener('submit',event=>{if(!boxes.some(box=>box.checked)){event.preventDefault();toast('Выберите хотя бы один товар');return}const message=selectionForm.dataset.mode==='extend'?'Добавить выбранные товары в аналитику?':'Подтвердить выбранные товары для аналитики?';if(!confirm(message))event.preventDefault()});update();const search=$('[data-catalog-search]',selectionForm);search?.addEventListener('input',()=>{const query=search.value.trim().toLocaleLowerCase('ru-RU');all('[data-catalog-product]',selectionForm).forEach(row=>row.hidden=query&&!row.dataset.search.includes(query))})}
+  if(selectionForm){
+    const boxes=all('input[type=checkbox]',selectionForm),limit=Number(selectionForm.dataset.limit),base=Number(selectionForm.dataset.selectedCount||0),counter=$('[data-selection-count]',selectionForm),submit=$('[data-confirm-selection]',selectionForm);
+    let confirmed=false;
+    const update=()=>{const added=boxes.filter(box=>box.checked).length,count=base+added;counter.textContent=count;boxes.forEach(box=>box.disabled=!box.checked&&count>=limit);submit.disabled=added===0};
+    boxes.forEach(box=>box.addEventListener('change',update));
+    selectionForm.addEventListener('submit',event=>{
+      if(!boxes.some(box=>box.checked)){event.preventDefault();toast('Выберите хотя бы один товар');return}
+      if(confirmed){confirmed=false;return}
+      event.preventDefault();
+      if(dialog.open)return;
+      const message=selectionForm.dataset.mode==='extend'?'Добавить выбранные товары в аналитику?':'Подтвердить выбранные товары для аналитики?';
+      dialog.returnValue='';
+      dialog.setAttribute('aria-labelledby','selection-confirm-title');
+      dialog.setAttribute('aria-describedby','selection-confirm-message');
+      openDialog(`<h2 id="selection-confirm-title">ПОДТВЕРДИТЕ ВЫБОР</h2><p id="selection-confirm-message">${message}</p><div class="dialog-actions"><button class="outline-button" type="button" data-selection-cancel autofocus>Отмена</button><button class="outline-button primary-button" type="button" data-selection-accept>Подтвердить</button></div>`);
+      $('[data-selection-cancel]',dialog).addEventListener('click',()=>dialog.close());
+      $('[data-selection-accept]',dialog).addEventListener('click',()=>dialog.close('confirmed'));
+      dialog.addEventListener('close',()=>{
+        dialog.removeAttribute('aria-labelledby');dialog.removeAttribute('aria-describedby');
+        submit.focus();
+        if(dialog.returnValue==='confirmed'){confirmed=true;selectionForm.requestSubmit(submit)}
+      },{once:true});
+    });
+    update();
+    const search=$('[data-catalog-search]',selectionForm);
+    search?.addEventListener('input',()=>{const query=search.value.trim().toLocaleLowerCase('ru-RU');all('[data-catalog-product]',selectionForm).forEach(row=>row.hidden=query&&!row.dataset.search.includes(query))});
+  }
 })();
