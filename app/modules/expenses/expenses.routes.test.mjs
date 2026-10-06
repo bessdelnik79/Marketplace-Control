@@ -96,3 +96,10 @@ test('foreign query store is rejected before expense limits or body parsing', as
   await handle({ method: 'POST' }, {}, new URL('http://local/expenses/import?storeId=foreign'), { user_id: 'user' });
   assert.equal(status, 404);
 });
+
+test('inactive tariff store cannot download expense templates or exports',async()=>{
+ for(const path of ['/expenses/template.csv','/expenses/export.csv']){
+  let status;const handler=createExpensesRoutes({listStores:async()=>[{id:'retained',selectable:false}],getExpenseState:async()=>assert.fail('inactive expense reader'),send:(_res,value)=>{status=value}});
+  await handler({method:'GET'},{},new URL(`${path}?storeId=retained`,'http://localhost'),{user_id:'owner'});assert.equal(status,404);
+ }
+});

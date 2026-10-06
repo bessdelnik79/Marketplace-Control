@@ -72,7 +72,7 @@ export function createOverviewRoutes({
     const body=isRetry||isOperationalRefresh?await form(req):null;
     const requestedStoreId = body?body.storeId:url.searchParams.get('storeId');
     const store = requestedStoreId ? stores.find(item => item.id === requestedStoreId) : stores[0];
-    if (!store) {
+    if (!store || store.selectable===false) {
       send(res,404,isStatus?JSON.stringify({error:'store_not_found'}):'Магазин не найден.',isStatus?{'content-type':'application/json; charset=utf-8','cache-control':'no-store'}:{});
       return true;
     }

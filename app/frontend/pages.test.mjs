@@ -222,3 +222,10 @@ test('operational bootstrap explains waiting for financial data rather than a WB
  const html=operationalLoadStatus({status:'waiting_financial',totalDays:30});
  assert.match(html,/Ожидаем финансовых отчётов/);assert.match(html,/Сначала загружаем финансовую историю/);assert.doesNotMatch(html,/Ожидаем лимит/);
 });
+
+test('retained store outside the tariff is visible without a switching or creation link',()=>{
+ const html=settingsPage(user,[{id:'active',name:'Первый',connected:true,selectable:true,can_add_store:false},{id:'retained',name:'Второй',connected:false,selectable:false,can_add_store:false}]);
+ assert.match(html,/<div class="store-popover-item unavailable" aria-disabled="true"><strong>Второй<\/strong><small>Недоступен на текущем тарифе<\/small>/);
+ assert.doesNotMatch(html,/href="[^" ]*storeId=retained|Создать новый магазин/);
+ assert.match(html,/href="\/tariff">Сменить тариф/);
+});

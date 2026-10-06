@@ -178,3 +178,10 @@ test('upload result and validation errors preserve a secondary store', async () 
   assert.equal(forbidden.response.status, 403);
   assert.equal(forbidden.response.body.list[0].id, 'store-2');
 });
+
+test('inactive tariff store cannot open costs or download a template',async()=>{
+ for(const route of ['/costs?storeId=store-1','/costs/template.csv?storeId=store-1']){
+  const h=setup({listStores:async()=>[{id:'store-1',selectable:false}],getCostState:async()=>assert.fail('inactive cost reader')});
+  await h.run('GET',route);assert.equal(h.response.status,404);
+ }
+});

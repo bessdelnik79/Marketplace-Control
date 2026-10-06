@@ -43,7 +43,7 @@ export function createCostsRoutes({
   multipart
 }) {
   async function sendCosts(res, status, current, stores, options = {}) {
-    const store = stores.find(item => item.id === (options.storeId || stores[0]?.id)),
+    const store = stores.find(item => item.selectable!==false && item.id === (options.storeId || stores[0]?.id)),
       costs = store ? await getCostState(current.user_id, store.id): null;
     const orderedStores = store ? [store, ...stores.filter(item => item.id !== store.id)]: stores;
     return send(res, status, costPage(current, orderedStores, costs, options));
@@ -52,8 +52,8 @@ export function createCostsRoutes({
     if (req.method === 'GET' && url.pathname === '/costs/template.csv') {
       if (!current) return redirect(res, '/login');
       const stores = await listStores(current.user_id),
-        store = stores.find(item => item.id ===(url.searchParams.get('storeId') || stores[0]?.id));
-      if (!store) return send(res, 404, 'Магазин не найден.');
+        store = stores.find(item => item.selectable!==false && item.id ===(url.searchParams.get('storeId') || stores[0]?.id));
+      if (!store || store.selectable===false) return send(res, 404, 'Магазин не найден.');
       const costs = await getCostState(current.user_id, store.id),
         template = createCostCsvTemplate(costs?.rows ??[]);
       return sendBuffer(res, 200, template, {
@@ -65,7 +65,7 @@ export function createCostsRoutes({
       if (!current) return redirect(res, '/login');
       const stores = await listStores(current.user_id);
       const storeId = url.searchParams.get('storeId');
-      if (storeId && !stores.some(store => store.id === storeId)) return send(res, 404, 'Магазин не найден.');
+      if (storeId && !stores.some(store => store.selectable!==false && store.id === storeId)) return send(res, 404, 'Магазин не найден.');
       const notice = url.searchParams.get('imported') === '1' ? 'Себестоимость из файла сохранена.': url.searchParams.get('saved') === '1' ? 'Себестоимость сохранена.': url.searchParams.get('skipped') === '1' ? 'Такая себестоимость уже сохранена.': '';
       return sendCosts(res, 200, current, stores, {
         notice, storeId
@@ -81,8 +81,8 @@ export function createCostsRoutes({
         if (!limit.allowed) return sendCosts(res, 429, current, stores, { error: 'Слишком много сохранений. Повторите через 15 минут.' });
         const data = await form(req);
         values = Object.fromEntries(['storeId','variantId','unitCost','effectiveFrom'].map(key => [key, typeof data[key] === 'string' ? data[key]: '']));
-        const store = stores.find(item => item.id === values.storeId);
-        if (!store) throw new Error('store_not_found');
+        const store = stores.find(item => item.selectable!==false && item.id === values.storeId);
+        if (!store || store.selectable===false) throw new Error('store_not_found');
         const result = await saveVariantCost(current.user_id, values);
         return redirect(res, `/costs?${result.skipped ? 'skipped': 'saved'}=1&storeId=${encodeURIComponent(store.id)}`);
       } catch (error) {
@@ -113,9 +113,9 @@ export function createCostsRoutes({
       let storeId;
       try {
         const upload = await multipart(req, costImportMaxBytes + 65536),
-          store = stores.find(item => item.id === upload.fields.storeId),
+          store = stores.find(item => item.selectable!==false && item.id === upload.fields.storeId),
           file = upload.files.file;
-        if (!store) throw new Error('store_not_found');
+        if (!store || store.selectable===false) throw new Error('store_not_found');
         storeId = store.id;
         if (!file?.fileName || !file.buffer?.length) throw new Error('cost_file_empty');
         const rows = await parseCostFile(file),

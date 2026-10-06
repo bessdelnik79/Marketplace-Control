@@ -257,3 +257,10 @@ test('only an explicitly demo store may bypass the real overview read', async ()
   assert.equal(state.calls.some(([name]) => name === 'overview'), false);
   assert.equal(state.response.body.list[0].demo, true);
 });
+
+test('inactive tariff store is rejected before overview and status readers',async()=>{
+ for(const route of ['/overview','/overview/financial-status','/overview/operational']){
+  const h=setup({listStores:async()=>[{id:'retained',selectable:false}],getOverviewState:async()=>assert.fail('inactive store reader')});
+  await h.run(`${route}?storeId=retained`);assert.equal(h.response.status,404);
+ }
+});

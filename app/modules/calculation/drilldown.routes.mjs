@@ -32,7 +32,7 @@ export function createDrilldownRoutes({listStores, getFinancialOverview, readPub
       const stores = await listStores(current.user_id);
       const storeId = params.get('storeId');
       const store = storeId ? stores.find(item => item.id === storeId) : stores[0];
-      if (storeId && !store) throw new Error('drilldown_not_found');
+      if (storeId && (!store || store.selectable===false)) throw new Error('drilldown_not_found');
       const selectedStores = store ? [store, ...stores.filter(item => item !== store)] : stores;
       const requested = period(params);
       const pageLimit = limit(params.get('limit'));

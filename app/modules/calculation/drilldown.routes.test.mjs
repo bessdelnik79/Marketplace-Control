@@ -85,3 +85,8 @@ test('sources linked from situation must belong to the actual fired rule groups'
   const foreign=setup({readPublishedSituation:fired});await foreign.run(route('/sku/sources',{scope:'store',groupKey:'revenue-group',situationId:'penalty'}));
   assert.equal(foreign.response.status,404);assert.ok(!foreign.calls.some(call=>call.name==='sources'));
 });
+
+test('inactive tariff store is rejected before resolving the current or pinned publication',async()=>{
+ const h=setup({listStores:async()=>[{id:'store',selectable:false}]});
+ await h.run('/sku?storeId=store');assert.equal(h.response.status,404);assert.deepEqual(h.calls,[]);
+});

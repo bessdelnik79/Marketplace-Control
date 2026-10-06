@@ -32,3 +32,7 @@ test('financial sync status rejects a foreign store before reading its state',as
   const state=setup();await state.run('/financial-reports/status?storeId=foreign');
   assert.equal(state.response.status,404);assert.equal(state.calls.some(([name])=>name==='state'),false);
 });
+
+test('inactive tariff store status cannot expose saved sync state',async()=>{
+ const h=setup({listStores:async()=>[{id:'store-1',selectable:false}]});await h.run();assert.equal(h.response.status,404);assert.deepEqual(h.calls,[]);
+});
