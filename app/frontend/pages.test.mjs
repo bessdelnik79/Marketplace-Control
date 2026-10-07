@@ -208,6 +208,8 @@ test('operational status distinguishes queued work, active fetch and WB rate wai
  assert.match(queued,/В очереди/);assert.doesNotMatch(queued,/Идёт загрузка/);assert.match(queued,/Получено 7 из 30 дней/);
  const fetching=operationalLoadStatus({status:'running',progress:{stage:'fetching'}});assert.match(fetching,/Идёт загрузка/);
  const waiting=operationalLoadStatus({status:'running',progress:{stage:'rate_wait'}});assert.match(waiting,/Ожидаем лимит WB/);
+ assert.match(waiting,/Сохранённые данные проверены.*Догружаем недостающее/);
+ const checking=operationalLoadStatus({status:'running',progress:{stage:'checking_cache'}});assert.match(checking,/Проверяем сохранённые данные/);assert.doesNotMatch(checking,/Получаем.*WB/);
 });
 test('initial history status exposes selection waiting, failure and completion without fake progress',()=>{
  const invalidRequest=operationalLoadStatus({status:'blocked',errorCode:'operational_invalid_request'});assert.match(invalidRequest,/WB отклонил параметры запроса/);assert.doesNotMatch(invalidRequest,/токен/);

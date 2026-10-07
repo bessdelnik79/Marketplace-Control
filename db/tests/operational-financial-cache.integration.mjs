@@ -11,6 +11,7 @@ process.env.DATABASE_URL=url;
 const {migrate,pool}=await import('../../app/infrastructure/database/client.mjs');
 const {beginOperationalSync,completeOperationalSync,failOperationalSync,getOperationalCachedSources,getOperationalOverviewData,requestOperationalRangeRefresh}=await import('../../app/modules/operational/operational.repository.mjs');
 const {persistFinancialNormalization}=await import('../../app/modules/reports/normalization.repository.mjs');
+const {readFinancialReturnsCache}=await import('../../app/modules/operational/financial-returns-cache.mjs');
 const {storeOperationalSnapshot}=await import('../../app/infrastructure/storage/operational-source-storage.mjs');
 const ids={user:randomUUID(),business:randomUUID(),store:randomUUID(),product:randomUUID(),foreignUser:randomUUID(),foreignBusiness:randomUUID()};
 const range={dateFrom:'2026-09-14',dateTo:'2026-09-20'},now=new Date('2026-09-21T12:00:00Z');
@@ -155,6 +156,49 @@ test('new current report version requires its exact accepted normalization and r
   assert.equal(refreshed.returnsRows.find(row=>row.date==='2026-09-15').returnSum,'400.1250');
   assert.equal(refreshed.returnsRows[0].returnSourceRefs.inventory[0].reportVersionId,revised.versionId);
   await failOperationalSync(ids.user,pending,'test_cleanup');
+});
+
+async function splitWeek(from,to,parts){
+ return context(async client=>{
+  const coverage=(await client.query(`insert into mc.financial_week_coverage(business_id,store_id,credential_generation,week_start,week_end,check_reasons,coverage_status,inventory_confirmed_at)
+    values($1,$2,1,$3,$4,ARRAY['split_test'],'complete',clock_timestamp()) returning id`,[ids.business,ids.store,from,to])).rows[0];
+  const inventories=[];
+  for(const [index,part] of parts.entries()){
+   const externalId=String(Date.parse(part.from)+index),checksum=String(index+1).repeat(64);
+   const document=(await client.query(`insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness) values($1,$2,'wb_api','weekly_realization',$3,'complete') returning id`,[ids.business,ids.store,randomUUID()])).rows[0];
+   const report=(await client.query(`insert into mc.reports(business_id,store_id,external_report_id,period_start,period_end) values($1,$2,$3,$4,$5) returning id`,[ids.business,ids.store,externalId,part.from,part.to])).rows[0];
+   const version=(await client.query(`insert into mc.report_versions(business_id,store_id,report_id,document_id,version_no,checksum,parser_version) values($1,$2,$3,$4,1,$5,'wb-finance-v13') returning id`,[ids.business,ids.store,report.id,document.id,checksum])).rows[0];
+   const raw={docTypeName:'Возврат',sellerOperName:'Возврат',nmId:'7200001',rrdId:externalId,rrDate:part.to,saleDate:part.from,quantity:'1',retailPriceWithdiscRub:'100',retailAmount:'100',forPay:'100'};
+   await client.query(`insert into mc.report_rows(business_id,store_id,report_version_id,external_row_key,row_number,raw_data,row_checksum) values($1,$2,$3,'1',1,$4::jsonb,$5)`,[ids.business,ids.store,version.id,JSON.stringify(raw),checksum]);
+   await client.query("update mc.report_versions set status='validated' where id=$1",[version.id]);await client.query("update mc.report_versions set status='accepted',accepted_at=now() where id=$1",[version.id]);await client.query('update mc.reports set current_version_id=$1 where id=$2',[version.id,report.id]);
+   const revision=(await client.query('select catalog_revision from mc.stores where id=$1',[ids.store])).rows[0].catalog_revision;
+   const normalization=await persistFinancialNormalization(client,{businessId:ids.business,storeId:ids.store,reportVersionId:version.id,catalogRevision:revision});
+   const inventory=(await client.query(`insert into mc.financial_week_inventory(business_id,store_id,coverage_id,external_report_id,inventory_checksum,period_start,period_end,fetch_status,report_version_id,accepted_normalization_id,accepted_inventory_checksum,accepted_at)
+     values($1,$2,$3,$4,$5,$6,$7,'accepted',$8,$9,$5,now()) returning id`,[ids.business,ids.store,coverage.id,externalId,checksum,part.from,part.to,version.id,normalization.id])).rows[0];inventories.push(inventory.id);
+  }
+  return inventories;
+ });
+}
+const splitRange={dateFrom:'2026-09-28',dateTo:'2026-10-04',today:'2026-10-07'};
+let splitInventories;
+const readSplit=options=>context(client=>readFinancialReturnsCache(client,ids.business,ids.store,[{productId:ids.product,nmId:7200001}],options));
+test('month-boundary reports jointly cover a week and provide exact returns without Statistics requests',async()=>{
+ splitInventories=await splitWeek(splitRange.dateFrom,splitRange.dateTo,[{from:'2026-09-28',to:'2026-09-30'},{from:'2026-10-01',to:'2026-10-04'}]);
+ const rows=await readSplit(splitRange);assert.equal(rows.length,7);assert.equal(rows.filter(row=>row.returnCount===1).length,2);assert.equal(rows.filter(row=>row.returnCount===0).length,5);assert.ok(rows.every(row=>row.returnSource==='financial_report'&&row.returnSourceRefs.inventory.length===2));
+ for(const row of rows)assert.equal(await context(async client=>(await client.query('select mc.operational_financial_return_refs_current($1,$2,$3::jsonb) valid',[ids.business,ids.store,JSON.stringify(row.returnSourceRefs)])).rows[0].valid),true);
+});
+test('one invalid report part prevents reuse of the entire split-week evidence',async()=>{
+ const original=await context(async client=>(await client.query('select report_version_id,accepted_normalization_id from mc.financial_week_inventory where id=$1',[splitInventories[1]])).rows[0]);
+ await context(client=>client.query("update mc.financial_week_inventory set fetch_status='pending' where id=$1",[splitInventories[1]]));assert.deepEqual(await readSplit(splitRange),[]);
+ await context(client=>client.query("update mc.financial_week_inventory set fetch_status='accepted',report_version_id=$2,accepted_normalization_id=$3,accepted_inventory_checksum=inventory_checksum,accepted_at=clock_timestamp() where id=$1",[splitInventories[1],original.report_version_id,original.accepted_normalization_id]));assert.equal((await readSplit(splitRange)).length,7);
+});
+test('a gap between accepted report parts never proves missing days or financial zeros',async()=>{
+ await splitWeek('2026-10-26','2026-11-01',[{from:'2026-10-26',to:'2026-10-28'},{from:'2026-10-30',to:'2026-11-01'}]);
+ assert.deepEqual(await readSplit({dateFrom:'2026-10-26',dateTo:'2026-11-01',today:'2026-11-02'}),[]);
+});
+test('month-boundary coverage works in another year without fixed calendar dates',async()=>{
+ await splitWeek('2027-03-29','2027-04-04',[{from:'2027-03-29',to:'2027-03-31'},{from:'2027-04-01',to:'2027-04-04'}]);
+ const rows=await readSplit({dateFrom:'2027-03-29',dateTo:'2027-04-04',today:'2027-04-05'});assert.equal(rows.length,7);assert.equal(rows.filter(row=>row.returnCount===1).length,2);
 });
 
 test.afterEach(async()=>{await context(client=>client.query(`update mc.sync_runs r set status='failed',finished_at=clock_timestamp(),error_code='test_cleanup'

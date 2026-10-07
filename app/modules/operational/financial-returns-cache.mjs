@@ -51,6 +51,9 @@ export async function readFinancialReturnsCache(client,businessId,storeId,produc
           and j.store_id=wc.store_id and j.status='succeeded' and j.job_type='financial_inventory_refresh'
           and j.payload->>'credentialGeneration'=wc.credential_generation::text)
       or wc.coverage_status='complete' and exists(select 1 from mc.financial_week_inventory i where i.coverage_id=wc.id)
+        and not exists(select 1 from generate_series(wc.week_start,wc.week_end,interval '1 day') day
+          where not exists(select 1 from mc.financial_week_inventory i where i.coverage_id=wc.id
+            and day::date between i.period_start and i.period_end))
         and not exists(select 1 from mc.financial_week_inventory i
           left join mc.reports r on r.business_id=i.business_id and r.store_id=i.store_id and r.external_report_id=i.external_report_id and r.report_type='weekly_realization'
           left join mc.report_versions rv on rv.business_id=i.business_id and rv.store_id=i.store_id and rv.id=i.report_version_id and rv.report_id=r.id
@@ -60,7 +63,9 @@ export async function readFinancialReturnsCache(client,businessId,storeId,produc
           where i.coverage_id=wc.id and (i.fetch_status<>'accepted' or i.accepted_inventory_checksum is distinct from i.inventory_checksum
             or i.accepted_at is null or rv.id is null or r.current_version_id is distinct from rv.id or rv.status<>'accepted'
             or rv.parser_version<>$6 or d.origin is distinct from 'wb_api' or d.completeness is distinct from 'complete'
-            or r.period_start<>wc.week_start or r.period_end<>wc.week_end or i.period_start<>wc.week_start or i.period_end<>wc.week_end
+            or r.period_start is distinct from i.period_start or r.period_end is distinct from i.period_end
+            or i.period_start is null or i.period_end is null or i.period_start>i.period_end
+            or i.period_start<wc.week_start or i.period_end>wc.week_end
             or n.id is null or n.status<>'succeeded' or n.catalog_revision is distinct from s.catalog_revision
             or m.code is distinct from 'wb_finance_import' or m.implementation_version is distinct from $6
             or exists(select 1 from mc.data_issues issue where issue.report_normalization_id=n.id
