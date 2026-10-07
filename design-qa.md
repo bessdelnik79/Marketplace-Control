@@ -1,3 +1,34 @@
+# Personal account v2 — implementation QA
+
+final result: blocked
+
+## Target and implementation
+
+Target: four approved images in `outputs/design/Makets/settings-account-{pc,mobile}-{light,dark}-v2.png`. Desktop target is 1486×1058; mobile targets are 836×1881/1882, treated as a high-density visual reference rather than a fixed CSS viewport. Planned browser checks: 1486×1058 desktop, 390px mobile, both palettes, plus tablet and narrow-width resilience.
+
+Implemented in the existing server-rendered application, not a separate prototype. Database-backed identity, selected store/products and actual tariff intentionally replace sample content. Additional outlined “Загрузка отчётов” control preserves access to report loading and calculation status on `/settings/data`; no financial formulas changed.
+
+## Evidence and findings
+
+- All four source images opened and inspected before implementation.
+- Layout: balanced two-column desktop and ordered mobile stack; central divider; no product-preview list or duplicate appearance panel.
+- Typography: existing bundled Interface/Roboto Condensed font reused; heading hierarchy and sentence-case calculation buttons preserved in CSS.
+- Colors: existing light/dark palette tokens retained; blue for controls, semantic green connection and red destructive action.
+- Assets: existing brand and vector icon system reused, no new generated imagery or external dependencies.
+- Copy: requested “ЛИЧНЫЙ КАБИНЕТ”, “ТАРИФНЫЙ ПЛАН”, “Себестоимость товара”, “Дополнительные расходы”, “Налоги”; real profile/limits are escaped, not sample credentials.
+- Behavior: targeted regression tests cover profile form, safe token form, counts/limits, catalog states, all three theme modes, OS changes, unavailable localStorage, cancel validation and logout. Two additional tests execute the entire UI script on onboarding and verify mobile-menu ARIA/closing. Independent review checked route authorization, ownership and token secrecy; no remaining blocking findings. Final application suite on dedicated VM: 686/686 passed, zero skipped (2026-10-08).
+- Fixed during review: optional menu binding/close handler on onboarding, menu ARIA state, cancel clearing customValidity without reverting global theme.
+
+## Blocking verification
+
+Browser automation failed before connecting to the tab, including after a kernel reset: `windows sandbox failed: helper_unknown_error: setup refresh had errors`. Therefore no implementation screenshots, combined source/implementation comparison, real-browser console or interactive checks were captured. CSS fidelity, mobile wrapping, full onboarding initialization and keyboard flows remain visually unverified. Do not treat this report as a passed visual audit.
+
+Next verification: restore browser tool; capture desktop/mobile in both themes; compare normalized full views and focused header/form/data regions side by side; exercise menu, theme persistence, token disclosure, instruction dialog and navigation without modifying account data; inspect console and overflow. Record findings and only change final result to passed after evidence is available.
+
+---
+
+# Previous design QA history
+
 # Design QA: overview
 
 ## Источник

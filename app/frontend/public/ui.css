@@ -82,3 +82,31 @@
 .design-attention-list{gap:12px 24px}.design-attention-card{display:grid;grid-template-columns:30px minmax(0,1fr) auto;gap:4px 12px;align-items:center;margin:12px 0;padding:14px;border:1px solid var(--border);border-radius:14px;background:var(--surface);color:var(--text);text-decoration:none;transition:background-color .15s,border-color .15s}.design-attention-card .signal-mark{grid-column:1;grid-row:1;width:30px;height:30px;font-size:20px}.attention-card-copy{display:contents}.attention-card-copy strong{grid-column:2;grid-row:1;font-size:17px;line-height:1.35;overflow-wrap:anywhere}.attention-card-product{grid-column:2/-1;display:block;font-size:15px;font-weight:600;overflow-wrap:anywhere}.attention-card-copy small{grid-column:2/-1;display:block;color:var(--muted);font-size:12px;overflow-wrap:anywhere}.attention-card-amount{grid-column:3;grid-row:1;justify-self:end;color:var(--danger);font-size:20px;white-space:nowrap}.design-attention-card>.overview-development{grid-column:2/-1;justify-self:start}a.design-attention-card:hover,a.design-attention-card:focus-visible{background:var(--selected);border-color:var(--accent);color:var(--text);text-decoration:none}a.design-attention-card:focus-visible{outline:2px solid var(--accent);outline-offset:3px}@media(max-width:650px){.design-attention-card{padding:12px;gap:4px 10px}.attention-card-amount{font-size:18px}}
 
 .account-delete-link{align-self:flex-start;margin-top:12px;color:var(--danger);font-size:13px}.account-delete-button{color:var(--danger);border-color:var(--danger)}.account-erasure-layout p{margin:12px 0;overflow-wrap:anywhere}.account-erasure-layout .password-card{max-width:640px}
+.theme-control{display:flex;align-items:center;gap:16px;margin-left:auto;color:var(--muted)}
+.theme-switch{display:flex;align-items:center;padding:3px;border:1px solid var(--border);border-radius:32px;background:var(--selected)}
+.theme-switch button{display:grid;place-items:center;width:68px;height:44px;border-radius:26px;color:var(--muted);transition:background .15s,color .15s}
+.theme-switch .ui-icon{width:26px;height:26px;color:currentColor}
+.theme-switch button.selected{background:var(--bg);color:var(--accent);box-shadow:0 2px 5px #0001}
+html[data-theme=dark] .theme-switch{background:var(--bg)}
+html[data-theme=dark] .theme-switch button.selected{background:var(--selected);color:var(--text);box-shadow:inset 0 0 0 1px var(--border)}
+.mobile-brand{display:none}.nav-group{margin:26px 16px 16px;padding:0;border-top:1px solid var(--border)}
+.store-select summary span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.store-select summary .ui-icon{flex-shrink:0}
+.calculation-data-page{max-width:1100px;margin:0 auto 50px;display:grid;gap:24px}
+.calculation-data-page>.outline-button{justify-self:start}.calculation-data-page h1{margin:12px 0}
+@media(min-width:1251px){body[data-page='/settings'] .sidebar{width:258px}body[data-page='/settings'] .workspace{margin-left:258px}}
+@media(max-width:900px){.theme-switch button{width:48px}.theme-control>span{display:none}}
+@media(max-width:650px){
+ .app-header{height:auto;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:18px 10px;margin-bottom:28px}
+ .mobile-brand{display:flex;grid-column:1;grid-row:1;margin:0;padding:0;gap:10px;font-size:20px}.mobile-brand img{width:42px;height:42px;border-radius:9px}
+ .mobile-menu{grid-column:2;grid-row:1;justify-self:end;display:block;background:none;width:42px;height:42px;padding:6px}
+ .mobile-menu .ui-icon{visibility:visible;width:30px;height:30px}
+ .app-header>.store-select{grid-column:1;grid-row:2;width:100%;max-width:none;min-width:0}
+ .app-header>.theme-control{grid-column:2;grid-row:2;margin:0}
+ .store-select summary{padding:9px 10px;gap:10px;height:46px;font-size:17px}
+ .theme-switch{padding:2px}.theme-switch button{width:39px;height:40px}.theme-switch .ui-icon{width:23px;height:23px}
+ .demo-label{position:static;grid-column:1/-1;grid-row:3;margin:0}
+ body[data-page='/settings'] .mobile-nav{display:none}body[data-page='/settings'] .workspace{padding-bottom:24px}
+}
+@media(prefers-reduced-motion:reduce){.theme-switch button{transition:none}}
+@media(max-width:650px){.onboarding-header{height:auto;flex-wrap:wrap;gap:14px}.onboarding-header .mc-brand{flex:1}.onboarding-header .theme-control{order:3;width:100%;justify-content:center}.onboarding-header .theme-switch button{width:60px}.onboarding-main{min-height:calc(100vh - 132px)}}
