@@ -159,21 +159,23 @@ test('inventory context and writes require the current lease and latest credenti
     current.id,3,current.lease_token,'credential-integration-worker',JSON.stringify(inventory)
   ])).rows[0];
   assert.equal(applied.superseded,false);
-  assert.equal(Number(applied.uncovered_weeks),51);
+  assert.equal(Number(applied.uncovered_weeks),0);
   const coverageDistribution=await inContext(async client=>(await client.query(
-    `select count(*)::int total,count(*) filter(where coverage_status='retry')::int retry,
+    `select count(*)::int total,count(*) filter(where coverage_status='absent')::int absent,
       count(*) filter(where coverage_status='fetching')::int fetching
       from mc.financial_week_coverage where store_id=$1 and credential_generation=3`,[ids.store]
   )).rows[0]);
-  assert.deepEqual(coverageDistribution,{total:52,retry:51,fetching:1});
+  assert.deepEqual(coverageDistribution,{total:52,absent:51,fetching:1});
   assert.equal(await inContext(async client=>Number((await client.query(
     `select count(*) from mc.jobs where store_id=$1 and job_type='financial_report_fetch'`,[ids.store]
   )).rows[0].count)),1);
   await completeJob({jobId:current.id,leaseToken:current.lease_token,workerId:'credential-integration-worker',outcome:'completed'});
+  assert.equal(await inContext(async client=>(await client.query('select mc.operational_financial_bootstrap_ready($1) ready',[ids.store])).rows[0].ready),false);
   for(const old of claimed.filter(item=>item.id!==current.id))await completeJob({jobId:old.id,leaseToken:old.lease_token,workerId:'credential-integration-worker',outcome:'superseded'});
   const [fetchJob]=await claimJobs({workerId:'credential-fetch-worker',jobTypes:['financial_report_fetch'],leaseSeconds:300,limit:1});
   await acceptInventory('90071992547409931');
   await completeJob({jobId:fetchJob.id,leaseToken:fetchJob.lease_token,workerId:'credential-fetch-worker',outcome:'completed'});
+  assert.equal(await inContext(async client=>(await client.query('select mc.operational_financial_bootstrap_ready($1) ready',[ids.store])).rows[0].ready),true);
   await enqueueJob(ids.user,{storeId:ids.store,jobType:'financial_inventory_refresh',deduplicationKey:`integration-refresh:${ids.store}`,
     payload:{schemaVersion:1,credentialGeneration:3,window:{dateFrom:'2026-09-21',dateTo:'2026-09-27'}},priority:500,maxAttempts:3});
   const [refresh]=await claimJobs({workerId:'credential-refresh-worker',jobTypes:['financial_inventory_refresh'],leaseSeconds:300,limit:1});
@@ -221,6 +223,8 @@ test('credential update and annual enqueue roll back together',async()=>{
 });
 
 test('manual refresh is durable and mixed pipeline state remains running',async()=>{
+  await inContext(client=>client.query(`update mc.financial_week_coverage set coverage_status='partial',last_error_code='financial_terminal_fixture'
+    where store_id=$1 and credential_generation=3 and week_start='2025-09-29'`,[ids.store]));
   const gaps=await inContext(async client=>(await client.query(`select min(week_start)::text date_from,
     max(week_end)::text date_to,count(*)::int count from mc.financial_week_coverage
     where store_id=$1 and credential_generation=3 and coverage_status in ('partial','retry','unavailable')`,[ids.store])).rows[0]);
@@ -348,7 +352,7 @@ test('absent reports wait hourly beyond twenty polls without spending real failu
   });
   await inContext(client=>client.query(`insert into mc.financial_week_coverage(
     business_id,store_id,credential_generation,week_start,week_end,check_reasons,freshness_due_at
-  ) values($1,$2,3,'2024-02-05','2024-02-11',array['hourly_wait_test'],now())`,[ids.business,ids.store]));
+  ) values($1,$2,3,'2024-02-05','2024-02-11',array['hourly_wait_test','awaiting_fresh_report'],now())`,[ids.business,ids.store]));
   const workerId='hourly-wait-worker';
   const first=(await claimJobs({workerId,jobTypes:['financial_inventory_refresh'],leaseSeconds:300,limit:100})).find(job=>job.id===queued.id);
   const realFailure=await failJob({jobId:first.id,leaseToken:first.lease_token,workerId,errorCode:'wb_request_failed',retryable:true,retryDelaySeconds:0});
@@ -423,7 +427,7 @@ test('hourly waits retain confirmed report evidence while another week is missin
     payload:{schemaVersion:1,credentialGeneration:3,window:{dateFrom:'2024-03-04',dateTo:'2024-03-17'}}});
   await inContext(client=>client.query(`insert into mc.financial_week_coverage(
     business_id,store_id,credential_generation,week_start,week_end,check_reasons,freshness_due_at
-  ) select $1,$2,3,day::date,day::date+6,array['mixed_hourly_test'],now()
+  ) select $1,$2,3,day::date,day::date+6,case when day::date='2024-03-11'::date then array['mixed_hourly_test','awaiting_fresh_report'] else array['mixed_hourly_test'] end,now()
     from generate_series('2024-03-04'::date,'2024-03-11'::date,interval '7 days') day`,[ids.business,ids.store]));
   const known={reportId:'90071992547409934',checksum:'e'.repeat(64),dateFrom:'2024-03-04',dateTo:'2024-03-10',summaryRaw:{marker:'confirmed'}};
   const changedKnown={...known,checksum:'a'.repeat(64),summaryRaw:{marker:'changed'}};

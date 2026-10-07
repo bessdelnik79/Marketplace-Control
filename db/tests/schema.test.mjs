@@ -38,8 +38,11 @@ try {
   pass('selection changes recalculate published and proven empty dates without widening immutable event evidence');
   const hourlyApply=(await one(`select pg_get_functiondef('mc.apply_financial_inventory(uuid,bigint,uuid,text,jsonb)'::regprocedure) definition`)).definition;
   const hourlyFail=(await one(`select pg_get_functiondef('mc.fail_job(uuid,uuid,text,text,boolean,integer)'::regprocedure) definition`)).definition;
+  const historyApply=(await one(`select pg_get_functiondef('mc.reconcile_financial_history_inventory(uuid,bigint)'::regprocedure) definition`)).definition;
   assert.doesNotMatch(hourlyApply,/coverage_status='empty'/);
-  assert.match(hourlyApply,/next_retry_at=clock_timestamp\(\)\+interval '1 hour'/);
+  assert.match(historyApply,/next_retry_at=clock_timestamp\(\)\+interval '1 hour'/);
+  assert.match(historyApply,/coverage_status='absent'/);
+  assert.match(historyApply,/awaiting_fresh_report/);
   assert.match(hourlyFail,/greatest\(attempt_count-1,0\)/);
   assert.match(hourlyFail,/target.job_type='financial_inventory_refresh'/);
   assert.match(hourlyFail,/CASE WHEN inventory_wait THEN 3600/);
@@ -53,7 +56,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,78);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,79);
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.recover_historical_catalog(uuid,uuid)'::regprocedure"));
   const transportRoundingDefinition=(await one(
   `select pg_get_functiondef(

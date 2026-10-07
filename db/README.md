@@ -226,6 +226,18 @@ CALCULATION_DISPATCH_INTEGRATION_DATABASE_URL=postgresql:///mc_dispatch_test nod
 
 Использовать пустую одноразовую БД с `test` в имени и владельца миграций NOSUPERUSER/NOBYPASSRLS с CREATEROLE для проверки закрытых прав. Сценарий намеренно применяет 078 после создания первого аккаунта на схеме 077, проверяет backfill, настоящий worker и публикацию при незавершённой финансовой загрузке, конкуренцию, роли, откат и удаление аккаунта. SUPERUSER для этого теста запрещён.
 
+## История по списку финансовых отчётов
+
+История WB и независимое ожидание свежего отчёта (миграция 079):
+
+```sh
+CREDENTIALS_INTEGRATION_DATABASE_URL=postgresql:///mc_credentials_test node db/tests/credentials.integration.mjs
+OPERATIONAL_BOOTSTRAP_INTEGRATION_DATABASE_URL=postgresql:///mc_bootstrap_test node db/tests/operational-financial-bootstrap.integration.mjs
+FINANCIAL_HISTORY_UPGRADE_DATABASE_URL=postgresql:///mc_history_upgrade_test node db/tests/financial-history-upgrade.integration.mjs
+```
+
+Каждый сценарий требует отдельную пустую одноразовую БД с `test` в имени. Upgrade применяется к заполненной схеме 078 и требует владельца NOSUPERUSER/NOBYPASSRLS. [Контракт истории](../outputs/financial-history-inventory-2026-10-07.md).
+
 ## Удаление аккаунта и защита акций
 
 Миграции 076–077 и закрытые схемы `mc_erasure_private`/`mc_campaign_private` описаны в [контракте](../outputs/account-erasure-and-campaigns.md). Нельзя выдавать веб-читателю права на private-схемы или массовые DML-права на реестр участия. В текущей среде внутренние серверные операции выполняет владелец миграций; отдельной прикладной роли нужны точечные EXECUTE на `mc.erase_account(uuid,text,text)`, `mc.account_source_write_allowed(uuid)` и `mc.account_erasure_permitted(uuid)` для защищённых trigger-вызовов, а worker — доступ к закрытой очереди очистки. `PUBLIC` этих прав не имеет.

@@ -420,6 +420,7 @@ export async function getFinancialSyncState(userId,storeId){
             coverage_state.total_weeks,
             coverage_state.complete_weeks,
             coverage_state.empty_weeks,
+            coverage_state.absent_weeks,
             coverage_state.pending_weeks,
             coverage_state.failed_weeks,
             (select max(coverage.week_end) from mc.financial_week_coverage coverage
@@ -473,6 +474,7 @@ export async function getFinancialSyncState(userId,storeId){
              count(*)::int as total_weeks,
              count(*) filter(where coverage.coverage_status='complete')::int as complete_weeks,
              count(*) filter(where coverage.coverage_status='empty')::int as empty_weeks,
+             count(*) filter(where coverage.coverage_status='absent')::int as absent_weeks,
              count(*) filter(where coverage.coverage_status in ('pending','inventory_confirmed','fetching','retry'))::int as pending_weeks,
                 count(*) filter(where coverage.coverage_status in ('partial','unavailable'))::int as failed_weeks,
                 (array_agg(coverage.last_error_code order by coverage.updated_at desc)

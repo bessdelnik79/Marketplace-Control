@@ -219,8 +219,8 @@ export function financialSyncView(financial,store,{now=new Date()}={}){
   if(!store.connected)return lockedView('Сначала подключите Wildberries','Для отчётов нужен токен только для чтения с категорией «Финансы».');
   financial=financial??{};
   const progress=financial.progress??{},running=financial.run_status==='running',failed=financial.run_status==='failed',blocked=financial.stream_status==='blocked';
-  const totalWeeks=Number(financial.total_weeks??0),completeWeeks=Number(financial.complete_weeks??0),emptyWeeks=Number(financial.empty_weeks??0),failedWeeks=Number(financial.failed_weeks??0),checkedWeeks=completeWeeks+emptyWeeks;
-  const weekProgress=totalWeeks?`Проверено недель: ${checkedWeeks} из ${totalWeeks}. С отчётами: ${completeWeeks}${emptyWeeks?` · без отчётов WB: ${emptyWeeks}`:''}${failedWeeks?` · недоступно: ${failedWeeks}`:''}. `:'';
+  const totalWeeks=Number(financial.total_weeks??0),completeWeeks=Number(financial.complete_weeks??0),emptyWeeks=Number(financial.empty_weeks??0),absentWeeks=Number(financial.absent_weeks??0),failedWeeks=Number(financial.failed_weeks??0),checkedWeeks=completeWeeks+emptyWeeks+absentWeeks;
+  const weekProgress=totalWeeks?`Проверено недель: ${checkedWeeks} из ${totalWeeks}. С отчётами: ${completeWeeks}${emptyWeeks?` · без отчётов WB: ${emptyWeeks}`:''}${absentWeeks?` · отсутствуют в списке WB: ${absentWeeks}`:''}${failedWeeks?` · недоступно: ${failedWeeks}`:''}. `:'';
   const date=value=>value?new Date(value).toLocaleString('ru-RU',{timeZone:'Europe/Moscow',day:'numeric',month:'long',hour:'2-digit',minute:'2-digit'}):'';
   const coverage=displayDate(financial.coverage_to,{day:'numeric',month:'long',year:'numeric'});
   const retryAt=financial.active_job_available_at?new Date(financial.active_job_available_at):null;

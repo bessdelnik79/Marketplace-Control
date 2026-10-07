@@ -1300,7 +1300,7 @@
 - `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `CHECK (((EXTRACT(isodow FROM week_start) = (1)::numeric) AND (week_end = (week_start + 6))))`
 - `CHECK ((cardinality(check_reasons) > 0))`
-- `CHECK ((coverage_status = ANY (ARRAY['pending'::text, 'inventory_confirmed'::text, 'fetching'::text, 'complete'::text, 'empty'::text, 'partial'::text, 'retry'::text, 'unavailable'::text])))`
+- `CHECK ((coverage_status = ANY (ARRAY['pending'::text, 'inventory_confirmed'::text, 'fetching'::text, 'complete'::text, 'empty'::text, 'partial'::text, 'retry'::text, 'unavailable'::text, 'absent'::text])))`
 - `CHECK ((credential_generation > 0))`
 - `FOREIGN KEY (empty_confirmed_by_job_id) REFERENCES mc.jobs(id) DEFERRABLE`
 - `CHECK (((coverage_status <> 'empty'::text) OR ((inventory_confirmed_at IS NOT NULL) AND (empty_confirmed_by_job_id IS NOT NULL))))`
