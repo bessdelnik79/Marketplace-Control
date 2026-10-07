@@ -4,6 +4,18 @@
 
 Денежные значения — точные десятичные числа. NULL означает отсутствие значения. Все даты периодов включительны; стоимость действует от effective_from до следующей даты стоимости варианта.
 
+## account_erasure_cleanup
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| erased_business_id | uuid | нет | — |
+| attempts | integer | нет | 0 |
+| available_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `PRIMARY KEY (erased_business_id)`
+
 ## audit_events
 
 | Поле | Тип | NULL | По умолчанию |
@@ -20,9 +32,9 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (actor_user_id) REFERENCES mc.users(id)`
-- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id)`
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (actor_user_id) REFERENCES mc.users(id) DEFERRABLE`
+- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `PRIMARY KEY (id)`
 
 ## auth_identities
@@ -143,7 +155,7 @@
 
 - `CHECK ((amount > (0)::numeric))`
 - `UNIQUE (business_id, id)`
-- `FOREIGN KEY (business_id, subscription_id) REFERENCES mc.subscriptions(business_id, id)`
+- `FOREIGN KEY (business_id, subscription_id) REFERENCES mc.subscriptions(business_id, id) DEFERRABLE`
 - `CHECK ((period_end > period_start))`
 - `CHECK ((currency = 'RUB'::text))`
 - `PRIMARY KEY (id)`
@@ -166,8 +178,8 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id)`
-- `FOREIGN KEY (business_id, payment_id) REFERENCES mc.billing_payments(business_id, id)`
+- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id) DEFERRABLE`
+- `FOREIGN KEY (business_id, payment_id) REFERENCES mc.billing_payments(business_id, id) DEFERRABLE`
 - `PRIMARY KEY (id)`
 - `UNIQUE (provider, external_event_id)`
 - `CHECK ((status = ANY (ARRAY['received'::text, 'processed'::text, 'failed'::text])))`
@@ -192,7 +204,7 @@
 
 - `CHECK ((amount > (0)::numeric))`
 - `UNIQUE (business_id, id)`
-- `FOREIGN KEY (business_id, invoice_id) REFERENCES mc.billing_invoices(business_id, id)`
+- `FOREIGN KEY (business_id, invoice_id) REFERENCES mc.billing_invoices(business_id, id) DEFERRABLE`
 - `CHECK (((status = 'succeeded'::text) = (paid_at IS NOT NULL)))`
 - `CHECK ((currency = 'RUB'::text))`
 - `UNIQUE (idempotency_key)`
@@ -275,14 +287,14 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, operation_link_id) REFERENCES mc.operation_links(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, report_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, operation_link_id) REFERENCES mc.operation_links(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, report_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id) DEFERRABLE`
 - `CHECK ((num_nonnulls(report_version_id, report_normalization_id, cost_version_id, expense_version_id, tax_setting_version_id, operation_link_id) = 1))`
-- `FOREIGN KEY (business_id, tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id)`
-- `FOREIGN KEY (business_id, store_id, cost_version_id) REFERENCES mc.cost_versions(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, expense_version_id) REFERENCES mc.expense_versions(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, run_id) REFERENCES mc.calculation_runs(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, cost_version_id) REFERENCES mc.cost_versions(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, expense_version_id) REFERENCES mc.expense_versions(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, run_id) REFERENCES mc.calculation_runs(business_id, store_id, id) DEFERRABLE`
 - `PRIMARY KEY (id)`
 - `UNIQUE (run_id, cost_version_id)`
 - `UNIQUE (run_id, expense_version_id)`
@@ -301,10 +313,10 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id)`
 - `PRIMARY KEY (store_id)`
-- `FOREIGN KEY (requested_by) REFERENCES mc.users(id)`
+- `FOREIGN KEY (requested_by) REFERENCES mc.users(id) DEFERRABLE`
 
 ## calculation_request_inputs
 
@@ -324,15 +336,15 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, operation_link_id) REFERENCES mc.operation_links(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, operation_link_id) REFERENCES mc.operation_links(business_id, store_id, id) DEFERRABLE`
 - `CHECK ((num_nonnulls(report_version_id, report_normalization_id, cost_version_id, expense_version_id, tax_setting_version_id, operation_link_id) = 1))`
-- `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, cost_version_id) REFERENCES mc.cost_versions(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, expense_version_id) REFERENCES mc.expense_versions(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, cost_version_id) REFERENCES mc.cost_versions(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, expense_version_id) REFERENCES mc.expense_versions(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, report_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, request_id) REFERENCES mc.calculation_requests(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id)`
+- `FOREIGN KEY (business_id, store_id, report_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, request_id) REFERENCES mc.calculation_requests(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id) DEFERRABLE`
 - `PRIMARY KEY (id)`
 
 ## calculation_request_products
@@ -349,8 +361,8 @@
 Ограничения и связи:
 
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.product_selection_items(business_id, store_id, product_id)`
-- `FOREIGN KEY (business_id, store_id, request_id) REFERENCES mc.calculation_requests(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.product_selection_items(business_id, store_id, product_id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, request_id) REFERENCES mc.calculation_requests(business_id, store_id, id) DEFERRABLE`
 - `PRIMARY KEY (id)`
 - `UNIQUE (request_id, product_id)`
 
@@ -376,13 +388,13 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, selection_id) REFERENCES mc.product_selections(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, selection_id) REFERENCES mc.product_selections(business_id, store_id, id) DEFERRABLE`
 - `CHECK ((period_end >= period_start))`
 - `CHECK ((generation_no > 0))`
 - `CHECK ((input_fingerprint <> ''::text))`
-- `FOREIGN KEY (method_version_id) REFERENCES mc.method_versions(id)`
+- `FOREIGN KEY (method_version_id) REFERENCES mc.method_versions(id) DEFERRABLE`
 - `CHECK (isfinite(period_end))`
 - `CHECK (isfinite(period_start))`
 - `PRIMARY KEY (id)`
@@ -412,15 +424,39 @@
 Ограничения и связи:
 
 - `CHECK ((((request_id IS NULL) AND (attempt_no IS NULL)) OR ((request_id IS NOT NULL) AND (attempt_no IS NOT NULL) AND (attempt_no > 0))))`
-- `FOREIGN KEY (business_id, store_id, request_id) REFERENCES mc.calculation_requests(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, request_id) REFERENCES mc.calculation_requests(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, selection_id) REFERENCES mc.product_selections(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, selection_id) REFERENCES mc.product_selections(business_id, store_id, id) DEFERRABLE`
 - `CHECK ((period_end >= period_start))`
 - `CHECK (((status = 'running'::text) = (finished_at IS NULL)))`
-- `FOREIGN KEY (method_version_id) REFERENCES mc.method_versions(id)`
+- `FOREIGN KEY (method_version_id) REFERENCES mc.method_versions(id) DEFERRABLE`
 - `PRIMARY KEY (id)`
 - `CHECK ((quality = ANY (ARRAY['complete'::text, 'partial'::text, 'unavailable'::text])))`
 - `CHECK ((status = ANY (ARRAY['running'::text, 'succeeded'::text, 'failed'::text])))`
+
+## campaign_grants
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| business_id | uuid | нет | — |
+| eligibility_group | text | нет | — |
+| claim_id | uuid | нет | — |
+| campaign_code | text | нет | — |
+| benefit_kind | text | нет | — |
+| benefit_parameters | jsonb | нет | — |
+| benefit_scope | text | нет | — |
+| benefit_starts_at | timestamp with time zone | нет | — |
+| benefit_ends_at | timestamp with time zone | да | — |
+
+Ограничения и связи:
+
+- `CHECK ((jsonb_typeof(benefit_parameters) = 'object'::text))`
+- `CHECK ((benefit_scope = ANY (ARRAY['account'::text, 'event'::text])))`
+- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id) DEFERRABLE`
+- `CHECK (((benefit_ends_at IS NULL) OR (benefit_ends_at > benefit_starts_at)))`
+- `FOREIGN KEY (claim_id, eligibility_group) REFERENCES mc_campaign_private.claims(id, eligibility_group)`
+- `UNIQUE (claim_id)`
+- `PRIMARY KEY (business_id, eligibility_group)`
 
 ## connection_secrets
 
@@ -462,7 +498,7 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
 - `CHECK ((credential_generation >= 0))`
 - `PRIMARY KEY (id)`
@@ -487,11 +523,11 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, cost_id) REFERENCES mc.variant_costs(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, cost_id) REFERENCES mc.variant_costs(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, cost_id, id)`
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, import_row_id) REFERENCES mc.import_rows(business_id, store_id, id)`
-- `FOREIGN KEY (changed_by) REFERENCES mc.users(id)`
+- `FOREIGN KEY (business_id, store_id, import_row_id) REFERENCES mc.import_rows(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (changed_by) REFERENCES mc.users(id) DEFERRABLE`
 - `CHECK (((origin = 'file'::text) = (import_row_id IS NOT NULL)))`
 - `UNIQUE (cost_id, version_no)`
 - `CHECK ((currency = 'RUB'::text))`
@@ -518,8 +554,8 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, source_document_id) REFERENCES mc.source_documents(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, stream_id) REFERENCES mc.sync_streams(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, source_document_id) REFERENCES mc.source_documents(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, stream_id) REFERENCES mc.sync_streams(business_id, store_id, id) DEFERRABLE`
 - `CHECK ((date_to >= date_from))`
 - `PRIMARY KEY (id)`
 - `CHECK ((status = ANY (ARRAY['unknown'::text, 'partial'::text, 'complete'::text, 'unavailable'::text])))`
@@ -544,11 +580,11 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, report_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, report_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id) DEFERRABLE`
 - `CHECK ((((status = 'open'::text) AND (resolved_at IS NULL) AND (resolved_by_normalization_id IS NULL)) OR ((status = 'resolved'::text) AND (resolved_at IS NOT NULL) AND (resolved_by_normalization_id IS NOT NULL)) OR (status = 'accepted_limitation'::text)))`
-- `FOREIGN KEY (business_id, store_id, resolved_by_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, document_id) REFERENCES mc.source_documents(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, report_row_id) REFERENCES mc.report_rows(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, resolved_by_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, document_id) REFERENCES mc.source_documents(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, report_row_id) REFERENCES mc.report_rows(business_id, store_id, id) DEFERRABLE`
 - `PRIMARY KEY (id)`
 - `CHECK ((severity = ANY (ARRAY['warning'::text, 'blocking'::text])))`
 - `CHECK ((status = ANY (ARRAY['open'::text, 'resolved'::text, 'accepted_limitation'::text])))`
@@ -579,12 +615,12 @@
 Ограничения и связи:
 
 - `CHECK ((amount > (0)::numeric))`
-- `FOREIGN KEY (business_id, store_id, expense_id) REFERENCES mc.expenses(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, expense_id) REFERENCES mc.expenses(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, expense_id, id)`
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, import_row_id) REFERENCES mc.import_rows(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, import_row_id) REFERENCES mc.import_rows(business_id, store_id, id) DEFERRABLE`
 - `CHECK ((category = ANY (ARRAY['external_promotion'::text, 'agency_services'::text, 'other_external'::text, 'packaging'::text, 'software_services'::text])))`
-- `FOREIGN KEY (changed_by) REFERENCES mc.users(id)`
+- `FOREIGN KEY (changed_by) REFERENCES mc.users(id) DEFERRABLE`
 - `CHECK ((period_end >= period_start))`
 - `CHECK (((recognition_method <> 'on_date'::text) OR (period_end = period_start)))`
 - `CHECK (((origin = 'file'::text) = (import_row_id IS NOT NULL)))`
@@ -611,11 +647,11 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, id, current_version_id) REFERENCES mc.expense_versions(business_id, store_id, expense_id, id)`
+- `FOREIGN KEY (business_id, store_id, id, current_version_id) REFERENCES mc.expense_versions(business_id, store_id, expense_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.product_selection_items(business_id, store_id, product_id)`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.product_selection_items(business_id, store_id, product_id) DEFERRABLE`
 - `PRIMARY KEY (id)`
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `UNIQUE (store_id, external_entry_key)`
 
 ## financial_categories
@@ -651,9 +687,9 @@
 Ограничения и связи:
 
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, operation_version_id) REFERENCES mc.operation_versions(business_id, store_id, id)`
-- `FOREIGN KEY (category_code) REFERENCES mc.financial_categories(code)`
-- `FOREIGN KEY (method_version_id) REFERENCES mc.method_versions(id)`
+- `FOREIGN KEY (business_id, store_id, operation_version_id) REFERENCES mc.operation_versions(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (category_code) REFERENCES mc.financial_categories(code) DEFERRABLE`
+- `FOREIGN KEY (method_version_id) REFERENCES mc.method_versions(id) DEFERRABLE`
 - `UNIQUE (operation_version_id, method_version_id, component_key)`
 - `PRIMARY KEY (id)`
 - `CHECK ((result_scope_classification = ANY (ARRAY['selected_product'::text, 'store'::text, 'product_expected'::text, 'unclassified'::text, 'reconciliation'::text])))`
@@ -686,9 +722,9 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, publication_id) REFERENCES mc.financial_daily_publications(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, publication_id) REFERENCES mc.financial_daily_publications(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, publication_id)`
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `PRIMARY KEY (business_id, store_id)`
 
 ## financial_daily_days
@@ -711,7 +747,7 @@
 Ограничения и связи:
 
 - `CHECK (isfinite(accounting_date))`
-- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
 - `CHECK ((coverage_complete OR (quality <> 'complete'::text)))`
 - `UNIQUE (generation_id, accounting_date)`
@@ -741,16 +777,16 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, cost_version_id) REFERENCES mc.cost_versions(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, expense_version_id) REFERENCES mc.expense_versions(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, financial_component_id) REFERENCES mc.financial_components(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, generation_id, daily_result_id) REFERENCES mc.financial_daily_results(business_id, store_id, generation_id, id)`
-- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, cost_version_id) REFERENCES mc.cost_versions(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, expense_version_id) REFERENCES mc.expense_versions(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, financial_component_id) REFERENCES mc.financial_components(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, generation_id, daily_result_id) REFERENCES mc.financial_daily_results(business_id, store_id, generation_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, operation_link_id) REFERENCES mc.operation_links(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, report_row_id) REFERENCES mc.report_rows(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, source_operation_version_id) REFERENCES mc.operation_versions(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, tax_computation_id) REFERENCES mc.tax_computations(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, operation_link_id) REFERENCES mc.operation_links(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, report_row_id) REFERENCES mc.report_rows(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, source_operation_version_id) REFERENCES mc.operation_versions(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, tax_computation_id) REFERENCES mc.tax_computations(business_id, store_id, id) DEFERRABLE`
 - `CHECK ((num_nonnulls(financial_component_id, cost_version_id, expense_version_id, tax_computation_id, report_row_id) = 1))`
 - `PRIMARY KEY (id)`
 - `CHECK ((((cost_version_id IS NULL) AND (report_row_id IS NULL) AND (source_operation_version_id IS NULL) AND (operation_link_id IS NULL) AND (quantity IS NULL)) OR ((cost_version_id IS NOT NULL) AND (report_row_id IS NULL) AND (source_operation_version_id IS NOT NULL) AND (quantity IS NOT NULL)) OR ((report_row_id IS NOT NULL) AND (cost_version_id IS NULL) AND (source_operation_version_id IS NOT NULL) AND (quantity IS NULL))))`
@@ -776,18 +812,18 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, report_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, report_version_id, report_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, report_version_id, id)`
-- `FOREIGN KEY (business_id, store_id, cost_version_id) REFERENCES mc.cost_versions(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, expense_version_id) REFERENCES mc.expense_versions(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, selection_id) REFERENCES mc.product_selections(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id)`
+- `FOREIGN KEY (business_id, store_id, report_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, report_version_id, report_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, report_version_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, cost_version_id) REFERENCES mc.cost_versions(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, expense_version_id) REFERENCES mc.expense_versions(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, selection_id) REFERENCES mc.product_selections(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
 - `CHECK ((((source_kind = 'report'::text) AND (report_version_id IS NOT NULL) AND (report_normalization_id IS NOT NULL) AND (num_nonnulls(cost_version_id, expense_version_id, tax_setting_version_id, selection_id, financial_week_coverage_id, empty_confirmation_job_id) = 0)) OR ((source_kind = 'empty_week'::text) AND (financial_week_coverage_id IS NOT NULL) AND (empty_confirmation_job_id IS NOT NULL) AND (num_nonnulls(report_version_id, report_normalization_id, cost_version_id, expense_version_id, tax_setting_version_id, selection_id) = 0)) OR ((source_kind = 'cost'::text) AND (cost_version_id IS NOT NULL) AND (num_nonnulls(report_version_id, report_normalization_id, expense_version_id, tax_setting_version_id, selection_id, financial_week_coverage_id, empty_confirmation_job_id) = 0)) OR ((source_kind = 'expense'::text) AND (expense_version_id IS NOT NULL) AND (num_nonnulls(report_version_id, report_normalization_id, cost_version_id, tax_setting_version_id, selection_id, financial_week_coverage_id, empty_confirmation_job_id) = 0)) OR ((source_kind = 'tax'::text) AND (tax_setting_version_id IS NOT NULL) AND (num_nonnulls(report_version_id, report_normalization_id, cost_version_id, expense_version_id, selection_id, financial_week_coverage_id, empty_confirmation_job_id) = 0)) OR ((source_kind = 'selection'::text) AND (selection_id IS NOT NULL) AND (num_nonnulls(report_version_id, report_normalization_id, cost_version_id, expense_version_id, tax_setting_version_id, financial_week_coverage_id, empty_confirmation_job_id) = 0))))`
-- `FOREIGN KEY (business_id, store_id, financial_week_coverage_id) REFERENCES mc.financial_week_coverage(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, empty_confirmation_job_id) REFERENCES mc.jobs(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, financial_week_coverage_id) REFERENCES mc.financial_week_coverage(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, empty_confirmation_job_id) REFERENCES mc.jobs(business_id, store_id, id) DEFERRABLE`
 - `PRIMARY KEY (id)`
 - `CHECK ((source_kind = ANY (ARRAY['report'::text, 'empty_week'::text, 'cost'::text, 'expense'::text, 'tax'::text, 'selection'::text])))`
 - `UNIQUE NULLS NOT DISTINCT (generation_id, source_kind, report_version_id, report_normalization_id, cost_version_id, expense_version_id, tax_setting_version_id, selection_id, financial_week_coverage_id, empty_confirmation_job_id)`
@@ -807,9 +843,9 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, product_id, variant_id) REFERENCES mc.variants(business_id, store_id, product_id, id)`
-- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.products(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, product_id, variant_id) REFERENCES mc.variants(business_id, store_id, product_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.products(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE NULLS NOT DISTINCT (generation_id, product_id, variant_id)`
 - `UNIQUE (business_id, store_id, id)`
 - `PRIMARY KEY (id)`
@@ -839,10 +875,10 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, job_id) REFERENCES mc.jobs(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, job_id) REFERENCES mc.jobs(business_id, store_id, id) DEFERRABLE`
 - `CHECK (isfinite(affected_from))`
 - `CHECK (isfinite(affected_to))`
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, generation_no)`
 - `UNIQUE (business_id, store_id, id)`
 - `CHECK ((watermark_generation >= source_event_generation))`
@@ -852,10 +888,10 @@
 - `CHECK (((length(frozen_input_fingerprint) >= 1) AND (length(frozen_input_fingerprint) <= 200)))`
 - `CHECK ((generation_no > 0))`
 - `UNIQUE (job_id)`
-- `FOREIGN KEY (parser_method_version_id) REFERENCES mc.method_versions(id)`
+- `FOREIGN KEY (parser_method_version_id) REFERENCES mc.method_versions(id) DEFERRABLE`
 - `PRIMARY KEY (id)`
 - `CHECK ((quality = ANY (ARRAY['complete'::text, 'partial'::text, 'unavailable'::text])))`
-- `FOREIGN KEY (result_method_version_id) REFERENCES mc.method_versions(id)`
+- `FOREIGN KEY (result_method_version_id) REFERENCES mc.method_versions(id) DEFERRABLE`
 - `CHECK ((source_event_generation > 0))`
 - `CHECK ((status = ANY (ARRAY['building'::text, 'succeeded'::text, 'failed'::text, 'superseded'::text])))`
 
@@ -873,8 +909,8 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, generation_id, accounting_date) REFERENCES mc.financial_daily_days(business_id, store_id, generation_id, accounting_date)`
-- `FOREIGN KEY (business_id, store_id, publication_id) REFERENCES mc.financial_daily_publications(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, generation_id, accounting_date) REFERENCES mc.financial_daily_days(business_id, store_id, generation_id, accounting_date) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, publication_id) REFERENCES mc.financial_daily_publications(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (publication_id, accounting_date)`
 - `CHECK (isfinite(accounting_date))`
 - `UNIQUE (business_id, store_id, id)`
@@ -900,10 +936,10 @@
 
 - `CHECK (isfinite(affected_from))`
 - `CHECK (isfinite(affected_to))`
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
-- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, prior_publication_id) REFERENCES mc.financial_daily_publications(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, prior_publication_id) REFERENCES mc.financial_daily_publications(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, publication_no)`
 - `CHECK ((watermark_generation >= source_event_generation))`
 - `CHECK ((affected_to >= affected_from))`
@@ -933,10 +969,10 @@
 Ограничения и связи:
 
 - `CHECK (isfinite(accounting_date))`
-- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.products(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, product_id, variant_id) REFERENCES mc.variants(business_id, store_id, product_id, id)`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.products(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, product_id, variant_id) REFERENCES mc.variants(business_id, store_id, product_id, id) DEFERRABLE`
 - `CHECK ((((scope = ANY (ARRAY['store'::text, 'selected_products'::text])) AND (product_id IS NULL) AND (variant_id IS NULL)) OR ((scope = 'product'::text) AND (product_id IS NOT NULL) AND (variant_id IS NULL)) OR ((scope = 'variant'::text) AND (product_id IS NOT NULL) AND (variant_id IS NOT NULL))))`
 - `UNIQUE NULLS NOT DISTINCT (generation_id, accounting_date, reason_code, scope, product_id, variant_id)`
 - `PRIMARY KEY (id)`
@@ -967,11 +1003,11 @@
 
 - `CHECK (isfinite(accounting_date))`
 - `UNIQUE (business_id, store_id, generation_id, id)`
-- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.products(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, product_id, variant_id) REFERENCES mc.variants(business_id, store_id, product_id, id)`
-- `FOREIGN KEY (category_code) REFERENCES mc.financial_categories(code)`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.products(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, product_id, variant_id) REFERENCES mc.variants(business_id, store_id, product_id, id) DEFERRABLE`
+- `FOREIGN KEY (category_code) REFERENCES mc.financial_categories(code) DEFERRABLE`
 - `CHECK ((((scope = 'store'::text) AND (product_id IS NULL) AND (variant_id IS NULL)) OR ((scope = 'selected_products'::text) AND (product_id IS NOT NULL))))`
 - `CHECK (((variant_id IS NULL) OR (product_id IS NOT NULL)))`
 - `UNIQUE NULLS NOT DISTINCT (generation_id, accounting_date, category_code, scope, product_id, variant_id)`
@@ -999,10 +1035,10 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, legacy_run_id) REFERENCES mc.calculation_runs(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, period_result_id) REFERENCES mc.financial_period_results(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, publication_id) REFERENCES mc.publications(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, legacy_run_id) REFERENCES mc.calculation_runs(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, period_result_id) REFERENCES mc.financial_period_results(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, publication_id) REFERENCES mc.publications(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (generation_id, publication_id, period_result_id)`
 - `UNIQUE (business_id, store_id, id)`
 - `CHECK ((period_end >= period_start))`
@@ -1026,8 +1062,8 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, financial_component_id) REFERENCES mc.financial_components(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, generation_id, tax_fact_id) REFERENCES mc.financial_daily_tax_facts(business_id, store_id, generation_id, id)`
+- `FOREIGN KEY (business_id, store_id, financial_component_id) REFERENCES mc.financial_components(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, generation_id, tax_fact_id) REFERENCES mc.financial_daily_tax_facts(business_id, store_id, generation_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
 - `PRIMARY KEY (id)`
 - `UNIQUE (tax_fact_id, financial_component_id)`
@@ -1052,11 +1088,11 @@
 Ограничения и связи:
 
 - `CHECK (isfinite(accounting_date))`
-- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, generation_id) REFERENCES mc.financial_daily_generations(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, generation_id, id)`
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.products(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id)`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.products(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id) DEFERRABLE`
 - `UNIQUE (generation_id, accounting_date, product_id, tax_setting_version_id)`
 - `PRIMARY KEY (id)`
 - `CHECK (((tax_rate_fraction IS NULL) OR ((tax_rate_fraction >= (0)::numeric) AND (tax_rate_fraction <= (1)::numeric))))`
@@ -1090,30 +1126,30 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (actor_user_id) REFERENCES mc.users(id)`
+- `FOREIGN KEY (actor_user_id) REFERENCES mc.users(id) DEFERRABLE`
 - `CHECK ((allows_wb_api = false))`
 - `UNIQUE (business_id, event_key)`
 - `UNIQUE (business_id, store_id, event_generation)`
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, source_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, source_report_version_id) REFERENCES mc.report_versions(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, source_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, source_report_version_id) REFERENCES mc.report_versions(business_id, store_id, id) DEFERRABLE`
 - `CHECK ((affected_to >= affected_from))`
-- `FOREIGN KEY (business_id, store_id, source_cost_version_id) REFERENCES mc.cost_versions(business_id, store_id, id)`
-- `FOREIGN KEY (dispatch_job_id) REFERENCES mc.jobs(id)`
-- `FOREIGN KEY (business_id, store_id, source_financial_week_coverage_id) REFERENCES mc.financial_week_coverage(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, source_empty_confirmation_job_id) REFERENCES mc.jobs(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, source_cost_version_id) REFERENCES mc.cost_versions(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (dispatch_job_id) REFERENCES mc.jobs(id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, source_financial_week_coverage_id) REFERENCES mc.financial_week_coverage(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, source_empty_confirmation_job_id) REFERENCES mc.jobs(business_id, store_id, id) DEFERRABLE`
 - `CHECK ((event_generation > 0))`
 - `CHECK (((length(event_key) >= 1) AND (length(event_key) <= 200)))`
 - `CHECK ((event_type = ANY (ARRAY['report_accepted'::text, 'report_updated'::text, 'report_empty_confirmed'::text, 'cost_updated'::text, 'expense_updated'::text, 'tax_updated'::text, 'selection_updated'::text, 'parser_method_updated'::text, 'result_method_updated'::text, 'shadow_backfill'::text])))`
-- `FOREIGN KEY (business_id, store_id, source_expense_version_id) REFERENCES mc.expense_versions(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, source_expense_version_id) REFERENCES mc.expense_versions(business_id, store_id, id) DEFERRABLE`
 - `PRIMARY KEY (id)`
-- `FOREIGN KEY (business_id, store_id, source_report_version_id, source_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, report_version_id, id)`
-- `FOREIGN KEY (business_id, store_id, source_selection_id) REFERENCES mc.product_selections(business_id, store_id, id)`
-- `FOREIGN KEY (source_parser_method_version_id) REFERENCES mc.method_versions(id)`
-- `FOREIGN KEY (source_result_method_version_id) REFERENCES mc.method_versions(id)`
+- `FOREIGN KEY (business_id, store_id, source_report_version_id, source_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, report_version_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, source_selection_id) REFERENCES mc.product_selections(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (source_parser_method_version_id) REFERENCES mc.method_versions(id) DEFERRABLE`
+- `FOREIGN KEY (source_result_method_version_id) REFERENCES mc.method_versions(id) DEFERRABLE`
 - `CHECK ((((event_type = ANY (ARRAY['report_accepted'::text, 'report_updated'::text])) AND (source_report_version_id IS NOT NULL) AND (source_normalization_id IS NOT NULL) AND (num_nonnulls(source_cost_version_id, source_expense_version_id, source_tax_setting_version_id, source_selection_id, source_parser_method_version_id, source_result_method_version_id, source_financial_week_coverage_id, source_empty_confirmation_job_id) = 0)) OR ((event_type = 'report_empty_confirmed'::text) AND (source_financial_week_coverage_id IS NOT NULL) AND (source_empty_confirmation_job_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_cost_version_id, source_expense_version_id, source_tax_setting_version_id, source_selection_id, source_parser_method_version_id, source_result_method_version_id) = 0)) OR ((event_type = 'cost_updated'::text) AND (source_cost_version_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_expense_version_id, source_tax_setting_version_id, source_selection_id, source_parser_method_version_id, source_result_method_version_id, source_financial_week_coverage_id, source_empty_confirmation_job_id) = 0)) OR ((event_type = 'expense_updated'::text) AND (source_expense_version_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_cost_version_id, source_tax_setting_version_id, source_selection_id, source_parser_method_version_id, source_result_method_version_id, source_financial_week_coverage_id, source_empty_confirmation_job_id) = 0)) OR ((event_type = 'tax_updated'::text) AND (source_tax_setting_version_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_cost_version_id, source_expense_version_id, source_selection_id, source_parser_method_version_id, source_result_method_version_id, source_financial_week_coverage_id, source_empty_confirmation_job_id) = 0)) OR ((event_type = 'selection_updated'::text) AND (source_selection_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_cost_version_id, source_expense_version_id, source_tax_setting_version_id, source_parser_method_version_id, source_result_method_version_id, source_financial_week_coverage_id, source_empty_confirmation_job_id) = 0)) OR ((event_type = 'parser_method_updated'::text) AND (source_parser_method_version_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_cost_version_id, source_expense_version_id, source_tax_setting_version_id, source_selection_id, source_result_method_version_id, source_financial_week_coverage_id, source_empty_confirmation_job_id) = 0)) OR ((event_type = ANY (ARRAY['result_method_updated'::text, 'shadow_backfill'::text])) AND (source_result_method_version_id IS NOT NULL) AND (num_nonnulls(source_report_version_id, source_normalization_id, source_cost_version_id, source_expense_version_id, source_tax_setting_version_id, source_selection_id, source_parser_method_version_id, source_financial_week_coverage_id, source_empty_confirmation_job_id) = 0))))`
-- `FOREIGN KEY (business_id, source_tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id)`
+- `FOREIGN KEY (business_id, source_tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id) DEFERRABLE`
 
 ## financial_period_results
 
@@ -1133,7 +1169,7 @@
 Ограничения и связи:
 
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, run_id) REFERENCES mc.calculation_runs(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, run_id) REFERENCES mc.calculation_runs(business_id, store_id, id) DEFERRABLE`
 - `CHECK ((period_end >= period_start))`
 - `CHECK ((jsonb_typeof(missing_reasons) = 'array'::text))`
 - `CHECK (isfinite(period_end))`
@@ -1181,8 +1217,8 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, sync_run_id) REFERENCES mc.sync_runs(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, sync_run_id) REFERENCES mc.sync_runs(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (report_version_id, checksum)`
 - `PRIMARY KEY (id)`
 
@@ -1202,7 +1238,7 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `CHECK ((connection_status = ANY (ARRAY['pending'::text, 'active'::text, 'invalid'::text, 'revoked'::text])))`
 - `CHECK ((credential_generation > 0))`
 - `PRIMARY KEY (store_id)`
@@ -1218,7 +1254,7 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `CHECK ((next_generation > 0))`
 - `PRIMARY KEY (business_id, store_id)`
 
@@ -1246,14 +1282,14 @@
 Ограничения и связи:
 
 - `UNIQUE (business_id, store_id, credential_generation, week_start)`
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `CHECK (((EXTRACT(isodow FROM week_start) = (1)::numeric) AND (week_end = (week_start + 6))))`
 - `CHECK ((cardinality(check_reasons) > 0))`
 - `CHECK ((coverage_status = ANY (ARRAY['pending'::text, 'inventory_confirmed'::text, 'fetching'::text, 'complete'::text, 'empty'::text, 'partial'::text, 'retry'::text, 'unavailable'::text])))`
 - `CHECK ((credential_generation > 0))`
-- `FOREIGN KEY (empty_confirmed_by_job_id) REFERENCES mc.jobs(id) ON DELETE RESTRICT`
+- `FOREIGN KEY (empty_confirmed_by_job_id) REFERENCES mc.jobs(id) DEFERRABLE`
 - `CHECK (((coverage_status <> 'empty'::text) OR ((inventory_confirmed_at IS NOT NULL) AND (empty_confirmed_by_job_id IS NOT NULL))))`
-- `FOREIGN KEY (business_id, store_id, empty_confirmed_by_job_id) REFERENCES mc.jobs(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, empty_confirmed_by_job_id) REFERENCES mc.jobs(business_id, store_id, id) DEFERRABLE`
 - `CHECK (((last_error_code IS NULL) OR (last_error_code ~ '^[a-z0-9][a-z0-9_.:-]{0,99}$'::text)))`
 - `PRIMARY KEY (id)`
 - `UNIQUE (business_id, store_id, id)`
@@ -1285,7 +1321,7 @@
 Ограничения и связи:
 
 - `CHECK (((fetch_status = 'accepted'::text) = ((report_version_id IS NOT NULL) AND (accepted_normalization_id IS NOT NULL) AND (accepted_inventory_checksum = inventory_checksum) AND (accepted_at IS NOT NULL))))`
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
 - `CHECK ((period_end >= period_start))`
 - `UNIQUE (coverage_id, external_report_id)`
@@ -1294,10 +1330,10 @@
 - `CHECK ((external_report_id ~ '^[0-9]+$'::text))`
 - `CHECK ((fetch_status = ANY (ARRAY['pending'::text, 'fetching'::text, 'received'::text, 'normalizing'::text, 'accepted'::text, 'retry'::text, 'failed'::text])))`
 - `CHECK ((inventory_checksum ~ '^[0-9a-f]{64}$'::text))`
-- `FOREIGN KEY (business_id, store_id, accepted_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, report_version_id, accepted_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, report_version_id, id)`
+- `FOREIGN KEY (business_id, store_id, accepted_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, report_version_id, accepted_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, report_version_id, id) DEFERRABLE`
 - `PRIMARY KEY (id)`
-- `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id) DEFERRABLE`
 
 ## import_batches
 
@@ -1316,13 +1352,13 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, document_id) REFERENCES mc.source_documents(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, document_id) REFERENCES mc.source_documents(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
 - `UNIQUE (document_id, kind)`
 - `CHECK ((kind = ANY (ARRAY['costs'::text, 'promotion_expenses'::text, 'expenses'::text])))`
 - `PRIMARY KEY (id)`
 - `CHECK ((status = ANY (ARRAY['uploaded'::text, 'validating'::text, 'ready'::text, 'applying'::text, 'completed'::text, 'failed'::text, 'cancelled'::text])))`
-- `FOREIGN KEY (uploaded_by) REFERENCES mc.users(id)`
+- `FOREIGN KEY (uploaded_by) REFERENCES mc.users(id) DEFERRABLE`
 
 ## import_rows
 
@@ -1341,7 +1377,7 @@
 Ограничения и связи:
 
 - `UNIQUE (batch_id, row_number)`
-- `FOREIGN KEY (business_id, store_id, batch_id) REFERENCES mc.import_batches(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, batch_id) REFERENCES mc.import_batches(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
 - `PRIMARY KEY (id)`
 - `CHECK ((row_number > 0))`
@@ -1366,7 +1402,7 @@
 Ограничения и связи:
 
 - `CHECK ((attempt_count >= 0))`
-- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id)`
+- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id) DEFERRABLE`
 - `CHECK ((((status = 'pending'::text) AND (lease_until IS NULL)) OR ((status = 'running'::text) AND (lease_until IS NOT NULL))))`
 - `FOREIGN KEY (job_id) REFERENCES mc.jobs(id) ON DELETE CASCADE`
 - `CHECK ((max_attempts > 0))`
@@ -1402,8 +1438,8 @@
 Ограничения и связи:
 
 - `CHECK ((attempt_count >= 0))`
-- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id)`
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `CHECK ((((status = 'pending'::text) AND (worker_id IS NULL) AND (lease_token IS NULL) AND (lease_until IS NULL) AND (heartbeat_at IS NULL) AND (finished_at IS NULL)) OR ((status = 'running'::text) AND (worker_id IS NOT NULL) AND (lease_token IS NOT NULL) AND (lease_until IS NOT NULL) AND (heartbeat_at IS NOT NULL) AND (finished_at IS NULL)) OR ((status = ANY (ARRAY['succeeded'::text, 'failed'::text])) AND (worker_id IS NULL) AND (lease_token IS NULL) AND (lease_until IS NULL) AND (heartbeat_at IS NULL) AND (finished_at IS NOT NULL))))`
 - `CHECK ((max_attempts > 0))`
 - `CHECK ((((status = 'succeeded'::text) AND (outcome = ANY (ARRAY['completed'::text, 'superseded'::text]))) OR ((status <> 'succeeded'::text) AND (outcome IS NULL))))`
@@ -1424,11 +1460,11 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id)`
+- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id) DEFERRABLE`
 - `UNIQUE (business_id, user_id)`
 - `PRIMARY KEY (id)`
 - `CHECK ((role = ANY (ARRAY['owner'::text, 'editor'::text, 'viewer'::text])))`
-- `FOREIGN KEY (user_id) REFERENCES mc.users(id)`
+- `FOREIGN KEY (user_id) REFERENCES mc.users(id) DEFERRABLE`
 
 ## method_versions
 
@@ -1465,13 +1501,13 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, from_operation_version_id) REFERENCES mc.operation_versions(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, from_operation_version_id) REFERENCES mc.operation_versions(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, to_operation_version_id) REFERENCES mc.operation_versions(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, to_operation_version_id) REFERENCES mc.operation_versions(business_id, store_id, id) DEFERRABLE`
 - `CHECK ((from_operation_version_id <> to_operation_version_id))`
 - `UNIQUE (from_operation_version_id, link_type, method_version_id)`
 - `CHECK ((link_type = 'return_to_original_sale'::text))`
-- `FOREIGN KEY (method_version_id) REFERENCES mc.method_versions(id)`
+- `FOREIGN KEY (method_version_id) REFERENCES mc.method_versions(id) DEFERRABLE`
 - `PRIMARY KEY (id)`
 - `CHECK ((status = ANY (ARRAY['confirmed'::text, 'rejected'::text, 'ambiguous'::text])))`
 
@@ -1499,12 +1535,12 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, report_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, report_normalization_id) REFERENCES mc.report_normalizations(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, operation_id) REFERENCES mc.operations(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.products(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, product_id, variant_id) REFERENCES mc.variants(business_id, store_id, product_id, id)`
-- `FOREIGN KEY (business_id, store_id, report_row_id) REFERENCES mc.report_rows(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, operation_id) REFERENCES mc.operations(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.products(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, product_id, variant_id) REFERENCES mc.variants(business_id, store_id, product_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, report_row_id) REFERENCES mc.report_rows(business_id, store_id, id) DEFERRABLE`
 - `CHECK (((variant_id IS NULL) OR (product_id IS NOT NULL)))`
 - `CHECK ((currency = 'RUB'::text))`
 - `UNIQUE (operation_id, version_no)`
@@ -1543,7 +1579,7 @@
 
 - `CHECK (((cancel_count IS NULL) = (cancel_amount IS NULL)))`
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, snapshot_id, product_id) REFERENCES mc.operational_snapshot_products(business_id, store_id, snapshot_id, product_id)`
+- `FOREIGN KEY (business_id, store_id, snapshot_id, product_id) REFERENCES mc.operational_snapshot_products(business_id, store_id, snapshot_id, product_id) DEFERRABLE`
 - `CHECK ((buyout_amount >= (0)::numeric))`
 - `CHECK ((buyout_count >= 0))`
 - `CHECK ((cancel_amount >= (0)::numeric))`
@@ -1580,7 +1616,7 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `CHECK ((period_end = (period_start + 29)))`
 - `CHECK (isfinite(period_end))`
 - `CHECK (isfinite(period_start))`
@@ -1601,8 +1637,8 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, id, current_snapshot_id) REFERENCES mc.operational_snapshots(business_id, store_id, operational_period_id, id)`
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (business_id, store_id, id, current_snapshot_id) REFERENCES mc.operational_snapshots(business_id, store_id, operational_period_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
 - `CHECK (((period_end >= period_start) AND (period_end <= (period_start + 6))))`
 - `CHECK (isfinite(period_end))`
@@ -1625,7 +1661,7 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `CHECK ((initial_status = ANY (ARRAY['pending'::text, 'complete'::text, 'failed'::text])))`
 - `CHECK (isfinite(metric_date))`
 - `PRIMARY KEY (store_id, metric_date)`
@@ -1646,8 +1682,8 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, document_id) REFERENCES mc.source_documents(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, operational_period_id, snapshot_id) REFERENCES mc.operational_snapshots(business_id, store_id, operational_period_id, id)`
+- `FOREIGN KEY (business_id, store_id, document_id) REFERENCES mc.source_documents(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, operational_period_id, snapshot_id) REFERENCES mc.operational_snapshots(business_id, store_id, operational_period_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
 - `UNIQUE (document_id)`
 - `PRIMARY KEY (id)`
@@ -1665,8 +1701,8 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.product_selection_items(business_id, store_id, product_id)`
-- `FOREIGN KEY (business_id, store_id, snapshot_id) REFERENCES mc.operational_snapshots(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.product_selection_items(business_id, store_id, product_id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, snapshot_id) REFERENCES mc.operational_snapshots(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, snapshot_id, product_id)`
 - `PRIMARY KEY (snapshot_id, product_id)`
 - `CHECK ((request_position > 0))`
@@ -1694,9 +1730,9 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, document_id) REFERENCES mc.source_documents(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, document_id) REFERENCES mc.source_documents(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, operational_period_id) REFERENCES mc.operational_periods(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, operational_period_id) REFERENCES mc.operational_periods(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, operational_period_id, id)`
 - `CHECK (((status = 'accepted'::text) = (accepted_at IS NOT NULL)))`
 - `CHECK ((((quality = 'complete'::text) AND (missing_reasons = '[]'::jsonb)) OR ((quality = ANY (ARRAY['partial'::text, 'unavailable'::text])) AND (jsonb_array_length(missing_reasons) > 0))))`
@@ -1725,8 +1761,8 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, requested_by) REFERENCES mc.memberships(business_id, user_id)`
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (business_id, requested_by) REFERENCES mc.memberships(business_id, user_id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `PRIMARY KEY (store_id)`
 - `CHECK ((status = ANY (ARRAY['active'::text, 'blocked'::text])))`
 
@@ -1743,7 +1779,7 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
 - `PRIMARY KEY (id)`
 - `UNIQUE (store_id, source_code, source_operation_key)`
@@ -1761,9 +1797,9 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.products(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.products(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, product_id)`
-- `FOREIGN KEY (business_id, store_id, selection_id) REFERENCES mc.product_selections(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, selection_id) REFERENCES mc.product_selections(business_id, store_id, id) DEFERRABLE`
 - `PRIMARY KEY (id)`
 - `UNIQUE (selection_id, product_id)`
 
@@ -1783,13 +1819,13 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, confirmed_by) REFERENCES mc.memberships(business_id, user_id)`
-- `FOREIGN KEY (business_id, store_id, catalog_document_id) REFERENCES mc.source_documents(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (business_id, confirmed_by) REFERENCES mc.memberships(business_id, user_id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, catalog_document_id) REFERENCES mc.source_documents(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (confirmed_by) REFERENCES mc.users(id)`
+- `FOREIGN KEY (confirmed_by) REFERENCES mc.users(id) DEFERRABLE`
 - `PRIMARY KEY (id)`
-- `FOREIGN KEY (plan_version_id) REFERENCES mc.billing_plan_versions(id)`
+- `FOREIGN KEY (plan_version_id) REFERENCES mc.billing_plan_versions(id) DEFERRABLE`
 - `CHECK ((product_limit_snapshot > 0))`
 - `CHECK ((status = ANY (ARRAY['draft'::text, 'confirmed'::text])))`
 - `UNIQUE (store_id)`
@@ -1813,9 +1849,9 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, historical_source_row_id) REFERENCES mc.report_rows(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, historical_source_row_id) REFERENCES mc.report_rows(business_id, store_id, id) DEFERRABLE`
 - `CHECK (((NOT historical_deleted) OR (historical_source_row_id IS NOT NULL)))`
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
 - `PRIMARY KEY (id)`
 - `CHECK ((status = ANY (ARRAY['active'::text, 'archived'::text])))`
@@ -1835,7 +1871,7 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, run_id) REFERENCES mc.calculation_runs(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, run_id) REFERENCES mc.calculation_runs(business_id, store_id, id) DEFERRABLE`
 - `PRIMARY KEY (id)`
 - `UNIQUE (run_id)`
 - `UNIQUE (business_id, store_id, id)`
@@ -1858,8 +1894,8 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, run_id) REFERENCES mc.calculation_runs(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, run_id) REFERENCES mc.calculation_runs(business_id, store_id, id) DEFERRABLE`
 - `CHECK ((num_nonnulls(run_id, report_version_id) = 1))`
 - `PRIMARY KEY (id)`
 - `CHECK ((status = ANY (ARRAY['passed'::text, 'failed'::text, 'not_checkable'::text])))`
@@ -1882,9 +1918,9 @@
 Ограничения и связи:
 
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id) DEFERRABLE`
 - `CHECK ((catalog_revision >= 0))`
-- `FOREIGN KEY (method_version_id) REFERENCES mc.method_versions(id)`
+- `FOREIGN KEY (method_version_id) REFERENCES mc.method_versions(id) DEFERRABLE`
 - `PRIMARY KEY (id)`
 - `UNIQUE (report_version_id, method_version_id, catalog_revision)`
 - `CHECK ((status = ANY (ARRAY['succeeded'::text, 'failed'::text])))`
@@ -1908,7 +1944,7 @@
 Ограничения и связи:
 
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, report_version_id) REFERENCES mc.report_versions(business_id, store_id, id) DEFERRABLE`
 - `PRIMARY KEY (id)`
 - `UNIQUE (report_version_id, external_row_key)`
 - `UNIQUE (report_version_id, row_number)`
@@ -1933,10 +1969,10 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, report_id, supersedes_version_id) REFERENCES mc.report_versions(business_id, store_id, report_id, id)`
-- `FOREIGN KEY (business_id, store_id, document_id) REFERENCES mc.source_documents(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, report_id, supersedes_version_id) REFERENCES mc.report_versions(business_id, store_id, report_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, document_id) REFERENCES mc.source_documents(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, report_id) REFERENCES mc.reports(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, report_id) REFERENCES mc.reports(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, report_id, id)`
 - `CHECK (((status = 'accepted'::text) = (accepted_at IS NOT NULL)))`
 - `PRIMARY KEY (id)`
@@ -1961,8 +1997,8 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
-- `FOREIGN KEY (business_id, store_id, id, current_version_id) REFERENCES mc.report_versions(business_id, store_id, report_id, id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, id, current_version_id) REFERENCES mc.report_versions(business_id, store_id, report_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
 - `CHECK ((period_end >= period_start))`
 - `PRIMARY KEY (id)`
@@ -1989,17 +2025,17 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, cost_version_id) REFERENCES mc.cost_versions(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, expense_version_id) REFERENCES mc.expense_versions(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, financial_component_id) REFERENCES mc.financial_components(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, result_line_id) REFERENCES mc.result_lines(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, cost_version_id) REFERENCES mc.cost_versions(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, expense_version_id) REFERENCES mc.expense_versions(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, financial_component_id) REFERENCES mc.financial_components(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, result_line_id) REFERENCES mc.result_lines(business_id, store_id, id) DEFERRABLE`
 - `CHECK ((num_nonnulls(financial_component_id, cost_version_id, expense_version_id, tax_computation_id, report_row_id) = 1))`
-- `FOREIGN KEY (business_id, store_id, operation_link_id) REFERENCES mc.operation_links(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, operation_link_id) REFERENCES mc.operation_links(business_id, store_id, id) DEFERRABLE`
 - `CHECK ((((operation_link_id IS NULL) AND (report_row_id IS NULL) AND ((source_operation_version_id IS NULL) OR (cost_version_id IS NOT NULL))) OR ((cost_version_id IS NOT NULL) AND (source_operation_version_id IS NOT NULL) AND (quantity IS NOT NULL) AND (report_row_id IS NULL)) OR ((report_row_id IS NOT NULL) AND (source_operation_version_id IS NOT NULL) AND (cost_version_id IS NULL) AND (quantity IS NULL))))`
 - `PRIMARY KEY (id)`
-- `FOREIGN KEY (business_id, store_id, report_row_id) REFERENCES mc.report_rows(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, source_operation_version_id) REFERENCES mc.operation_versions(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, tax_computation_id) REFERENCES mc.tax_computations(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, report_row_id) REFERENCES mc.report_rows(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, source_operation_version_id) REFERENCES mc.operation_versions(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, tax_computation_id) REFERENCES mc.tax_computations(business_id, store_id, id) DEFERRABLE`
 
 ## result_lines
 
@@ -2023,12 +2059,12 @@
 Ограничения и связи:
 
 - `CHECK ((((result_scope = 'selected_product'::text) AND (product_id IS NOT NULL)) OR ((result_scope = 'store'::text) AND (product_id IS NULL) AND (variant_id IS NULL))))`
-- `FOREIGN KEY (business_id, store_id, financial_period_result_id) REFERENCES mc.financial_period_results(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, financial_period_result_id) REFERENCES mc.financial_period_results(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.product_selection_items(business_id, store_id, product_id)`
-- `FOREIGN KEY (business_id, store_id, product_id, variant_id) REFERENCES mc.variants(business_id, store_id, product_id, id)`
-- `FOREIGN KEY (business_id, store_id, run_id) REFERENCES mc.calculation_runs(business_id, store_id, id)`
-- `FOREIGN KEY (category_code) REFERENCES mc.financial_categories(code)`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.product_selection_items(business_id, store_id, product_id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, product_id, variant_id) REFERENCES mc.variants(business_id, store_id, product_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, run_id) REFERENCES mc.calculation_runs(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (category_code) REFERENCES mc.financial_categories(code) DEFERRABLE`
 - `CHECK ((currency = 'RUB'::text))`
 - `PRIMARY KEY (id)`
 - `CHECK ((quality = ANY (ARRAY['complete'::text, 'partial'::text, 'unavailable'::text])))`
@@ -2063,9 +2099,9 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, sync_run_id) REFERENCES mc.sync_runs(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, sync_run_id) REFERENCES mc.sync_runs(business_id, store_id, id) DEFERRABLE`
 - `CHECK ((completeness = ANY (ARRAY['unknown'::text, 'partial'::text, 'complete'::text])))`
 - `CHECK ((origin = ANY (ARRAY['wb_api'::text, 'user_file'::text])))`
 - `PRIMARY KEY (id)`
@@ -2087,7 +2123,7 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, document_id) REFERENCES mc.source_documents(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, document_id) REFERENCES mc.source_documents(business_id, store_id, id) DEFERRABLE`
 - `CHECK ((byte_size >= 0))`
 - `UNIQUE (document_id, part_number)`
 - `CHECK ((part_number >= 0))`
@@ -2106,11 +2142,12 @@
 | status | text | нет | 'paused'::text |
 | created_at | timestamp with time zone | нет | now() |
 | catalog_revision | bigint | нет | 0 |
+| identity_verified_at | timestamp with time zone | да | — |
 
 Ограничения и связи:
 
 - `CHECK (((status <> 'active'::text) OR (external_account_id IS NOT NULL)))`
-- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id)`
+- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id) DEFERRABLE`
 - `UNIQUE (business_id, id)`
 - `UNIQUE (business_id, marketplace_code, external_account_id)`
 - `CHECK ((catalog_revision >= 0))`
@@ -2132,11 +2169,11 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, subscription_id) REFERENCES mc.subscriptions(business_id, id)`
+- `FOREIGN KEY (business_id, subscription_id) REFERENCES mc.subscriptions(business_id, id) DEFERRABLE`
 - `CHECK ((event_type = ANY (ARRAY['started'::text, 'plan_changed'::text, 'renewed'::text, 'status_changed'::text])))`
-- `FOREIGN KEY (new_plan_version_id) REFERENCES mc.billing_plan_versions(id)`
+- `FOREIGN KEY (new_plan_version_id) REFERENCES mc.billing_plan_versions(id) DEFERRABLE`
 - `PRIMARY KEY (id)`
-- `FOREIGN KEY (previous_plan_version_id) REFERENCES mc.billing_plan_versions(id)`
+- `FOREIGN KEY (previous_plan_version_id) REFERENCES mc.billing_plan_versions(id) DEFERRABLE`
 
 ## subscriptions
 
@@ -2154,12 +2191,12 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id)`
+- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id) DEFERRABLE`
 - `UNIQUE (business_id, id)`
 - `UNIQUE (business_id)`
 - `CHECK (((period_end IS NULL) OR (period_end > period_start)))`
 - `PRIMARY KEY (id)`
-- `FOREIGN KEY (plan_version_id) REFERENCES mc.billing_plan_versions(id)`
+- `FOREIGN KEY (plan_version_id) REFERENCES mc.billing_plan_versions(id) DEFERRABLE`
 - `CHECK ((status = ANY (ARRAY['active'::text, 'past_due'::text, 'ended'::text])))`
 
 ## sync_runs
@@ -2182,7 +2219,7 @@
 Ограничения и связи:
 
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, stream_id) REFERENCES mc.sync_streams(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, stream_id) REFERENCES mc.sync_streams(business_id, store_id, id) DEFERRABLE`
 - `CHECK (((requested_to IS NULL) OR (requested_from IS NULL) OR (requested_to >= requested_from)))`
 - `PRIMARY KEY (id)`
 - `CHECK ((status = ANY (ARRAY['queued'::text, 'running'::text, 'succeeded'::text, 'partial'::text, 'failed'::text])))`
@@ -2203,7 +2240,7 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
 - `PRIMARY KEY (id)`
 - `CHECK ((source_type = ANY (ARRAY['catalog'::text, 'financial_reports'::text, 'operational_sales_funnel'::text])))`
@@ -2230,7 +2267,7 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id)`
+- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id) DEFERRABLE`
 - `PRIMARY KEY (business_id)`
 
 ## tariff_lifecycle_events
@@ -2249,12 +2286,12 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id)`
-- `FOREIGN KEY (business_id, profile_id) REFERENCES mc.tariff_profiles(business_id, id)`
+- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id) DEFERRABLE`
+- `FOREIGN KEY (business_id, profile_id) REFERENCES mc.tariff_profiles(business_id, id) DEFERRABLE`
 - `CHECK (((length(event_key) >= 1) AND (length(event_key) <= 200)))`
 - `CHECK ((event_type = ANY (ARRAY['period_confirmed'::text, 'expired'::text, 'selection_confirmed'::text])))`
 - `PRIMARY KEY (event_key)`
-- `FOREIGN KEY (plan_id) REFERENCES mc.billing_plans(id)`
+- `FOREIGN KEY (plan_id) REFERENCES mc.billing_plans(id) DEFERRABLE`
 
 ## tariff_profile_products
 
@@ -2267,8 +2304,8 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, profile_id, store_id) REFERENCES mc.tariff_profile_stores(business_id, profile_id, store_id)`
-- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.product_selection_items(business_id, store_id, product_id)`
+- `FOREIGN KEY (business_id, profile_id, store_id) REFERENCES mc.tariff_profile_stores(business_id, profile_id, store_id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.product_selection_items(business_id, store_id, product_id) DEFERRABLE`
 - `PRIMARY KEY (business_id, profile_id, store_id, product_id)`
 
 ## tariff_profile_state
@@ -2282,9 +2319,9 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, active_profile_id) REFERENCES mc.tariff_profiles(business_id, id)`
-- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id)`
-- `FOREIGN KEY (business_id, free_profile_id) REFERENCES mc.tariff_profiles(business_id, id)`
+- `FOREIGN KEY (business_id, active_profile_id) REFERENCES mc.tariff_profiles(business_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id) DEFERRABLE`
+- `FOREIGN KEY (business_id, free_profile_id) REFERENCES mc.tariff_profiles(business_id, id) DEFERRABLE`
 - `PRIMARY KEY (business_id)`
 - `CHECK ((revision > 0))`
 
@@ -2298,8 +2335,8 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, profile_id) REFERENCES mc.tariff_profiles(business_id, id)`
-- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id)`
+- `FOREIGN KEY (business_id, profile_id) REFERENCES mc.tariff_profiles(business_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
 - `PRIMARY KEY (business_id, profile_id, store_id)`
 
 ## tariff_profiles
@@ -2315,11 +2352,11 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id)`
+- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id) DEFERRABLE`
 - `UNIQUE (business_id, id)`
 - `UNIQUE (business_id, plan_id)`
 - `PRIMARY KEY (id)`
-- `FOREIGN KEY (plan_id) REFERENCES mc.billing_plans(id)`
+- `FOREIGN KEY (plan_id) REFERENCES mc.billing_plans(id) DEFERRABLE`
 - `CHECK ((revision > 0))`
 
 ## tax_basis_evidence
@@ -2337,9 +2374,9 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, financial_component_id) REFERENCES mc.financial_components(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, financial_component_id) REFERENCES mc.financial_components(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, tax_segment_id) REFERENCES mc.tax_computation_segments(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, tax_segment_id) REFERENCES mc.tax_computation_segments(business_id, store_id, id) DEFERRABLE`
 - `PRIMARY KEY (id)`
 - `CHECK (isfinite(recognition_date))`
 - `UNIQUE (tax_segment_id, financial_component_id)`
@@ -2362,8 +2399,8 @@
 Ограничения и связи:
 
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, tax_computation_id) REFERENCES mc.tax_computations(business_id, store_id, id)`
-- `FOREIGN KEY (business_id, tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id)`
+- `FOREIGN KEY (business_id, store_id, tax_computation_id) REFERENCES mc.tax_computations(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, tax_setting_version_id) REFERENCES mc.tax_setting_versions(business_id, id) DEFERRABLE`
 - `CHECK ((segment_end >= segment_start))`
 - `PRIMARY KEY (id)`
 - `CHECK (((rate_fraction >= (0)::numeric) AND (rate_fraction <= (1)::numeric)))`
@@ -2391,10 +2428,10 @@
 
 - `UNIQUE (run_id, period_start, period_end, product_id)`
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.product_selection_items(business_id, store_id, product_id)`
-- `FOREIGN KEY (business_id, store_id, run_id) REFERENCES mc.calculation_runs(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.product_selection_items(business_id, store_id, product_id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, run_id) REFERENCES mc.calculation_runs(business_id, store_id, id) DEFERRABLE`
 - `CHECK ((period_end >= period_start))`
-- `FOREIGN KEY (method_version_id) REFERENCES mc.method_versions(id)`
+- `FOREIGN KEY (method_version_id) REFERENCES mc.method_versions(id) DEFERRABLE`
 - `CHECK (isfinite(period_end))`
 - `CHECK (isfinite(period_start))`
 - `PRIMARY KEY (id)`
@@ -2419,9 +2456,9 @@
 Ограничения и связи:
 
 - `UNIQUE (business_id, id)`
-- `FOREIGN KEY (business_id, tax_setting_id) REFERENCES mc.tax_settings(business_id, id)`
+- `FOREIGN KEY (business_id, tax_setting_id) REFERENCES mc.tax_settings(business_id, id) DEFERRABLE`
 - `UNIQUE (business_id, tax_setting_id, id)`
-- `FOREIGN KEY (changed_by) REFERENCES mc.users(id)`
+- `FOREIGN KEY (changed_by) REFERENCES mc.users(id) DEFERRABLE`
 - `CHECK ((((regime_code = ANY (ARRAY['usn_income'::text, 'usn_income_expenses'::text])) AND (usn_rate_fraction IS NOT NULL) AND ((usn_rate_fraction >= (0)::numeric) AND (usn_rate_fraction <= (1)::numeric))) OR ((regime_code = 'osno'::text) AND (usn_rate_fraction IS NULL))))`
 - `CHECK ((currency = 'RUB'::text))`
 - `PRIMARY KEY (id)`
@@ -2444,9 +2481,9 @@
 Ограничения и связи:
 
 - `UNIQUE (business_id, effective_from)`
-- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id)`
+- `FOREIGN KEY (business_id) REFERENCES mc.businesses(id) DEFERRABLE`
 - `UNIQUE (business_id, id)`
-- `FOREIGN KEY (business_id, id, current_version_id) REFERENCES mc.tax_setting_versions(business_id, tax_setting_id, id)`
+- `FOREIGN KEY (business_id, id, current_version_id) REFERENCES mc.tax_setting_versions(business_id, tax_setting_id, id) DEFERRABLE`
 - `CHECK (isfinite(effective_from))`
 - `PRIMARY KEY (id)`
 
@@ -2482,10 +2519,10 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, id, current_version_id) REFERENCES mc.cost_versions(business_id, store_id, cost_id, id)`
+- `FOREIGN KEY (business_id, store_id, id, current_version_id) REFERENCES mc.cost_versions(business_id, store_id, cost_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.product_selection_items(business_id, store_id, product_id)`
-- `FOREIGN KEY (business_id, store_id, product_id, variant_id) REFERENCES mc.variants(business_id, store_id, product_id, id)`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.product_selection_items(business_id, store_id, product_id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, product_id, variant_id) REFERENCES mc.variants(business_id, store_id, product_id, id) DEFERRABLE`
 - `PRIMARY KEY (id)`
 - `UNIQUE (variant_id, effective_from)`
 
@@ -2505,7 +2542,7 @@
 
 Ограничения и связи:
 
-- `FOREIGN KEY (business_id, store_id, variant_id) REFERENCES mc.variants(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, variant_id) REFERENCES mc.variants(business_id, store_id, id) DEFERRABLE`
 - `CHECK (((valid_to IS NULL) OR (valid_to > valid_from)))`
 - `CHECK ((identifier_type = ANY (ARRAY['barcode'::text, 'marketplace_variant_id'::text])))`
 - `PRIMARY KEY (id)`
@@ -2530,7 +2567,7 @@
 Ограничения и связи:
 
 - `UNIQUE (business_id, store_id, id)`
-- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.products(business_id, store_id, id)`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.products(business_id, store_id, id) DEFERRABLE`
 - `UNIQUE (business_id, store_id, product_id, id)`
 - `PRIMARY KEY (id)`
 - `CHECK ((status = ANY (ARRAY['active'::text, 'archived'::text])))`

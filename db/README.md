@@ -215,3 +215,19 @@ P03_INTEGRATION_DATABASE_URL=postgresql://.../p03_test node db/tests/p03-app.int
 ```
 
 Использовать отдельные пустые тестовые БД; тесты не запускаются на рабочей БД.
+
+## Удаление аккаунта и защита акций
+
+Миграции 076–077 и закрытые схемы `mc_erasure_private`/`mc_campaign_private` описаны в [контракте](../outputs/account-erasure-and-campaigns.md). Нельзя выдавать веб-читателю права на private-схемы или массовые DML-права на реестр участия. В текущей среде внутренние серверные операции выполняет владелец миграций; отдельной прикладной роли нужны точечные EXECUTE на `mc.erase_account(uuid,text,text)`, `mc.account_source_write_allowed(uuid)` и `mc.account_erasure_permitted(uuid)` для защищённых trigger-вызовов, а worker — доступ к закрытой очереди очистки. `PUBLIC` этих прав не имеет.
+
+Изолированные проверки на пустых PostgreSQL-БД с `test` в имени:
+
+```sh
+ACCOUNT_ERASURE_INTEGRATION_DATABASE_URL=postgresql:///mc_account_erasure_test node db/tests/account-erasure.integration.mjs
+CAMPAIGN_INTEGRATION_DATABASE_URL=postgresql:///mc_campaign_test node db/tests/campaign-eligibility.integration.mjs
+ACCOUNT_ERASURE_HTTP_INTEGRATION_DATABASE_URL=postgresql:///mc_account_http_test node db/tests/account-erasure-http.integration.mjs
+```
+
+Без URL эти два сценария используют PGlite для вспомогательной проверки; проверка конкурентных claims требует реального PostgreSQL. Включённых акций и пользовательского endpoint выдачи нет. Ключ HMAC требуется только для участия в акции; для обычной регистрации и удаления он не нужен.
+
+HTTP-сценарий обязательно требует отдельную пустую PostgreSQL-БД: он сам запускает сервер на порту 31377 (`ACCOUNT_ERASURE_HTTP_PORT` для другого порта), создаёт одноразовый аккаунт и проверяет удаление, очистку исходников и повторную регистрацию. Не используйте БД других сценариев с оставшимися заданиями очистки.

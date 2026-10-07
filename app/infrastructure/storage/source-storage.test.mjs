@@ -9,7 +9,7 @@ test('financial source pages are encrypted, compressed and recoverable', async (
   const root = await mkdtemp(path.join(os.tmpdir(), 'mc-source-'));
   const masterKey = Buffer.alloc(32, 7);
   try {
-    const stored = await storeFinancialPages({
+    const stored = await storeFinancialPages({ withSourceWrite:(_id,action)=>action(),
       businessId: '11111111-1111-4111-8111-111111111111',
       storeId: '22222222-2222-4222-8222-222222222222',
       documentId: '33333333-3333-4333-8333-333333333333',

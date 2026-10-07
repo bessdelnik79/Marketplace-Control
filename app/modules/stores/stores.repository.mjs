@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { pool, withOwnedBusinessContext } from '../../infrastructure/database/client.mjs';
+import { bindActiveCampaignCabinet } from '../campaigns/campaigns.repository.mjs';
 
 const FINGERPRINT_PATTERN = /^[0-9a-f]{64}$/;
 
@@ -63,19 +64,22 @@ export async function getBillingSummary(userId) {
   });
 }
 
-export async function saveWbConnection(userId, {storeId,sellerId,scopes,encrypted,fingerprint,now=new Date()}) {
+export async function saveWbConnection(userId, {storeId,sellerId,scopes,encrypted,fingerprint,sellerIdentityVerified=false,now=new Date()}) {
   if(!FINGERPRINT_PATTERN.test(String(fingerprint??'')))throw new TypeError('invalid_credential_fingerprint');
   return withOwnedBusinessContext(userId, async (client, businessId, role) => {
     if (!['owner','editor'].includes(role)) throw new Error('connection_write_forbidden');
     await client.query(`select 1 from mc.businesses where id=$1 for update`,[businessId]);
     const store=(await client.query(
-      `select id,external_account_id from mc.stores
+      `select id,external_account_id,identity_verified_at from mc.stores
         where business_id=$1 and id=$2 and marketplace_code='wb' and status<>'archived'
         for update`,[businessId,storeId]
     )).rows[0];
     if(!store)throw new Error('store_not_found');
     if(store.external_account_id&&store.external_account_id!==sellerId)throw new Error('store_account_mismatch');
-    await client.query(`update mc.stores set external_account_id=$3,status='active' where business_id=$1 and id=$2`,[businessId,storeId,sellerId]);
+    await bindActiveCampaignCabinet(client,businessId,{marketplaceCode:'wb',sellerId,
+      verified:sellerIdentityVerified===true||Boolean(store.identity_verified_at)});
+    await client.query(`update mc.stores set external_account_id=$3,status='active',
+      identity_verified_at=case when $4::boolean then now() else identity_verified_at end where business_id=$1 and id=$2`,[businessId,storeId,sellerId,sellerIdentityVerified]);
     const existing=(await client.query(
       `select id,credential_generation from mc.connections where business_id=$1 and store_id=$2 for update`,
       [businessId,storeId]

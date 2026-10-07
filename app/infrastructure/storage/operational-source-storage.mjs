@@ -4,6 +4,7 @@ import { link, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { loadEncryptionKey } from '../security/secrets.mjs';
+import { withAccountSourceWrite } from './account-erasure-storage.mjs';
 
 const zip = promisify(gzip);
 const unzip = promisify(gunzip);
@@ -64,8 +65,10 @@ export async function storeOperationalSnapshot({
   checksum,
   partNumber = 0,
   root,
-  masterKey
+  masterKey,
+  withSourceWrite = withAccountSourceWrite
 }) {
+  return withSourceWrite(businessId, async () => {
   const source = rawBuffer(raw);
   partNumber = safePartNumber(partNumber);
   const actualChecksum = createHash('sha256').update(source).digest('hex');
@@ -100,6 +103,7 @@ export async function storeOperationalSnapshot({
     if (String(error?.message ?? '').startsWith('operational_storage_')) throw error;
     throw failure('operational_storage_unavailable');
   }
+  });
 }
 
 export async function readOperationalSnapshot(storageKey, { root, masterKey } = {}) {

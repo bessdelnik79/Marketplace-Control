@@ -4,6 +4,7 @@ import { mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { loadEncryptionKey } from '../security/secrets.mjs';
+import { withAccountSourceWrite } from './account-erasure-storage.mjs';
 
 const zip = promisify(gzip);
 const unzip = promisify(gunzip);
@@ -23,7 +24,8 @@ function rootPath(root) {
   return path.resolve(root ?? process.env.SOURCE_DATA_DIR ?? path.join('work', 'source-data'));
 }
 
-export async function storeFinancialPages({ businessId, storeId, documentId, pages, root, masterKey = loadEncryptionKey() }) {
+export async function storeFinancialPages({ businessId, storeId, documentId, pages, root, masterKey = loadEncryptionKey(), withSourceWrite = withAccountSourceWrite }) {
+  return withSourceWrite(businessId, async () => {
   const directory = path.join(rootPath(root), safeId(businessId), safeId(storeId), 'financial-reports', safeId(documentId));
   await mkdir(directory, { recursive: true, mode: 0o700 });
   const key = dataKey(masterKey), objects = [];
@@ -50,6 +52,7 @@ export async function storeFinancialPages({ businessId, storeId, documentId, pag
     await rm(directory, { recursive: true, force: true }).catch(() => {});
     throw error;
   }
+  });
 }
 
 export async function readFinancialPage(storageKey, { root, masterKey = loadEncryptionKey() } = {}) {

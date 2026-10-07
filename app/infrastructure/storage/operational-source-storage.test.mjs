@@ -22,7 +22,7 @@ test('operational raw snapshot is encrypted, compressed, recoverable and removab
   const masterKey = Buffer.alloc(32, 7);
   const raw = '[{"product":{"nmId":101},"history":[]}]';
   try {
-    const stored = await storeOperationalSnapshot({ ...ids, raw, root, masterKey });
+    const stored = await storeOperationalSnapshot({ withSourceWrite:(_id,action)=>action(), ...ids, raw, root, masterKey });
     assert.match(stored.storageKey, /operational-snapshots/);
     assert.equal(stored.contentType, 'application/json+gzip+aes-256-gcm');
     assert.equal(stored.encryptionDomain, 'operational-snapshot-v1');
@@ -50,16 +50,16 @@ test('operational storage keeps multiple batch parts under one snapshot', async 
   const root = await mkdtemp(path.join(os.tmpdir(), 'mc-operational-parts-'));
   const masterKey = Buffer.alloc(32, 6);
   try {
-    const first = await storeOperationalSnapshot({ ...ids, raw: '[1]', partNumber: 0, root, masterKey });
-    const second = await storeOperationalSnapshot({ ...ids, raw: '[2]', partNumber: 1, root, masterKey });
+    const first = await storeOperationalSnapshot({ withSourceWrite:(_id,action)=>action(), ...ids, raw: '[1]', partNumber: 0, root, masterKey });
+    const second = await storeOperationalSnapshot({ withSourceWrite:(_id,action)=>action(), ...ids, raw: '[2]', partNumber: 1, root, masterKey });
     assert.notEqual(first.storageKey, second.storageKey);
     assert.equal(await readOperationalSnapshot(first.storageKey, { root, masterKey }), '[1]');
     assert.equal(await readOperationalSnapshot(second.storageKey, { root, masterKey }), '[2]');
-    await assert.rejects(() => storeOperationalSnapshot({ ...ids, raw: '[changed]', partNumber: 0, root, masterKey }), {
+    await assert.rejects(() => storeOperationalSnapshot({ withSourceWrite:(_id,action)=>action(), ...ids, raw: '[changed]', partNumber: 0, root, masterKey }), {
       message: 'operational_storage_already_exists'
     });
     assert.equal(await readOperationalSnapshot(first.storageKey, { root, masterKey }), '[1]');
-    await assert.rejects(() => storeOperationalSnapshot({ ...ids, raw: '[]', partNumber: -1, root, masterKey }), {
+    await assert.rejects(() => storeOperationalSnapshot({ withSourceWrite:(_id,action)=>action(), ...ids, raw: '[]', partNumber: -1, root, masterKey }), {
       message: 'operational_storage_invalid_part'
     });
   } finally {
@@ -72,8 +72,8 @@ test('operational and financial source domains cannot decrypt each other', async
   const masterKey = Buffer.alloc(32, 9);
   const raw = '[{"value":"same plaintext"}]';
   try {
-    const operational = await storeOperationalSnapshot({ ...ids, raw, root, masterKey });
-    const financial = await storeFinancialPages({
+    const operational = await storeOperationalSnapshot({ withSourceWrite:(_id,action)=>action(), ...ids, raw, root, masterKey });
+    const financial = await storeFinancialPages({ withSourceWrite:(_id,action)=>action(),
       businessId: ids.businessId,
       storeId: ids.storeId,
       documentId: '44444444-4444-4444-8444-444444444444',
@@ -106,13 +106,13 @@ test('operational storage rejects traversal, unsafe IDs and checksum mismatches'
     await assert.rejects(() => readOperationalSnapshot('../secret', { root, masterKey }), {
       message: 'operational_storage_invalid_key'
     });
-    await assert.rejects(() => storeOperationalSnapshot({ ...ids, snapshotId: '../escape', raw: '[]', root, masterKey }), {
+    await assert.rejects(() => storeOperationalSnapshot({ withSourceWrite:(_id,action)=>action(), ...ids, snapshotId: '../escape', raw: '[]', root, masterKey }), {
       message: 'operational_storage_invalid_id'
     });
     await assert.rejects(() => removeOperationalSnapshot({ ...ids, businessId: 'not-a-uuid', root }), {
       message: 'operational_storage_invalid_id'
     });
-    await assert.rejects(() => storeOperationalSnapshot({ ...ids, raw: '[]', checksum: '0'.repeat(64), root, masterKey }), {
+    await assert.rejects(() => storeOperationalSnapshot({ withSourceWrite:(_id,action)=>action(), ...ids, raw: '[]', checksum: '0'.repeat(64), root, masterKey }), {
       message: 'operational_storage_checksum_mismatch'
     });
   } finally {
