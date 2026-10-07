@@ -165,6 +165,30 @@ test('financial counts are pinned to SKU and period; zero returns are hidden but
   assert.match(render({reconciliation:{status:'mismatch'}}),/Выкупы: —/);
 });
 
+test('empty revenue preview is a plain saved amount row, never an empty disclosure or an invented zero',()=>{
+  for(const preview of [null,{rows:[]},{...revenuePreview,rows:[],soldQuantity:'0',returnedQuantity:'0'}]){
+    for(const revenue of [metric('0.0000'),metric('2243.0000'),{amount:null,availability:'unavailable'}]){
+      const html=render({revenuePreview:preview,item:{...item,metrics:{...item.metrics,revenue}}});
+      assert.match(html,/<div class="situation-accounting-row situation-revenue-static"><span>Выручка<\/span>/);
+      assert.doesNotMatch(html,/<details class="situation-revenue"|situation-revenue-body|Подтверждённая детализация выручки|Итого по категории/);
+      const line=html.match(/<div class="situation-accounting-row situation-revenue-static">.*?<\/div>/)[0];
+      assert.match(line,revenue.amount === null ? /Недоступно/ : revenue.amount === '0.0000' ? /0,00 ₽/ : /2 243,00 ₽/);
+      assert.match(html,/Исходные данные/);
+    }
+  }
+});
+
+test('zero net revenue and returns-only previews still disclose their saved operations',()=>{
+  for(const rows of [[row,{...row,id:'return',categoryCode:'revenue_return',contributionAmount:'-1089.0000'}],
+    [{...row,categoryCode:'revenue_return',contributionAmount:'-1089.0000'}]]){
+    const html=render({item:{...item,metrics:{...item.metrics,revenue:metric('0.0000')}},revenuePreview:{...revenuePreview,soldQuantity:'0',rows}});
+    assert.match(html,/<details class="situation-revenue"><summary>/);
+    assert.match(html,/Сохранённые продажи и возвраты/);
+    assert.match(html,/−1 089,00 ₽/);
+    assert.doesNotMatch(html,/situation-revenue-static/);
+  }
+});
+
 test('tax explanation keeps saved amount without a base and rate shortcut',()=>{
   const html=render({item:{...item,taxGroup:{categoryCode:'estimated_usn_tax',groupKey:'tax-key'}}});
   assert.doesNotMatch(html,/База и ставка|groupKey=tax-key/);
