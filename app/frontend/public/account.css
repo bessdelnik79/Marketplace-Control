@@ -63,7 +63,41 @@ html[data-theme=dark] .account-page .account-primary{background:#2685ff;border-c
 .account-catalog-state form{margin-top:8px}
 .account-catalog-state .account-button{justify-self:start}
 .account-page .settings-feedback{margin-bottom:20px;overflow-wrap:anywhere}
-@media(min-width:1500px){.account-columns{column-gap:36px;min-height:750px}.account-personal{padding-left:36px}.account-page h1{font-size:32px;margin-bottom:38px}.account-page h2{font-size:26px}.account-page .account-button{font-size:20px;min-height:49px}.account-section{padding-bottom:30px}.account-page .account-data-secondary{font-size:18px;min-height:43px}}
+/* Compact desktop density: leave room for browser chrome on a 1920×1080 display. */
+@media(min-width:1100px){
+ body[data-page='/settings'] .workspace{padding:18px 28px}
+ body[data-page='/settings'] .app-header{height:48px;margin-bottom:18px}
+ .account-page{max-width:1280px;padding-top:0}
+ .account-page h1{font-size:28px;margin-bottom:22px}
+ .account-page h2{font-size:22px;margin-bottom:12px}
+ .account-columns{column-gap:28px;min-height:0}
+ .account-personal{padding-left:28px}
+ .account-section{padding:10px 0 18px;margin-bottom:8px}
+ .account-section:first-child{padding-top:8px;padding-bottom:20px}
+ .account-section:last-child{padding-bottom:0}
+ .account-page .account-button{min-height:40px;padding:8px 16px;font-size:16px}
+ .account-store{gap:14px;margin-bottom:16px}
+ .account-store-icon{flex-basis:46px;height:46px}
+ .account-store-icon .ui-icon{width:28px;height:28px}
+ .account-store-heading{gap:18px}.account-store-heading strong{font-size:23px}
+ .account-store-copy p,.account-connection,.account-section>p{font-size:16px}
+ .account-section>p{max-width:none}
+ .account-product-count{font-size:22px}
+ .account-section-heading h2{margin-bottom:0}
+ .account-products-manage{margin-top:14px;min-width:210px}
+ .account-data-links{gap:8px}
+ .account-page .account-data-link{min-height:42px;padding:8px 16px}
+ .account-page .account-data-secondary{min-height:38px;font-size:15px}
+ .account-profile-form{padding-top:8px}
+ .account-profile{row-gap:16px}
+ .account-page label{font-size:17px}
+ .account-page input{height:42px;font-size:18px;padding:8px 12px}
+ .account-email-field small{font-size:14px}
+ .account-save{margin-top:18px;padding-top:14px;gap:12px}
+ .account-plan-section{margin-top:24px;padding:18px 0 22px}
+ .account-plan-name{font-size:25px}.account-plan-row p{font-size:16px}
+ .account-session{padding-top:16px;gap:14px}
+}
 @media(max-width:1050px) and (min-width:701px){.account-columns{column-gap:22px}.account-personal{padding-left:22px}.account-page h2{font-size:21px}.account-page .account-button{font-size:16px;padding:10px 12px}.account-profile{grid-template-columns:1fr}.account-profile h2{grid-column:1;grid-row:1}.account-name-field{grid-row:2}.account-email-field{grid-row:3}.account-password{grid-column:1;grid-row:4}.account-plan-row{grid-template-columns:1fr}.account-session{flex-wrap:wrap}.account-store-heading{gap:12px}}
 @media(max-width:700px){.account-page{padding-top:0}.account-page h1{font-size:28px;margin:0 0 24px}.account-page h2{font-size:23px;margin-bottom:16px}.account-columns{display:block;min-height:0}.account-personal{padding-left:0;border-left:0;border-top:1px solid var(--border)}.account-section,.account-section:first-child{padding:0 0 24px;margin-bottom:22px}.account-section:last-child{padding-bottom:24px;margin-bottom:0}.account-store{gap:16px;margin-bottom:18px}.account-store-icon{flex-basis:52px;height:52px}.account-store-heading{gap:20px}.account-store-heading strong{font-size:25px}.account-store-copy p{font-size:17px}.account-connection{font-size:18px;gap:9px}.account-page .account-button{font-size:18px;padding:10px 14px;min-height:45px}.account-token-controls{gap:12px}.account-section-heading{margin-bottom:9px}.account-section-heading h2{margin-bottom:0}.account-product-count{font-size:24px}.account-products-manage{width:100%;margin-top:18px}.account-section>p{max-width:none;font-size:18px}.account-data-links{gap:11px}.account-page .account-data-link{padding:11px 18px}.account-page .account-data-secondary{font-size:16px;min-height:40px}.account-profile-form{padding-top:20px}.account-profile{grid-template-columns:1fr;row-gap:12px}.account-profile h2{grid-column:1;grid-row:1;margin:0}.account-name-field{grid-column:1;grid-row:2}.account-email-field{grid-column:1;grid-row:3}.account-password{grid-column:1;grid-row:4;margin-top:4px}.account-page label{font-size:18px;gap:4px}.account-page input{height:44px;font-size:20px}.account-email-field small{font-size:16px}.account-save{border-top:0;padding-top:0;margin-top:12px;gap:12px;grid-template-columns:1.2fr 1fr}.account-save .account-button{padding:10px 6px;font-size:17px}.account-plan-section{margin-top:24px;padding:18px 0 16px}.account-plan-section h2{margin-bottom:12px}.account-plan-row{grid-template-columns:1fr;gap:12px}.account-plan-name{font-size:26px}.account-plan-row p{font-size:18px}.account-session{display:grid;grid-template-columns:1fr;gap:10px;padding-top:14px;margin-top:0}.account-page .account-mobile-help{display:flex}.account-mobile-help .ui-icon{width:24px;height:24px}}
 @media(max-width:380px){.account-page h2{font-size:20px}.account-product-count{font-size:21px}.account-store-heading{gap:12px}.account-store-heading strong{font-size:22px}.account-connection{font-size:16px}.account-token-controls{gap:8px}.account-page .account-button{font-size:16px;padding:10px 8px}.account-save .account-button{font-size:15px}.account-page input{font-size:18px}}

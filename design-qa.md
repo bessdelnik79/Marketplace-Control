@@ -21,6 +21,8 @@ Implemented in the existing server-rendered application, not a separate prototyp
 
 ## Blocking verification
 
+Density follow-up (2026-10-08): desktop account styles at widths ≥1100 CSS px now remove the former 750px column minimum, reduce section spacing, use 40–42px controls and 22px section headings, and leave space for browser chrome on a standard 1920×1080 display. Mobile styling remains unchanged. No zoom/transform, fixed-height clipping or overflow hiding is used. Browser startup was retried and remains blocked; absence of scrolling is a layout target, not yet an empirically verified measurement.
+
 Browser automation failed before connecting to the tab, including after a kernel reset: `windows sandbox failed: helper_unknown_error: setup refresh had errors`. Therefore no implementation screenshots, combined source/implementation comparison, real-browser console or interactive checks were captured. CSS fidelity, mobile wrapping, full onboarding initialization and keyboard flows remain visually unverified. Do not treat this report as a passed visual audit.
 
 Next verification: restore browser tool; capture desktop/mobile in both themes; compare normalized full views and focused header/form/data regions side by side; exercise menu, theme persistence, token disclosure, instruction dialog and navigation without modifying account data; inspect console and overflow. Record findings and only change final result to passed after evidence is available.
