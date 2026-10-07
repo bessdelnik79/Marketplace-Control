@@ -33,9 +33,6 @@ await context(async client=>{
   const variant=(await client.query(`insert into mc.variants(business_id,store_id,product_id,external_variant_id) values($1,$2,$3,'default') returning id`,[ids.business,ids.store,product.id])).rows[0];
   await client.query(`insert into mc.variant_identifiers(business_id,store_id,variant_id,identifier_type,identifier_value) values($1,$2,$3,'barcode','4600000000001')`,[ids.business,ids.store,variant.id]);
   const selection=(await client.query(`select mc.confirm_product_selection($1,$2,$3::uuid[]) as id`,[ids.store,catalog.id,[product.id]])).rows[0];
-  const cost=(await client.query(`insert into mc.variant_costs(business_id,store_id,product_id,variant_id,effective_from) values($1,$2,$3,$4,'2026-07-01') returning id`,[ids.business,ids.store,product.id,variant.id])).rows[0];
-  const costVersion=(await client.query(`insert into mc.cost_versions(business_id,store_id,cost_id,version_no,unit_cost,origin,changed_by) values($1,$2,$3,1,40,'manual',$4) returning id`,[ids.business,ids.store,cost.id,ids.user])).rows[0];
-  await client.query(`update mc.variant_costs set current_version_id=$1 where id=$2`,[costVersion.id,cost.id]);
   const document=(await client.query(`insert into mc.source_documents(business_id,store_id,origin,document_type,external_document_id,checksum,completeness) values($1,$2,'wb_api','weekly_realization','p03-report','p03-report','complete') returning id`,[ids.business,ids.store])).rows[0];
   const report=(await client.query(`insert into mc.reports(business_id,store_id,external_report_id,period_start,period_end) values($1,$2,'785995400','2026-07-13','2026-07-19') returning id`,[ids.business,ids.store])).rows[0];
   const reportVersion=(await client.query(`insert into mc.report_versions(business_id,store_id,report_id,document_id,version_no,checksum,parser_version) values($1,$2,$3,$4,1,'p03-v1','wb-finance-v13') returning id`,[ids.business,ids.store,report.id,document.id])).rows[0];
@@ -54,10 +51,8 @@ await context(async client=>{
   const storeOperation=(await client.query(`insert into mc.operations(business_id,store_id,source_code,source_operation_key) values($1,$2,'wb_finance','785995400/2') returning id`,[ids.business,ids.store])).rows[0];
   const storeOperationVersion=(await client.query(`insert into mc.operation_versions(business_id,store_id,operation_id,report_row_id,report_normalization_id,version_no,operation_type,accounting_date) values($1,$2,$3,$4,$5,1,'adjustment','2026-07-15') returning id`,[ids.business,ids.store,storeOperation.id,storeRow.id,normalization.id])).rows[0];
   await client.query(`insert into mc.financial_components(business_id,store_id,operation_version_id,component_key,category_code,amount_signed,method_version_id,source_field,result_scope_classification) values($1,$2,$3,'additionalPayment','commission_adjustment',-1458.34,$4,'additionalPayment','store')`,[ids.business,ids.store,storeOperationVersion.id,importMethod.id]);
-  const taxSetting=(await client.query(`insert into mc.tax_settings(business_id,effective_from) values($1,'2026-01-01') returning id`,[ids.business])).rows[0];
-  const taxVersion=(await client.query(`insert into mc.tax_setting_versions(business_id,tax_setting_id,version_no,regime_code,usn_rate_fraction,vat_mode,changed_by)
-    values($1,$2,1,'usn_income',0.06,'exempt',$3) returning id`,[ids.business,taxSetting.id,ids.user])).rows[0];
-  await client.query(`update mc.tax_settings set current_version_id=$1 where id=$2`,[taxVersion.id,taxSetting.id]);
+  await client.query(`select mc.emit_financial_input_event($1,$2,'report_accepted','2026-07-13','2026-07-19',
+    p_source_report_version_id=>$3,p_source_normalization_id=>$4)`,[ids.store,`accepted:${normalization.id}`,reportVersion.id,normalization.id]);
   assert.ok(selection.id);
 });
 
@@ -81,6 +76,11 @@ test('ordinary background worker discovers a fresh account and publishes while f
   for(let attempt=0;attempt<5;attempt++)if(!await daily.runOnce())break;
   const published=await context(async client=>(await client.query('select publication_id from mc.financial_daily_current_publications where store_id=$1',[ids.store])).rows[0]);
   assert.ok(published,'fresh account must get its first daily publication');
+  const quality=await context(async client=>(await client.query(`select g.quality,
+    exists(select 1 from mc.financial_daily_reasons r where r.generation_id=g.id and r.reason_code='tax_setting_missing') tax_missing
+    from mc.financial_daily_current_publications p join mc.financial_daily_publications publication on publication.id=p.publication_id
+    join mc.financial_daily_generations g on g.id=publication.generation_id where p.store_id=$1`,[ids.store])).rows[0]);
+  assert.equal(quality.quality,'partial');assert.equal(quality.tax_missing,true);
   assert.equal(await context(async client=>(await client.query('select status from mc.jobs where id=$1',[active.id])).rows[0].status),'pending','financial backfill must still be ongoing');
 });
 

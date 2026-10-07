@@ -165,8 +165,17 @@ export function compareDailyGenerationToLegacy(generation,legacy){
   const mismatches=[];
   if(daily.quality!==legacy?.quality)mismatches.push('quality');
   if(JSON.stringify(orderedReasons(daily.missingReasons))!==JSON.stringify(orderedReasons(legacy?.missing_reasons)))mismatches.push('missing_reasons');
+  // Legacy totals use zero when no tax was calculated. Match that sentinel to
+  // unknown only with explicit tax incompleteness; published amounts stay intact.
+  const legacyTaxUnknown=legacy?.quality==='partial'&&legacy?.totals?.estimatedUsnTax==='0.0000'
+    &&legacy.totals.availableResultAfterTax===null&&daily.totals?.estimatedUsnTax===null
+    &&daily.totals.availableResultAfterTax===null
+    &&['tax_setting_missing','tax_selected_reference_only','tax_method_unsupported','tax_source_unverified',
+      'tax_source_unlinked','tax_base_missing','tax_base_negative_unverified']
+      .some(reason=>legacy.missing_reasons?.includes(reason));
   for(const key of ['selectedProductsResultBeforeTax','storeLevelResultBeforeTax','availableResultBeforeTax','estimatedUsnTax','availableResultAfterTax','netProfit']){
-    if((daily.totals?.[key]??null)!==(legacy?.totals?.[key]??null))mismatches.push(`totals.${key}`);
+    const legacyValue=key==='estimatedUsnTax'&&legacyTaxUnknown?null:legacy?.totals?.[key]??null;
+    if((daily.totals?.[key]??null)!==legacyValue)mismatches.push(`totals.${key}`);
   }
   return{status:mismatches.length?'mismatch':'matched',mismatches,daily};
 }

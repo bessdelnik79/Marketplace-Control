@@ -44,6 +44,49 @@ test('shadow comparison reports exact mismatched fields',()=>{
   assert.deepEqual(comparison.mismatches,['totals.availableResultBeforeTax']);
 });
 
+function unknownTaxComparisonFixture(reason='tax_setting_missing'){
+  const generation=buildDailyFinancialGeneration({periodStart:'2026-09-21',periodEnd:'2026-09-22',
+    result:{...baseResult,missingReasons:[reason]},taxReference:{usable:false},coverageComplete:true});
+  const legacy={period_start:'2026-09-21',period_end:'2026-09-22',quality:'partial',missing_reasons:[reason],
+    totals:{...aggregateDailyFinancialGeneration(generation).totals,estimatedUsnTax:'0.0000'}};
+  return{generation,legacy};
+}
+
+test('shadow comparison treats explicit unusable legacy zero tax as unknown without changing totals',()=>{
+  for(const reason of ['tax_setting_missing','tax_selected_reference_only','tax_method_unsupported','tax_source_unverified',
+    'tax_source_unlinked','tax_base_missing','tax_base_negative_unverified']){
+    const{generation,legacy}=unknownTaxComparisonFixture(reason);
+    const comparison=compareDailyGenerationToLegacy(generation,legacy);
+    assert.equal(comparison.status,'matched',reason);
+    assert.equal(comparison.daily.totals.estimatedUsnTax,null);
+    assert.equal(legacy.totals.estimatedUsnTax,'0.0000');
+  }
+});
+
+test('shadow comparison rejects nonzero legacy tax even with explicit tax incompleteness',()=>{
+  const{generation,legacy}=unknownTaxComparisonFixture();
+  legacy.totals.estimatedUsnTax='1.0000';
+  assert.deepEqual(compareDailyGenerationToLegacy(generation,legacy).mismatches,['totals.estimatedUsnTax']);
+});
+
+test('shadow comparison rejects known legacy zero tax against unknown daily tax',()=>{
+  const{generation,legacy}=unknownTaxComparisonFixture();
+  legacy.totals.availableResultAfterTax='90.0000';
+  assert.deepEqual(compareDailyGenerationToLegacy(generation,legacy).mismatches,
+    ['totals.estimatedUsnTax','totals.availableResultAfterTax']);
+});
+
+test('shadow comparison requires explicit tax incompleteness for the legacy zero sentinel',()=>{
+  const{generation,legacy}=unknownTaxComparisonFixture('operation_unclassified');
+  assert.deepEqual(compareDailyGenerationToLegacy(generation,legacy).mismatches,['totals.estimatedUsnTax']);
+});
+
+test('unknown tax compatibility keeps monetary mismatches strict',()=>{
+  const{generation,legacy}=unknownTaxComparisonFixture();
+  legacy.totals.availableResultBeforeTax='91.0000';
+  assert.deepEqual(compareDailyGenerationToLegacy(generation,legacy).mismatches,['totals.availableResultBeforeTax']);
+});
+
 test('arbitrary range fails closed when signed SKU offsets make the aggregate tax base negative',()=>{
   const generation={
     periodStart:'2026-09-01',periodEnd:'2026-09-01',missingReasons:[],
