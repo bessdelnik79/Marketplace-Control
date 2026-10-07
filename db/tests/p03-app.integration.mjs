@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
+import { readSituationRevenuePreview } from '../../app/modules/calculation/situation-preview.mjs';
 
 const integrationUrl=process.env.P03_INTEGRATION_DATABASE_URL;
 if(!integrationUrl)throw new Error('Set P03_INTEGRATION_DATABASE_URL to a disposable PostgreSQL database whose name contains "test".');
@@ -981,6 +982,17 @@ test('P0.5 readers pin legacy and mixed-generation daily evidence under ordinary
   assert.deepEqual(fired.items.map(item=>item.kind),['product_loss','product_loss','product_loss','penalty']);
   assert.deepEqual(fired.items.slice(0,3).map(item=>item.productId),lossFixture.products.map(product=>product.id).sort());
   assert.ok(fired.items.slice(0,3).every(item=>item.metric.value==='-100.0000'));
+  for(const productLoss of fired.items.filter(item=>item.kind==='product_loss')){
+    const detail=await reader.readPublishedSituation(loss.user,{...lossInput,situationId:productLoss.id});
+    const preview=await readSituationRevenuePreview(loss.user,lossInput,detail.item,reader.readPublishedContributions);
+    assert.equal(preview.productId,productLoss.productId);
+    assert.equal(preview.soldQuantity,'1','each SKU counts only its own frozen sale');
+    assert.equal(preview.returnedQuantity,'0','complete financial sources confirm no returns');
+    assert.equal(preview.quantityReason,null);
+    assert.equal(detail.item.taxGroup?.categoryCode,'estimated_usn_tax');
+    assert.equal(detail.item.taxGroup.productId,productLoss.productId);
+    assert.ok(!detail.item.groups.some(group=>group.categoryCode==='estimated_usn_tax'),'tax stays outside before-tax composition');
+  }
   const penalty=await reader.readPublishedSituation(loss.user,{...lossInput,situationId:'penalty'});
   assert.equal(penalty.item.metric.value,'-6.0000');
   assert.equal(penalty.item.groups.length,1);

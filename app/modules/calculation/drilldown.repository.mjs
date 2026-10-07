@@ -211,7 +211,9 @@ export function createPublishedDrilldownRepository({pool=defaultPool}={}){
       const groups=allGroups.filter(group=>item.kind==='product_loss'
         ?group.scope==='selected_product'&&group.productId===item.productId&&group.categoryCode!=='estimated_usn_tax'
         :group.categoryCode==='penalty').map(group=>({...publicGroup(group),product:productFor(group.productId)}));
-      return{...item,...(sku?{metrics:sku.metrics,quality:sku.quality,missingReasons:sku.missingReasons}:{}),
+      const taxGroup=sku?.groups.find(group=>group.categoryCode==='estimated_usn_tax');
+      return{...item,...(sku?{metrics:sku.metrics,quality:sku.quality,missingReasons:sku.missingReasons,
+        taxGroup:taxGroup?publicGroup(taxGroup):null}:{}),
         product:productFor(item.productId),groups,rule:item.kind==='product_loss'?{
         description:'Сохранённый результат выбранного SKU до налога отрицателен. Правило оценивается только при полном финансовом результате и подтверждённой связи товара.',
         comparison:'less_than_zero',inputs:[{label:'Результат SKU до налога',value:item.metric.value,unit:'RUB'}]

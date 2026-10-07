@@ -91,6 +91,21 @@ test('inactive tariff store is rejected before resolving the current or pinned p
  await h.run('/sku?storeId=store');assert.equal(h.response.status,404);assert.deepEqual(h.calls,[]);
 });
 
+test('situation tax sources require the same SKU and canonical tax group',async()=>{
+  const fired=async()=>({item:{id:'product_loss:product',kind:'product_loss',productId:'product',groups:[],
+    taxGroup:{scope:'selected_product',productId:'product',categoryCode:'estimated_usn_tax',groupKey:'tax'}}});
+  const good=setup({readPublishedSituation:fired});
+  await good.run(route('/sku/sources',{productId:'product',groupKey:'tax',situationId:'product_loss:product'}));
+  assert.equal(good.response.status,200);
+  for(const changes of [{productId:'foreign'},{groupKey:'foreign'},{productId:null,scope:'store'}]){
+    const foreign=setup({readPublishedSituation:fired});
+    const url=new URL(route('/sku/sources',{productId:'product',groupKey:'tax',situationId:'product_loss:product',...changes}),'http://localhost');
+    if(changes.scope==='store')url.searchParams.delete('productId');
+    await foreign.run(url.pathname+url.search);
+    assert.equal(foreign.response.status,404);assert.ok(!foreign.calls.some(call=>call.name==='sources'));
+  }
+});
+
 test('product-loss detail reads only first revenue pages with the exact pinned context',async()=>{
   const groups=[{groupKey:'sales',categoryCode:'revenue'}, {groupKey:'returns',categoryCode:'revenue_return'},
     {groupKey:'cost',categoryCode:'cogs'}];

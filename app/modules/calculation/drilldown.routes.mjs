@@ -87,7 +87,8 @@ export function createDrilldownRoutes({listStores, getFinancialOverview, readPub
         let situation=null;
         if(params.has('situationId')){
           const detail=await readPublishedSituation(current.user_id,{...input,situationId:params.get('situationId')});
-          if(!detail.item.groups.some(group=>group.groupKey===contributionInput.groupKey&&
+          const allowedGroups=[...detail.item.groups,...(detail.item.taxGroup?[detail.item.taxGroup]:[])];
+          if(!allowedGroups.some(group=>group.groupKey===contributionInput.groupKey&&
             (scope==='store'?group.scope==='store':group.productId===contributionInput.productId)))throw new Error('drilldown_not_found');
           situation={id:detail.item.id,kind:detail.item.kind};
         }

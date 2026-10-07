@@ -52,12 +52,16 @@ export async function verifyPublishedDrilldownHttp({reader,viewer,storeId,inputs
         const detailUrl=detailUrls.find(url=>url.searchParams.get('situationId')===situation.id);
         const detailHtml=await read(detailUrl);
         const sourceUrls=links(detailHtml,base,'/sku/sources');
-        assert.deepEqual(new Set(sourceUrls.map(url=>url.searchParams.get('groupKey'))),new Set(situation.groups.map(group=>group.groupKey)), 'detail exposes every saved category and no foreign groups');
+        const sourceGroups=[...situation.groups,...(situation.taxGroup?[situation.taxGroup]:[])];
+        assert.deepEqual(new Set(sourceUrls.map(url=>url.searchParams.get('groupKey'))),new Set(sourceGroups.map(group=>group.groupKey)), 'detail exposes saved before-tax categories and its separate SKU tax group, no foreign groups');
         if(situation.kind==='product_loss'){
           assert.ok(detailHtml.includes('Из чего сложился убыток'));
-          assert.ok(detailHtml.includes('Заказов:'));
+          assert.ok(detailHtml.includes('Заказов по дате заказа:'));
           assert.ok(detailHtml.includes('Выкупы:'));
           assert.ok(detailHtml.includes('по дате исходного заказа'));
+          assert.ok(detailHtml.includes('Расчётный налог по товару'));
+          assert.ok(!detailHtml.includes('Требуется заплатить налог'));
+          if(situation.taxGroup)assert.ok(detailHtml.includes('>База и ставка</a>'));
         }
         for(const sourceUrl of sourceUrls){
           assert.equal(sourceUrl.searchParams.get('situationId'),situation.id);
