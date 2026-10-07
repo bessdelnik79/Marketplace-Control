@@ -269,6 +269,21 @@
 - `CHECK ((length(TRIM(BOTH FROM name)) > 0))`
 - `PRIMARY KEY (id)`
 
+## calculation_dispatch
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| store_id | uuid | нет | — |
+| business_id | uuid | нет | — |
+| requested_by | uuid | да | — |
+| generation_token | uuid | нет | — |
+| invalidated_at | timestamp with time zone | нет | — |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.calculation_invalidations(business_id, store_id) ON DELETE CASCADE DEFERRABLE`
+- `PRIMARY KEY (store_id)`
+
 ## calculation_inputs
 
 | Поле | Тип | NULL | По умолчанию |

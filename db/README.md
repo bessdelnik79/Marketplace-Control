@@ -216,6 +216,16 @@ P03_INTEGRATION_DATABASE_URL=postgresql://.../p03_test node db/tests/p03-app.int
 
 Использовать отдельные пустые тестовые БД; тесты не запускаются на рабочей БД.
 
+## Фоновый расчёт новых аккаунтов (миграция 078)
+
+Закрытое `mc.calculation_dispatch` зеркалирует tenant-маркеры пересчёта в той же транзакции. Фоновый список и acknowledgement доступны владельцу миграций; отдельной серверной роли нужны точечные права EXECUTE, пользовательским ролям их не выдавать. FORCE RLS исходной таблицы сохраняется. [Причина и контракт](../outputs/financial-calculation-dispatch-2026-10-07.md).
+
+```sh
+CALCULATION_DISPATCH_INTEGRATION_DATABASE_URL=postgresql:///mc_dispatch_test node db/tests/calculation-dispatch.integration.mjs
+```
+
+Использовать пустую одноразовую БД с `test` в имени и владельца миграций NOSUPERUSER/NOBYPASSRLS с CREATEROLE для проверки закрытых прав. Сценарий намеренно применяет 078 после создания первого аккаунта на схеме 077, проверяет backfill, настоящий worker и публикацию при незавершённой финансовой загрузке, конкуренцию, роли, откат и удаление аккаунта. SUPERUSER для этого теста запрещён.
+
 ## Удаление аккаунта и защита акций
 
 Миграции 076–077 и закрытые схемы `mc_erasure_private`/`mc_campaign_private` описаны в [контракте](../outputs/account-erasure-and-campaigns.md). Нельзя выдавать веб-читателю права на private-схемы или массовые DML-права на реестр участия. В текущей среде внутренние серверные операции выполняет владелец миграций; отдельной прикладной роли нужны точечные EXECUTE на `mc.erase_account(uuid,text,text)`, `mc.account_source_write_allowed(uuid)` и `mc.account_erasure_permitted(uuid)` для защищённых trigger-вызовов, а worker — доступ к закрытой очереди очистки. `PUBLIC` этих прав не имеет.
