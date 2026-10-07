@@ -16,10 +16,12 @@ function canonical(value) {
   const digits = value.amount.toString().padStart(value.scale + 1, '0');
   return value.scale ? `${digits.slice(0, -value.scale)}.${digits.slice(-value.scale)}`.replace(/\.?0+$/, '') : digits;
 }
-function financialQuantities(pages, input, productId) {
+function financialQuantities(pages, input, productId, absence) {
   const unavailable = quantityReason => ({soldQuantity:null, returnedQuantity:null, quantityReason});
   if (!validPeriod(input.periodStart, input.periodEnd)) return unavailable('situation_sale_quantity_unverified');
-  if (!pages.length) return unavailable('situation_revenue_groups_missing');
+  const boundAbsence = absence?.storeId === input.storeId && absence?.productId === productId
+    && absence?.publicationId === input.publicationId && absence?.publicationSource === input.publicationSource
+    && absence?.period?.start === input.periodStart && absence?.period?.end === input.periodEnd;
   if (pages.some(({page}) => page.nextCursor || page.items.length !== page.totalItems)) return unavailable('situation_revenue_page_incomplete');
   if (pages.some(({page}) => page.reconciliation?.status !== 'matched' || page.moneyReconciliation?.status !== 'matched')) return unavailable('drilldown_reconciliation_mismatch');
   if (pages.some(({page}) => page.evidenceStatus !== 'matched' || page.items.some(row => row.evidenceStatus !== 'matched' || !row.source))) return unavailable('drilldown_frozen_source_missing');
@@ -47,8 +49,10 @@ function financialQuantities(pages, input, productId) {
     total.scale = nextScale;
   }
   const hasSales = pages.some(({group}) => group.categoryCode === 'revenue');
-  return {soldQuantity:hasSales ? canonical(totals.sale) : null, returnedQuantity:canonical(totals.return),
-    quantityReason:hasSales ? null : 'situation_revenue_groups_missing'};
+  const hasReturns = pages.some(({group}) => group.categoryCode === 'revenue_return');
+  const soldQuantity=hasSales ? canonical(totals.sale) : boundAbsence && absence.soldAbsent === true ? '0' : null;
+  const returnedQuantity=hasReturns ? canonical(totals.return) : boundAbsence && absence.returnedAbsent === true ? '0' : null;
+  return {soldQuantity, returnedQuantity, quantityReason:soldQuantity !== null && returnedQuantity !== null ? null : 'situation_revenue_groups_missing'};
 }
 
 export async function readSituationRevenuePreview(userId, input, item, readPublishedContributions) {
@@ -62,6 +66,6 @@ export async function readSituationRevenuePreview(userId, input, item, readPubli
   return {storeId:input.storeId, productId:item.productId, period:{start:input.periodStart, end:input.periodEnd},
     rows:rows.slice(0, 10), groups:pages.map(({group, page}) => ({groupKey:group.groupKey,
     categoryCode:group.categoryCode, totalItems:page.totalItems, nextCursor:page.nextCursor,
-    evidenceStatus:page.evidenceStatus, reconciliation:page.reconciliation})), ...financialQuantities(pages, input, item.productId),
+    evidenceStatus:page.evidenceStatus, reconciliation:page.reconciliation})), ...financialQuantities(pages, input, item.productId, item.revenueAbsence),
     hasMore:rows.length > 10 || pages.some(({page}) => Boolean(page.nextCursor) || page.totalItems > page.items.length)};
 }

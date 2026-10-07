@@ -44,6 +44,9 @@ test('unverified quantities and source dates are not replaced by counts or zeros
   assert.match(html,/Заказы: —/);
   assert.match(html,/Выкупы: —/);
   assert.match(html,/Возвраты: —/);
+  assert.match(html,/Количество выкупов и возвратов не подтверждено\./);
+  assert.match(html,/Количество заказов за весь период пока не подтверждено\./);
+  assert.doesNotMatch(html,/Количество за весь период пока не подтверждено/);
   assert.match(html,/Дата не подтверждена/);
   assert.match(html,/Количество не подтверждено/);
   assert.match(html,/Общее количество по выручке пока не подтверждено/);
@@ -123,7 +126,7 @@ test('cost of goods is a plain amount row while technical evidence remains separ
 test('only orders use operational counts, require exact coverage and accept confirmed zero',()=>{
   const zero=render({operationalCounts:{...counts,orders:{count:'0',availability:'complete'},buyouts:{count:'0',availability:'complete'}}});
   assert.match(zero,/Заказы: 0 шт\./);assert.match(zero,/Выкупы: 3 шт\./);
-  assert.doesNotMatch(zero,/Количество за весь период пока не подтверждено/);
+  assert.doesNotMatch(zero,/Количество выкупов и возвратов не подтверждено/);
   for(const changed of [null,{...counts,storeId:'foreign'},{...counts,productId:'foreign'},{...counts,period:{start:'2026-08-01',end:'2026-08-31'}},
     {...counts,orders:{count:'7',availability:'partial'},buyouts:{count:'4',availability:'unavailable'}},
     {...counts,orders:{count:'<img>',availability:'complete'},buyouts:{count:'-1',availability:'complete'}}]){
@@ -163,6 +166,21 @@ test('financial counts are pinned to SKU and period; zero returns are hidden but
     assert.doesNotMatch(html,/Выкупы: 4|Возвраты: 0|<img>/);
   }
   assert.match(render({reconciliation:{status:'mismatch'}}),/Выкупы: —/);
+});
+
+test('confirmed absence shows zero buyouts without warnings and preserves the complete financial badge',()=>{
+  const noRevenueItem={...item,metrics:{...item.metrics,revenue:metric('0.0000'),wbExpenses:metric('0.0000'),costOfGoods:metric('121.3800'),tax:metric('0.0000')}};
+  const html=render({item:noRevenueItem,revenuePreview:{...revenuePreview,rows:[],soldQuantity:'0',returnedQuantity:'0'}});
+  assert.match(html,/<p class="situation-quality positive">Данные для этого расчёта полные<\/p>/);
+  assert.match(html,/Выкупы: 0 шт\./);
+  assert.doesNotMatch(html,/Возвраты:|Количество выкупов и возвратов не подтверждено|Количество за весь период пока не подтверждено/);
+  assert.match(html,/Расчётный налог по товару — .*0,00 ₽/);
+  const unknown=render({item:noRevenueItem,revenuePreview:{...revenuePreview,rows:[],soldQuantity:null,returnedQuantity:null}});
+  assert.match(unknown,/<p class="situation-quality positive">Данные для этого расчёта полные<\/p>/);
+  assert.match(unknown,/Выкупы: —/);
+  assert.match(unknown,/Возвраты: —/);
+  assert.match(unknown,/Количество выкупов и возвратов не подтверждено\./);
+  assert.doesNotMatch(unknown,/Выкупы: 0|Возвраты: 0|Количество за весь период пока не подтверждено/);
 });
 
 test('empty revenue preview is a plain saved amount row, never an empty disclosure or an invented zero',()=>{

@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import test from 'node:test';
 import { readSituationRevenuePreview } from '../../app/modules/calculation/situation-preview.mjs';
+import { readSituationRevenueAbsence } from '../../app/modules/calculation/situation-absence.repository.mjs';
 
 const integrationUrl=process.env.P03_INTEGRATION_DATABASE_URL;
 if(!integrationUrl)throw new Error('Set P03_INTEGRATION_DATABASE_URL to a disposable PostgreSQL database whose name contains "test".');
@@ -802,6 +803,23 @@ test('P0.5 readers pin legacy and mixed-generation daily evidence under ordinary
     const item=list.items[0];
     const card=await reader.readPublishedSkuCard(viewer,{...input,productId:item.productId});
     assert.deepEqual(card.item.metrics,item.metrics);
+    // Exercise the real frozen-source CTE with a non-BYPASSRLS role. The saved
+    // report has its sale on July 15; July 13-14 are covered but have no events.
+    await context(async client=>{
+      await client.query(`set local role ${role}`);
+      const proofInput={context:card.context,item:{...card.item,quality:'complete'},reconciliation:card.reconciliation};
+      const present=await readSituationRevenueAbsence(client,proofInput);
+      assert.equal(present.soldAbsent,false,'a frozen sale blocks an absence proof');
+      assert.equal(present.returnedAbsent,true,'no frozen returns confirms zero independently');
+      const emptyContext={...card.context,period:{start:'2026-07-13',end:'2026-07-14'}};
+      const absent=await readSituationRevenueAbsence(client,{...proofInput,context:emptyContext});
+      assert.equal(absent.soldAbsent,true,JSON.stringify({publicationSource,absent}));
+      assert.equal(absent.returnedAbsent,true);
+      const unbounded=await readSituationRevenueAbsence(client,{...proofInput,context:{...emptyContext,period:{start:'2026-07-12',end:'2026-07-14'}}});
+      assert.equal(unbounded.soldAbsent,false,'uncovered day cannot confirm absence');
+      assert.equal(unbounded.returnedAbsent,false);
+      await client.query('reset role');
+    });
     for(const group of item.groups){
       const page=await reader.readPublishedContributions(viewer,{...input,productId:item.productId,groupKey:group.groupKey,limit:1});
       assert.equal(page.sourceValidationScope,'page');

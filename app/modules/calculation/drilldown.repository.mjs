@@ -5,6 +5,7 @@ import { buildFinancialPeriodOverview, financialResultIncludesStore, validateCal
 import { buildSituations } from '../overview/situations.mjs';
 import { buildPublishedDrilldownModel, paginatePublishedSkuList } from './drilldown.mjs';
 import { readContributionPage } from './drilldown-evidence.repository.mjs';
+import { readSituationRevenueAbsence } from './situation-absence.repository.mjs';
 
 const uuidPattern=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function invalid(code='drilldown_invalid_request'){throw new Error(code);}
@@ -196,7 +197,7 @@ export function createPublishedDrilldownRepository({pool=defaultPool}={}){
       return{context:model.context,item:publicItem(item),storeLines:model.storeLines.map(publicGroup),reconciliation:model.reconciliation};
     });
   };
-  const readPublishedSituations=(userId,input)=>read(userId,input,({model,context,overviewEnvelope})=>{
+  const readSituations=(userId,input,confirmAbsence=false)=>read(userId,input,async({client,model,context,overviewEnvelope})=>{
     const overview=model.reconciliation.status==='mismatch'?{}:buildFinancialPeriodOverview(overviewEnvelope);
     const financial={...overview,status:context.quality==='unavailable'||model.reconciliation.status==='mismatch'?'unavailable':'available',
       scope:context.scope};
@@ -220,14 +221,20 @@ export function createPublishedDrilldownRepository({pool=defaultPool}={}){
       }:{description:'Знаковое сальдо сохранённых строк штрафов и пени не равно нулю. Обратные операции включены со своим знаком, общие строки магазина учтены отдельно.',
         comparison:'not_equal_zero',inputs:[{label:'Сальдо штрафов и пени',value:item.metric.value,unit:'RUB'}]}};
     });
+    if(confirmAbsence){
+      const item=items.find(item=>item.id===input.situationId.toLowerCase()&&item.kind==='product_loss');
+      if(item&&(!item.groups.some(group=>group.categoryCode==='revenue')||!item.groups.some(group=>group.categoryCode==='revenue_return')))
+        item.revenueAbsence=await readSituationRevenueAbsence(client,{context,item,reconciliation:model.reconciliation});
+    }
     return{context,...result,items,reconciliation:model.reconciliation};
   });
+  const readPublishedSituations=(userId,input)=>readSituations(userId,input);
   const readPublishedSituation=async(userId,input)=>{
     if(typeof input?.situationId!=='string'||!(input.situationId==='penalty'||/^product_loss:[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(input.situationId))){
       if(input?.situationId==='return_growth')invalid('drilldown_not_found');
       invalid();
     }
-    const result=await readPublishedSituations(userId,input);
+    const result=await readSituations(userId,input,true);
     const item=result.items.find(item=>item.id===input.situationId.toLowerCase());if(!item)invalid('drilldown_not_found');
     const {items,...state}=result;return{...state,item};
   };

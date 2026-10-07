@@ -12,8 +12,10 @@ function page(items=[], overrides={}) {
   return {items, totalItems:items.length, nextCursor:null, evidenceStatus:'matched',
     reconciliation:{status:'matched'}, moneyReconciliation:{status:'matched'}, ...overrides};
 }
-function preview(sales, returns=page(), selected=groups) {
-  return readSituationRevenuePreview('viewer', {publicationId:'old',storeId:'store',periodStart:'2026-07-01',periodEnd:'2026-07-31'}, {productId:'product', groups:selected},
+const absence={storeId:'store',productId:'product',publicationId:'old',publicationSource:'daily',
+  period:{start:'2026-07-01',end:'2026-07-31'},soldAbsent:true,returnedAbsent:true};
+function preview(sales, returns=page(), selected=groups, revenueAbsence=null) {
+  return readSituationRevenuePreview('viewer', {publicationId:'old',publicationSource:'daily',storeId:'store',periodStart:'2026-07-01',periodEnd:'2026-07-31'}, {productId:'product', groups:selected,revenueAbsence},
     async(_user, input) => input.groupKey === 'sales' ? sales : returns);
 }
 
@@ -116,12 +118,28 @@ test('return quantities use signed report operations, exact decimals and dedupli
 });
 
 test('confirmed absence hides no data; return-only retains returns without inventing sales', async() => {
-  const noReturns=await preview(page([row('sale')]),page(),[groups[0]]);
+  const noReturns=await preview(page([row('sale')]),page(),[groups[0]],{...absence,soldAbsent:false});
   assert.equal(noReturns.returnedQuantity,'0');
   const onlyReturns=await preview(page(),page([row('return','-1',{operationType:'return'})]),[groups[1]]);
   assert.equal(onlyReturns.soldQuantity,null);
   assert.equal(onlyReturns.returnedQuantity,'1');
   assert.equal((await preview(page(),page(),[])).returnedQuantity,null);
+});
+
+test('only an exactly bound frozen absence proof confirms missing categories as zero',async()=>{
+  const zero=await preview(page(),page(),[],absence);
+  assert.equal(zero.soldQuantity,'0');assert.equal(zero.returnedQuantity,'0');assert.equal(zero.quantityReason,null);
+  const returned=await preview(page(),page([row('return','-1',{operationType:'return'})]),[groups[1]],absence);
+  assert.equal(returned.soldQuantity,'0');assert.equal(returned.returnedQuantity,'1');
+  for(const change of [{storeId:'foreign'},{productId:'foreign'},{publicationId:'foreign'},{publicationSource:'legacy'},
+    {period:{start:'2026-06-01',end:'2026-06-30'}},{soldAbsent:false,returnedAbsent:false}]){
+    const unknown=await preview(page(),page(),[],{...absence,...change});
+    assert.equal(unknown.soldQuantity,null);assert.equal(unknown.returnedQuantity,null);
+  }
+  const notProven=await preview(page([row('sale')]),page(),[groups[0]]);
+  assert.equal(notProven.soldQuantity,'1');assert.equal(notProven.returnedQuantity,null);
+  const incomplete=await preview(page([row('sale')],{nextCursor:'next',totalItems:2}),page(),[groups[0]],absence);
+  assert.equal(incomplete.soldQuantity,null);assert.equal(incomplete.returnedQuantity,null);
 });
 
 test('foreign SKU, out-of-period dates and invalid return quantities never become header counts', async() => {
