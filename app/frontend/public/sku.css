@@ -27,7 +27,7 @@
 .situation-composition>details>summary>.sku-money,.situation-category>summary>.sku-money{float:right;max-width:40%;text-align:right;white-space:normal}
 .situation-composition>details>summary small{display:inline;margin-left:18px;font-size:13px;line-height:1.3;color:var(--muted)}
 .situation-composition>details>summary:hover{background:var(--surface)}
-.situation-revenue>summary{color:var(--accent)}
+.situation-revenue>summary{color:var(--text)}
 .situation-composition>details>summary>.sku-money{color:var(--text)}
 .situation-revenue-body{padding:4px 20px 10px;background:var(--surface)}
 .situation-wb-body{padding:4px 20px 10px;background:var(--surface)}

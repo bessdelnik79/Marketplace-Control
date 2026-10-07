@@ -24,12 +24,14 @@ test('accepted layout explains exact saved loss before tax and uses native reven
   assert.doesNotMatch(html,/Не хватает/);
   assert.match(html,/1–30 сентября 2026/);
   assert.match(html,/<details class="situation-revenue"><summary>/);
-  assert.match(html,/Заказов по дате заказа: 7 шт\./);
+  assert.match(html,/Заказы: 7 шт\./);
   assert.match(html,/Выкупы: 3 шт\./);
   assert.doesNotMatch(html,/Возвраты:|Выкупы: 4/);
   assert.match(html,/по дате исходного заказа/);
   assert.match(html,/независимо от финансовой публикации/);
-  assert.match(html,/По выручке: 3 шт\./);
+  assert.doesNotMatch(html,/По выручке:|По выручке финансового отчёта/);
+  assert.equal((html.match(/class="situation-counts"/g)??[]).length,1);
+  assert.match(html,/<div class="situation-counts"><span[^>]*>Заказы: 7 шт\.<\/span><span[^>]*>Выкупы: 3 шт\.<\/span><\/div>/);
   assert.doesNotMatch(html,/Продано с выручкой|Число заказов пока не подтверждено/);
   assert.match(html,/<details class="situation-technical"><summary>Данные расчёта/);
   const link=[...html.matchAll(/href="([^"]+)"/g)].map(match=>new URL(match[1].replaceAll('&amp;','&'),'https://mc.test')).find(url=>url.hash);
@@ -39,14 +41,14 @@ test('accepted layout explains exact saved loss before tax and uses native reven
 
 test('unverified quantities and source dates are not replaced by counts or zeros',()=>{
   const html=render({operationalCounts:null,revenuePreview:{soldQuantity:null,quantityReason:'situation_revenue_page_incomplete',hasMore:true,rows:[{...row,source:null}]}});
-  assert.match(html,/Заказов по дате заказа: —/);
+  assert.match(html,/Заказы: —/);
   assert.match(html,/Выкупы: —/);
   assert.match(html,/Возвраты: —/);
   assert.match(html,/Дата не подтверждена/);
   assert.match(html,/Количество не подтверждено/);
   assert.match(html,/Общее количество по выручке пока не подтверждено/);
   assert.match(html,/Показаны первые 10 доступных строк/);
-  assert.doesNotMatch(html,/Заказов по дате заказа: 0|Выкупы: 0/);
+  assert.doesNotMatch(html,/Заказы: 0|Выкупы: 0/);
 });
 
 test('additional expenses remain part of composition and suppress the simplified cause',()=>{
@@ -120,15 +122,15 @@ test('cost of goods is a plain amount row while technical evidence remains separ
 
 test('only orders use operational counts, require exact coverage and accept confirmed zero',()=>{
   const zero=render({operationalCounts:{...counts,orders:{count:'0',availability:'complete'},buyouts:{count:'0',availability:'complete'}}});
-  assert.match(zero,/Заказов по дате заказа: 0 шт\./);assert.match(zero,/Выкупы: 3 шт\./);
+  assert.match(zero,/Заказы: 0 шт\./);assert.match(zero,/Выкупы: 3 шт\./);
   assert.doesNotMatch(zero,/Количество за весь период пока не подтверждено/);
   for(const changed of [null,{...counts,storeId:'foreign'},{...counts,productId:'foreign'},{...counts,period:{start:'2026-08-01',end:'2026-08-31'}},
     {...counts,orders:{count:'7',availability:'partial'},buyouts:{count:'4',availability:'unavailable'}},
     {...counts,orders:{count:'<img>',availability:'complete'},buyouts:{count:'-1',availability:'complete'}}]){
     const html=render({operationalCounts:changed});
-    assert.match(html,/Заказов по дате заказа: —/);assert.match(html,/Выкупы: 3 шт\./);
+    assert.match(html,/Заказы: —/);assert.match(html,/Выкупы: 3 шт\./);
     assert.match(html,/Количество заказов за весь период пока не подтверждено/);
-    assert.doesNotMatch(html,/Заказов по дате заказа: 7|<img>/);
+    assert.doesNotMatch(html,/Заказы: 7|<img>/);
   }
 });
 
@@ -151,6 +153,7 @@ test('tax comes from the saved SKU metric, never the loss, and unsafe amounts ar
 test('financial counts are pinned to SKU and period; zero returns are hidden but unknown returns are not',()=>{
   const returned=render({revenuePreview:{...revenuePreview,soldQuantity:'7',returnedQuantity:'1'}});
   assert.match(returned,/Выкупы: 7 шт\./);assert.match(returned,/Возвраты: 1 шт\./);
+  assert.match(returned,/<div class="situation-counts"><span[^>]*>Заказы: 7 шт\.<\/span><span[^>]*>Выкупы: 7 шт\.<\/span><span[^>]*>Возвраты: 1 шт\.<\/span><\/div>/);
   assert.match(returned,/Выкупы показаны до вычета возвратов/);
   for(const returnedQuantity of ['0','0.000'])assert.doesNotMatch(render({revenuePreview:{...revenuePreview,returnedQuantity}}),/Возвраты:/);
   for(const changed of [{productId:'foreign'},{storeId:'foreign'},{period:{start:'2026-08-01',end:'2026-08-31'}},
@@ -162,10 +165,8 @@ test('financial counts are pinned to SKU and period; zero returns are hidden but
   assert.match(render({reconciliation:{status:'mismatch'}}),/Выкупы: —/);
 });
 
-test('tax explanation links to the exact SKU frozen base and rate without changing amount',()=>{
+test('tax explanation keeps saved amount without a base and rate shortcut',()=>{
   const html=render({item:{...item,taxGroup:{categoryCode:'estimated_usn_tax',groupKey:'tax-key'}}});
-  const link=[...html.matchAll(/href="([^"]+)">База и ставка/g)].map(match=>new URL(match[1].replaceAll('&amp;','&'),'https://mc.test'))[0];
-  assert.equal(link.searchParams.get('productId'),'product');assert.equal(link.searchParams.get('groupKey'),'tax-key');
-  assert.equal(link.searchParams.get('publicationId'),'publication');assert.equal(link.searchParams.get('periodStart'),'2026-09-01');
+  assert.doesNotMatch(html,/База и ставка|groupKey=tax-key/);
   assert.match(html,/Расчётный налог по товару — .*134,58 ₽/);
 });
