@@ -5,10 +5,11 @@ import { productLossDetail } from './situation-detail.mjs';
 const metric = amount => ({amount, availability:'complete'});
 const context = {storeId:'store', publication:{id:'publication',source:'daily'},period:{start:'2026-09-01',end:'2026-09-30'}};
 const item = {id:'product_loss:product',productId:'product',product:{name:'Часы',sellerArticle:'ART',wbArticle:'123'},metric:{value:'-121.3800'},
-  metrics:{revenue:metric('2243.0000'),wbExpenses:metric('1299.3800'),costOfGoods:metric('1065.0000'),externalExpenses:metric('0.0000'),availableResultBeforeTax:metric('-121.3800')},
+  metrics:{revenue:metric('2243.0000'),wbExpenses:metric('1299.3800'),costOfGoods:metric('1065.0000'),externalExpenses:metric('0.0000'),tax:metric('134.5800'),availableResultBeforeTax:metric('-121.3800')},
   groups:[{categoryCode:'revenue',groupKey:'revenue'},{categoryCode:'cost_of_goods',groupKey:'cost'}]};
 const row = {id:'evidence',groupKey:'revenue',categoryCode:'revenue',contributionAmount:'1089.0000',source:{accountingDate:'2026-09-11',quantity:'1.000000'}};
-const data = {context,item,reconciliation:{status:'matched'},revenuePreview:{soldQuantity:'3',rows:[row],hasMore:false}};
+const counts = {storeId:'store',productId:'product',period:context.period,orders:{count:'7',availability:'complete'},buyouts:{count:'4',availability:'complete'}};
+const data = {context,item,reconciliation:{status:'matched'},operationalCounts:counts,revenuePreview:{soldQuantity:'3',rows:[row],hasMore:false}};
 const render = overrides => productLossDetail({...data,...overrides},{},'<p>Технические сведения</p>','');
 const expense = (categoryCode, amountSigned) => ({categoryCode,amountSigned,groupKey:categoryCode});
 const wbTable = html => html.match(/<table class="situation-wb-table"[\s\S]*?<\/table>/)?.[0] ?? '';
@@ -17,13 +18,17 @@ test('accepted layout explains exact saved loss before tax and uses native reven
   const html=render();
   assert.match(html,/Данные для этого расчёта полные/);
   assert.match(html,/После расходов WB осталось .*943,62 ₽/);
-  assert.match(html,/Себестоимость — .*1 065,00 ₽/);
-  assert.match(html,/Не хватает .*121,38 ₽/);
+  assert.match(html,/Суммарная себестоимость — .*1 065,00 ₽/);
+  assert.match(html,/Требуется заплатить налог — .*134,58 ₽/);
+  assert.doesNotMatch(html,/Не хватает/);
   assert.match(html,/1–30 сентября 2026/);
   assert.match(html,/<details class="situation-revenue"><summary>/);
-  assert.match(html,/Продано с выручкой: 3 шт\./);
-  assert.match(html,/Число заказов пока не подтверждено/);
-  assert.match(html,/не включает продажи с нулевой выручкой/);
+  assert.match(html,/Заказов: 7 шт\./);
+  assert.match(html,/Выкупы: 4 шт\./);
+  assert.match(html,/по дате исходного заказа/);
+  assert.match(html,/независимо от финансовой публикации/);
+  assert.match(html,/По выручке: 3 шт\./);
+  assert.doesNotMatch(html,/Продано с выручкой|Число заказов пока не подтверждено/);
   assert.match(html,/<details class="situation-technical"><summary>Данные расчёта/);
   const link=[...html.matchAll(/href="([^"]+)"/g)].map(match=>new URL(match[1].replaceAll('&amp;','&'),'https://mc.test')).find(url=>url.hash);
   assert.equal(link.hash,'#contribution-evidence');
@@ -31,13 +36,14 @@ test('accepted layout explains exact saved loss before tax and uses native reven
 });
 
 test('unverified quantities and source dates are not replaced by counts or zeros',()=>{
-  const html=render({revenuePreview:{soldQuantity:null,quantityReason:'situation_revenue_page_incomplete',hasMore:true,rows:[{...row,source:null}]}});
-  assert.match(html,/Продано с выручкой: —/);
+  const html=render({operationalCounts:null,revenuePreview:{soldQuantity:null,quantityReason:'situation_revenue_page_incomplete',hasMore:true,rows:[{...row,source:null}]}});
+  assert.match(html,/Заказов: —/);
+  assert.match(html,/Выкупы: —/);
   assert.match(html,/Дата не подтверждена/);
   assert.match(html,/Количество не подтверждено/);
   assert.match(html,/Общее количество по выручке пока не подтверждено/);
   assert.match(html,/Показаны первые 10 доступных строк/);
-  assert.doesNotMatch(html,/Заказано: 0|Продано с выручкой: 1/);
+  assert.doesNotMatch(html,/Заказов: 0|Выкупы: 0/);
 });
 
 test('additional expenses remain part of composition and suppress the simplified cause',()=>{
@@ -107,4 +113,34 @@ test('cost of goods is a plain amount row while technical evidence remains separ
   assert.match(html,/<div class="situation-accounting-row situation-cost"><span>Себестоимость<\/span><span>.*−1 065,00 ₽/);
   assert.doesNotMatch(html,/<details class="situation-cost"/);
   assert.match(html,/<details class="situation-technical">[\s\S]*href="\/sku\/evidence\?groupKey=cost"/);
+});
+
+test('operational counts require complete coverage for the exact displayed period and accept confirmed zero',()=>{
+  const zero=render({operationalCounts:{...counts,orders:{count:'0',availability:'complete'},buyouts:{count:'0',availability:'complete'}}});
+  assert.match(zero,/Заказов: 0 шт\./);assert.match(zero,/Выкупы: 0 шт\./);
+  assert.doesNotMatch(zero,/Количество за весь период пока не подтверждено/);
+  for(const changed of [null,{...counts,storeId:'foreign'},{...counts,productId:'foreign'},{...counts,period:{start:'2026-08-01',end:'2026-08-31'}},
+    {...counts,orders:{count:'7',availability:'partial'},buyouts:{count:'4',availability:'unavailable'}},
+    {...counts,orders:{count:'<img>',availability:'complete'},buyouts:{count:'-1',availability:'complete'}}]){
+    const html=render({operationalCounts:changed});
+    assert.match(html,/Заказов: —/);assert.match(html,/Выкупы: —/);
+    assert.match(html,/Количество за весь период пока не подтверждено/);
+    assert.doesNotMatch(html,/Заказов: 7|Выкупы: 3|<img>/);
+  }
+});
+
+test('tax comes from the saved SKU metric, never the loss, and unsafe amounts are not payable tax',()=>{
+  for(const tax of [{amount:null,availability:'unavailable'},metric('invalid'),{amount:'10.0000',availability:'partial'}]){
+    const html=render({item:{...item,metrics:{...item.metrics,tax}}});
+    assert.match(html,/Требуется заплатить налог — <span class="sku-unavailable">Недоступно/);
+    assert.match(html,/Нет подтверждённого расчёта налога/);
+    assert.doesNotMatch(html,/Требуется заплатить налог — <span class="sku-money"[^>]*>−?121,38 ₽/);
+  }
+  const zero=render({item:{...item,metrics:{...item.metrics,tax:metric('0.0000')}}});
+  assert.match(zero,/Требуется заплатить налог — .*0,00 ₽/);
+  const signed=render({item:{...item,metrics:{...item.metrics,tax:metric('-10.0000')}}});
+  assert.match(signed,/Налоговый зачёт по товару — .*−10,00 ₽/);
+  assert.doesNotMatch(signed,/Требуется заплатить налог/);
+  assert.match(signed,/не окончательный налог всего бизнеса/);
+  assert.match(render({reconciliation:{status:'mismatch'}}),/Нет подтверждённого расчёта налога/);
 });

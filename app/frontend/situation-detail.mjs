@@ -63,6 +63,23 @@ function wbExpenseTable(item, codes, total) {
   return `<div class="situation-wb-body"><table class="situation-wb-table" aria-label="Состав расходов WB"><thead><tr><th scope="col">Статья</th><th scope="col">Сумма</th></tr></thead><tbody>${rows.map(row => `<tr><th scope="row">${esc(row.label)}</th><td>${money(formatted(row.value))}</td></tr>`).join('')}</tbody><tfoot><tr><th scope="row">Итого расходы WB</th><td>${money(formatted(total))}</td></tr></tfoot></table></div>`;
 }
 
+function operationalCounts(data) {
+  const saved = data.operationalCounts;
+  const samePeriod = saved?.storeId === data.context?.storeId && saved?.productId === data.item.productId && saved?.period?.start === data.context?.period?.start && saved?.period?.end === data.context?.period?.end;
+  const count = key => samePeriod && saved?.[key]?.availability === 'complete' && typeof saved[key].count === 'string' && /^\d+$/.test(saved[key].count)
+    ? units(saved[key].count) : '—';
+  const orders = count('orders'), buyouts = count('buyouts');
+  const basis = 'Сохранённая оперативная статистика WB за указанный период, по дате исходного заказа. Финансовые суммы ниже — по дате отчёта. Статистика может обновляться независимо от финансовой публикации.';
+  return `<div class="situation-counts" title="${esc(basis)}"><span>Заказов: ${orders}</span><span>Выкупы: ${buyouts}</span></div><small class="muted">По дате заказа · статистика WB.${orders === '—' || buyouts === '—' ? ' Количество за весь период пока не подтверждено.' : ''}</small>`;
+}
+
+function taxExplanation(data) {
+  const metric = data.item.metrics?.tax;
+  const value = metric?.availability === 'complete' && data.reconciliation?.status === 'matched' ? amount(metric) : null;
+  const label = value !== null && value < 0n ? 'Налоговый зачёт по товару' : 'Требуется заплатить налог';
+  return `<p title="Оценка налога по этому товару из сохранённой финансовой публикации, не окончательный налог всего бизнеса">${label} — ${money(formatted(value))}.${value === null ? ' <span class="muted">Нет подтверждённого расчёта налога.</span>' : ''}</p>`;
+}
+
 export function productLossDetail(data, options, technicalDetails, fallbackGroups) {
   const {item, context} = data, product = item.product;
   const metrics = item.metrics ?? {}, revenue = amount(metrics.revenue), wb = amount(metrics.wbExpenses), cost = amount(metrics.costOfGoods), external = amount(metrics.externalExpenses);
@@ -73,14 +90,14 @@ export function productLossDetail(data, options, technicalDetails, fallbackGroup
   const complete = balanced && metrics.availableResultBeforeTax?.availability === 'complete' && data.reconciliation?.status === 'matched';
   const simple = balanced && external === 0n && afterWb >= 0n && cost > afterWb;
   const explanation = simple
-    ? `<p>После расходов WB осталось ${money(formatted(afterWb))}.</p><p>Себестоимость — ${money(metrics.costOfGoods.amount)}.</p><p>Не хватает ${money(formatted(-result))}.</p>`
-    : balanced ? '<p>Выручка не покрыла расходы и себестоимость.</p><p>Ниже показан сохранённый состав результата до налога.</p>'
-    : '<p>Показан сохранённый результат до налога.</p><p>Проверьте доступность его состава в данных расчёта.</p>';
+    ? `<p>После расходов WB осталось ${money(formatted(afterWb))}.</p><p>Суммарная себестоимость — ${money(metrics.costOfGoods.amount)}.</p>${taxExplanation(data)}`
+    : balanced ? '<p>Выручка не покрыла расходы и себестоимость.</p><p>Ниже показан сохранённый состав результата до налога.</p>' + taxExplanation(data)
+    : '<p>Показан сохранённый результат до налога.</p><p>Проверьте доступность его состава в данных расчёта.</p>' + taxExplanation(data);
   const image = typeof product?.imageUrl === 'string' && /^https:\/\//i.test(product.imageUrl)
     ? `<img class="situation-product-image" src="${esc(product.imageUrl)}" alt="${esc(productTitle(product))}">` : '';
   const codes = Object.keys(categories).filter(code => !['revenue','revenue_return','cost_of_goods','estimated_usn_tax','daily_tax_range','packaging','software_services','external_promotion','agency_services','other_external'].includes(code));
   const extraCodes = ['packaging','software_services','external_promotion','agency_services','other_external'];
   const quantity = data.revenuePreview?.soldQuantity;
   const table = item.metrics ? `<section class="situation-composition" aria-label="Состав результата до налога"><h2>Из чего сложился убыток</h2><div class="situation-table-head"><span>Статья</span><span>Сумма</span></div><details class="situation-revenue"><summary><span>Выручка${quantity != null ? `<small>По выручке: ${units(quantity)}</small>` : ''}</span>${money(metrics.revenue?.amount)}</summary>${revenueRows(data, options)}</details><details class="situation-wb"><summary><span>Расходы WB</span>${money(formatted(wb === null ? null : -wb))}</summary>${wbExpenseTable(item, codes, wb === null ? null : -wb)}</details>${accountingRow('Осталось после WB', afterWb, 'situation-subtotal')}${accountingRow('Себестоимость', cost === null ? null : -cost, 'situation-cost')}${external !== 0n ? `<details class="situation-external"><summary><span>Дополнительные расходы</span>${money(formatted(external === null ? null : -external))}</summary>${sourceGroups(item, extraCodes, context, options)}</details>` : ''}${accountingRow('Результат до налога', result, 'situation-result')}</section>` : '<section><h2>Из чего сложился убыток</h2><p>Состав результата до налога — в данных расчёта ниже.</p></section>';
-  return `<div class="situation-detail"><a class="situation-back" href="${esc(`/situations?${query(context, options)}`)}">Все ситуации</a><div class="situation-title-row"><h1>Убыток по товару</h1><p class="situation-quality ${complete ? 'positive' : 'muted'}">${complete ? 'Данные для этого расчёта полные' : 'Полнота состава расчёта не подтверждена'}</p></div><div class="situation-product">${image}<div><h2>${esc(productTitle(product))}</h2><p class="muted">Арт. ${esc(product?.sellerArticle ?? 'не сохранён')} · WB ${esc(product?.wbArticle ?? 'не сохранён')}${product?.isHistorical ? ' · Исторический / удалённый товар' : ''}</p><p>${esc(period(context?.period))}</p><div class="situation-counts"><span>Заказано: <span title="Число оперативных заказов не подтверждено этой финансовой публикацией">—</span></span><span title="По подтверждённым строкам выручки; не включает продажи с нулевой выручкой">Продано с выручкой: ${quantity != null ? units(quantity) : '—'}</span></div><small class="muted">Число заказов пока не подтверждено.</small></div></div><section class="situation-loss" aria-label="Убыток до налога"><div><p class="muted">До налога</p><strong class="situation-loss-amount negative">${money(item.metric?.value)}</strong></div><div class="situation-loss-explanation">${explanation}</div></section>${table}<footer class="situation-footer"><details class="situation-technical"><summary>Данные расчёта</summary>${technicalDetails}<p class="muted">Названия, артикулы и фотографии могут отражать текущие данные каталога.</p>${fallbackGroups}</details><a class="outline-button" href="${esc(`/sku/card?${query(context, options, {productId:item.productId})}`)}">Исходные данные</a></footer></div>`;
+  return `<div class="situation-detail"><a class="situation-back" href="${esc(`/situations?${query(context, options)}`)}">Все ситуации</a><div class="situation-title-row"><h1>Убыток по товару</h1><p class="situation-quality ${complete ? 'positive' : 'muted'}">${complete ? 'Данные для этого расчёта полные' : 'Полнота состава расчёта не подтверждена'}</p></div><div class="situation-product">${image}<div><h2>${esc(productTitle(product))}</h2><p class="muted">Арт. ${esc(product?.sellerArticle ?? 'не сохранён')} · WB ${esc(product?.wbArticle ?? 'не сохранён')}${product?.isHistorical ? ' · Исторический / удалённый товар' : ''}</p><p>${esc(period(context?.period))}</p>${operationalCounts(data)}</div></div><section class="situation-loss" aria-label="Убыток до налога"><div><p class="muted">До налога</p><strong class="situation-loss-amount negative">${money(item.metric?.value)}</strong></div><div class="situation-loss-explanation">${explanation}</div></section>${table}<footer class="situation-footer"><details class="situation-technical"><summary>Данные расчёта</summary>${technicalDetails}<p class="muted">Названия, артикулы и фотографии могут отражать текущие данные каталога.</p>${fallbackGroups}</details><a class="outline-button" href="${esc(`/sku/card?${query(context, options, {productId:item.productId})}`)}">Исходные данные</a></footer></div>`;
 }

@@ -16,6 +16,7 @@ export * from './modules/reports/reports.repository.mjs';
 export * from './modules/calculation/calculation.repository.mjs';
 export * from './modules/calculation/drilldown.repository.mjs';
 export * from './modules/operational/operational.repository.mjs';
+export * from './modules/operational/situation-counts.mjs';
 
 export const { getCostState, importVariantCosts, saveVariantCost } = createCostsRepository({ withOwnedBusinessContext });
 export const jobsRepository = createJobsRepository({ pool, withOwnedBusinessContext });

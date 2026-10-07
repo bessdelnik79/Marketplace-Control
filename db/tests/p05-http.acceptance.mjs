@@ -55,8 +55,9 @@ export async function verifyPublishedDrilldownHttp({reader,viewer,storeId,inputs
         assert.deepEqual(new Set(sourceUrls.map(url=>url.searchParams.get('groupKey'))),new Set(situation.groups.map(group=>group.groupKey)), 'detail exposes every saved category and no foreign groups');
         if(situation.kind==='product_loss'){
           assert.ok(detailHtml.includes('Из чего сложился убыток'));
-          assert.ok(detailHtml.includes('Продано с выручкой:'));
-          assert.ok(detailHtml.includes('Число заказов пока не подтверждено.'));
+          assert.ok(detailHtml.includes('Заказов:'));
+          assert.ok(detailHtml.includes('Выкупы:'));
+          assert.ok(detailHtml.includes('по дате исходного заказа'));
         }
         for(const sourceUrl of sourceUrls){
           assert.equal(sourceUrl.searchParams.get('situationId'),situation.id);

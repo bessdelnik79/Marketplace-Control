@@ -61,6 +61,12 @@ P02_INTEGRATION_DATABASE_URL=postgresql:///marketplace_control_p02_test node db/
 P03_INTEGRATION_DATABASE_URL=postgresql:///marketplace_control_p03_test node db/tests/p03-app.integration.mjs
 ```
 
+Счётчики страницы ситуации (товар/точный период, принятые оперативные snapshots, подтверждённые нули, неполные дни, сохранённый fallback, чужой tenant и недоступный товар):
+
+```sh
+P04_INTEGRATION_DATABASE_URL=postgresql:///marketplace_control_situation_counts_test node db/tests/situation-counts.integration.mjs
+```
+
 Он фиксирует выбор товаров, нормализацию отчёта, себестоимость, точный результат по доступным данным, причины неполноты и идемпотентную текущую публикацию. Тест также отказывается работать с базой, в имени которой нет `test`.
 
 Тот же сценарий содержит интеграцию readers P0.5: список SKU, карточку, страницы денежных вкладов и налоговой базы. Он читает сохранённую legacy-публикацию и дневную публикацию из нескольких поколений обычной ролью PostgreSQL (`NOSUPERUSER`, `NOBYPASSRLS`) от имени viewer. Проверяются настоящие чужие business/store/product/publication/line IDs, другая нормализация той же версии отчёта, смена текущей публикации между кликами и несовместимая методика перенесённого поколения. HTTP acceptance (`tests/p05-http.acceptance.mjs`) проходит с настоящей подтверждённой сессией viewer: обзор → SKU → себестоимость → источник → прежний обзор, отдельно legacy налоговую базу; jobs и версии WB не меняются. Для adversarial fixture bootstrap-роль временно изменяет только одноразовые snapshots и восстанавливает их; рабочую БД использовать нельзя.

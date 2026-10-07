@@ -122,3 +122,34 @@ test('product-loss preview does not hide unexpected reader failures',async()=>{
     readPublishedContributions:async()=>{throw new Error('unexpected database error');}});
   await assert.rejects(s.run(route('/situation',{situationId:'product_loss:product'})),/unexpected database error/);
 });
+
+test('product-loss counts use the authorized situation product and exact pinned financial period',async()=>{
+  const calls=[],counts={orders:{count:'19',availability:'complete'}};
+  const s=setup({readPublishedSituation:async()=>({item:{kind:'product_loss',productId:'product',groups:[]}}),
+    readSituationOperationalCounts:async(user,input)=>{calls.push({user,input});return counts;}});
+  await s.run(route('/situation',{situationId:'product_loss:product',productId:'foreign',
+    operationalStart:'2026-01-01',operationalEnd:'2026-01-02'}));
+  assert.equal(s.response.status,200);
+  assert.deepEqual(calls,[{user:'viewer',input:{storeId:'store',productId:'product',
+    periodStart:base.periodStart,periodEnd:base.periodEnd}}]);
+  assert.deepEqual(s.response.body.data.operationalCounts,counts);
+});
+
+test('operational counts are never read before authorization or for other situation kinds',async()=>{
+  const calls=[];
+  const auxiliary=async()=>{calls.push('counts');return {};};
+  for(const [path,user,overrides] of [
+    [route('/situation',{situationId:'product_loss:product'}),null,{}],
+    [route('/situation',{storeId:'foreign',situationId:'product_loss:product'}),current,{}],
+    [route('/situation',{situationId:'product_loss:product'}),current,
+      {readPublishedSituation:async()=>{throw new Error('drilldown_not_found');}}],
+    [route('/situation',{periodEnd:'2026-02-30',situationId:'product_loss:product'}),current,{}],
+    [route('/situation',{situationId:'penalty'}),current,
+      {readPublishedSituation:async()=>({item:{kind:'penalty',groups:[]}})}]
+  ]) {
+    const s=setup({readSituationOperationalCounts:auxiliary,...overrides});
+    await s.run(path,user);
+    assert.equal(Object.hasOwn(s.response.body?.data??{},'operationalCounts'),false);
+  }
+  assert.deepEqual(calls,[]);
+});

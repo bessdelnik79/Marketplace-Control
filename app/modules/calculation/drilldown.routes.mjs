@@ -21,7 +21,7 @@ function period(params) {
 }
 
 export function createDrilldownRoutes({listStores, getFinancialOverview, readPublishedSkuList, readPublishedSkuCard,
-  readPublishedContributions, readPublishedSituations, readPublishedSituation,
+  readPublishedContributions, readPublishedSituations, readPublishedSituation, readSituationOperationalCounts=null,
   skuListPage, skuCardPage, skuSourcesPage, situationsListPage, situationDetailPage, send, redirect}) {
   return async function handleDrilldown(req, res, url, current) {
     if (req.method !== 'GET' || !paths.has(url.pathname)) return false;
@@ -65,7 +65,11 @@ export function createDrilldownRoutes({listStores, getFinancialOverview, readPub
         data=await readPublishedSituations(current.user_id,input);renderer=situationsListPage;
       } else if (url.pathname === '/situation') {
         data=await readPublishedSituation(current.user_id,{...input,situationId:params.get('situationId')});renderer=situationDetailPage;
-        if(data.item.kind==='product_loss')data.revenuePreview=await readSituationRevenuePreview(current.user_id,input,data.item,readPublishedContributions);
+        if(data.item.kind==='product_loss'){
+          data.revenuePreview=await readSituationRevenuePreview(current.user_id,input,data.item,readPublishedContributions);
+          if(readSituationOperationalCounts)data.operationalCounts=await readSituationOperationalCounts(current.user_id,
+            {storeId:input.storeId,productId:data.item.productId,periodStart:requested.start,periodEnd:requested.end});
+        }
       } else if (url.pathname === '/sku') {
         data = await readPublishedSkuList(current.user_id, {...input, ...listState});
         renderer = skuListPage;
