@@ -5,14 +5,15 @@ import {hashToken} from './auth.mjs';
 
 function fixture({credential={password_hash:'stored'},origin=true,allowed=true,error}={}){
   const deleted=[],verified=[],token='secret-session-token',data={csrf:accountErasureCsrf(token),confirmation:'УДАЛИТЬ',currentPassword:'correct'};
-  const handler=createAccountErasureRoutes({getSessionToken:()=>token,getPasswordCredential:async()=>credential,
+  const stores=[{id:'owned-store',name:'Existing store'}];
+  const handler=createAccountErasureRoutes({getSessionToken:()=>token,getPasswordCredential:async()=>credential,listStores:async userId=>{assert.equal(userId,'user');return stores;},
     verifyPassword:async(password)=>{verified.push(password);return password==='correct';},
     requestAccountErasure:async(...args)=>{deleted.push(args);if(error)throw Error(error);},takeLimit:async()=>({allowed}),
     form:async()=>data,sameOrigin:()=>origin,send:(res,status,body,headers)=>Object.assign(res,{status,body,headers}),
     redirect:(res,location,cookie)=>Object.assign(res,{location,cookie}),cookie:(token,max)=>`${token}:${max}`,
     accountErasurePage:(user,options)=>options});
   const call=async(method='POST',current={user_id:'user'})=>{const res={};await handler({method},res,new URL('http://localhost/account/delete'),current);return res;};
-  return {call,data,deleted,verified,token};
+  return {call,data,deleted,verified,token,stores};
 }
 test('deletion requires explicit confirmation, current password and session-bound CSRF',async()=>{
   const f=fixture();const res=await f.call();
@@ -23,7 +24,7 @@ test('deletion requires explicit confirmation, current password and session-boun
   }
 });
 test('GET, unauthenticated, cross-origin and rate-limited requests never delete',async()=>{
-  const get=fixture();assert.equal((await get.call('GET')).headers['cache-control'],'no-store');assert.equal(get.deleted.length,0);
+  const get=fixture(),page=await get.call('GET');assert.equal(page.headers['cache-control'],'no-store');assert.deepEqual(page.body.stores,get.stores);assert.equal(get.deleted.length,0);
   for(const options of [{origin:false},{allowed:false}]){const f=fixture(options);assert.ok([403,429].includes((await f.call()).status));assert.equal(f.deleted.length,0);}
   const anonymous=fixture();assert.equal((await anonymous.call('POST',null)).location,'/login');assert.equal(anonymous.deleted.length,0);
 });

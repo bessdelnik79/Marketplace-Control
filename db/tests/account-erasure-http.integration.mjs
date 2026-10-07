@@ -43,6 +43,7 @@ try{
   const settings=await request('/settings',{cookie});assert.equal(settings.status,200);assert.match(await settings.text(),/href="\/account\/delete"/);
   const page=await request('/account/delete',{cookie});assert.equal(page.status,200);
   const html=await page.text(),csrf=html.match(/name="csrf" value="([a-f0-9]+)"/)?.[1];assert.ok(csrf);
+  assert.match(html,/HTTP fixture store/);assert.doesNotMatch(html,/Магазинов пока нет|Очистка файлов исходников|Для защиты акций/);
   const payload={confirmation:'УДАЛИТЬ',currentPassword:password,csrf};
   assert.equal((await request('/account/delete',{cookie,data:{...payload,csrf:'forged'}})).status,403);
   assert.equal((await request('/account/delete',{cookie,data:{...payload,currentPassword:'wrong'}})).status,422);

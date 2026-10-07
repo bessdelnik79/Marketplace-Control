@@ -70,7 +70,7 @@ async function sendTaxes(res,status,current,stores,options={}){return send(res,s
 const handleCosts = createCostsRoutes({ listStores, getCostState, importVariantCosts, saveVariantCost, form, costPage, send, sendBuffer, redirect, sameOrigin, takeLimit, multipart });
 const handleExpenses = createExpensesRoutes({ listStores, getExpenseState, send, sendBuffer, redirect, sendExpenses, sameOrigin, takeLimit, form, saveExpense, voidExpense, multipart, importExpenses });
 const handleTaxes = createTaxesRoutes({ listStores, send, redirect, sendTaxes, sameOrigin, takeLimit, form, saveTaxSetting, voidTaxSetting });
-const handleAccountErasure=createAccountErasureRoutes({getSessionToken:req=>cookies(req).mc_session,getPasswordCredential,verifyPassword,requestAccountErasure,takeLimit,form,sameOrigin,send,redirect,cookie,accountErasurePage});
+const handleAccountErasure=createAccountErasureRoutes({getSessionToken:req=>cookies(req).mc_session,getPasswordCredential,listStores,verifyPassword,requestAccountErasure,takeLimit,form,sameOrigin,send,redirect,cookie,accountErasurePage});
 const accountErasureWorker=createAccountErasureWorker();
 const handleBilling=createBillingRoutes({requestTariff,listStores,getBillingSummary,tariffPage,sameOrigin,form,send,redirect});
 const handleOverview = createOverviewRoutes({ listStores, getOverviewState, readPublishedSkuList, readPublishedSituations, getOperationalOverview, operationalOverviewPanel, requestOperationalRangeRefresh, scheduleOperationalSync, overviewPage, send, redirect,

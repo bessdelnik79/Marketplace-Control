@@ -10,14 +10,15 @@ function validCsrf(value, expected) {
   return wanted.length>0&&supplied.length===wanted.length&&timingSafeEqual(supplied,wanted);
 }
 
-export function createAccountErasureRoutes({getSessionToken,getPasswordCredential,verifyPassword,
+export function createAccountErasureRoutes({getSessionToken,getPasswordCredential,listStores,verifyPassword,
   requestAccountErasure,takeLimit,form,sameOrigin,send,redirect,cookie,accountErasurePage}) {
   return async(req,res,url,current)=>{
     if(url.pathname!=='/account/delete'||!['GET','POST'].includes(req.method))return false;
     if(!current){redirect(res,'/login');return true;}
     const token=getSessionToken(req), csrf=accountErasureCsrf(token);
     const credential=await getPasswordCredential(current.user_id);
-    const render=(status,error='')=>send(res,status,accountErasurePage(current,{csrf,hasPassword:Boolean(credential),error}),{'cache-control':'no-store'});
+    const stores=await listStores(current.user_id);
+    const render=(status,error='')=>send(res,status,accountErasurePage(current,{csrf,hasPassword:Boolean(credential),error,stores}),{'cache-control':'no-store'});
     if(req.method==='GET'){render(200);return true;}
     if(!sameOrigin(req)){send(res,403,'Запрос отклонён.');return true;}
     const data=await form(req);
