@@ -110,10 +110,18 @@
   if(form){storage.remove(accountKey);const saved={name:form.elements.displayName.value};form.addEventListener('submit',e=>{const name=form.elements.displayName.value.trim();if(name.length<2){e.preventDefault();form.elements.displayName.setCustomValidity('Введите имя от двух символов');form.elements.displayName.reportValidity();return}form.elements.displayName.setCustomValidity('')});form.elements.displayName.addEventListener('input',e=>e.target.setCustomValidity(''));$('[data-reset-settings]').addEventListener('click',()=>{form.elements.displayName.value=saved.name;form.elements.displayName.setCustomValidity('');toast('Изменения отменены')});$('[data-logout]').addEventListener('click',()=>{const f=document.createElement('form');f.method='post';f.action='/logout';document.body.append(f);f.submit()})}
   const selectionForm=$('[data-selection-form]');
   if(selectionForm){
-    const boxes=all('input[type=checkbox]',selectionForm),limit=Number(selectionForm.dataset.limit),base=Number(selectionForm.dataset.selectedCount||0),counter=$('[data-selection-count]',selectionForm),submit=$('[data-confirm-selection]',selectionForm);
+    const boxes=all('input[name=productIds]',selectionForm),limit=Number(selectionForm.dataset.limit),base=Number(selectionForm.dataset.selectedCount||0),counter=$('[data-selection-count]',selectionForm),submit=$('[data-confirm-selection]',selectionForm),selectAll=$('[data-select-all]',selectionForm);
     let confirmed=false;
-    const update=()=>{const added=boxes.filter(box=>box.checked).length,count=base+added;counter.textContent=count;boxes.forEach(box=>box.disabled=!box.checked&&count>=limit);submit.disabled=added===0};
+    const update=()=>{const added=boxes.filter(box=>box.checked).length,count=base+added;counter.textContent=count;boxes.forEach(box=>box.disabled=!box.checked&&count>=limit);submit.disabled=added===0;if(selectAll){selectAll.checked=added>0&&(added===boxes.length||count>=limit);selectAll.indeterminate=added>0&&!selectAll.checked;selectAll.disabled=boxes.length===0||base>=limit}};
     boxes.forEach(box=>box.addEventListener('change',update));
+    selectAll?.addEventListener('change',()=>{
+      if(selectAll.checked){
+        let remaining=Math.max(0,limit-base-boxes.filter(box=>box.checked).length);
+        boxes.forEach(box=>{if(!box.checked&&remaining>0){box.checked=true;remaining--}});
+        if(boxes.some(box=>!box.checked))toast('Выбраны товары в пределах лимита тарифа');
+      }else boxes.forEach(box=>box.checked=false);
+      update();
+    });
     selectionForm.addEventListener('submit',event=>{
       if(!boxes.some(box=>box.checked)){event.preventDefault();toast('Выберите хотя бы один товар');return}
       if(confirmed){confirmed=false;return}

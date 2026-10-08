@@ -116,3 +116,5 @@ html[data-theme=dark] .theme-switch button.selected{background:var(--selected);c
 @media(max-width:1250px){.header-product-prompt{order:5;flex-basis:100%}}
 @media(max-width:650px){.header-product-prompt{gap:10px;padding:10px;font-size:14px}.header-product-prompt span{flex:1}.header-product-prompt .outline-button{white-space:normal;text-align:center}}
 @media(max-width:650px){.app-header>.header-product-prompt{grid-column:1/-1;grid-row:3}.has-product-prompt>.demo-label{grid-row:4}}
+
+.catalog-select-all{display:flex;align-items:center;gap:10px;margin:16px 0;color:var(--text);cursor:pointer;flex-wrap:wrap}.catalog-select-all input{width:18px;height:18px;margin:0;accent-color:var(--accent)}.catalog-select-all small{font-weight:400}
