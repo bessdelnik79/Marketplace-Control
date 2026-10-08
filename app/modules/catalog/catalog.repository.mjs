@@ -123,11 +123,19 @@ export async function getCatalogState(userId,storeId){
         order by coalesce(p.title,p.seller_article),p.wb_article`,[businessId,storeId]
     )).rows;
     const plan=(await client.query(`select c.*,p.code,v.product_limit,
+      exists(select 1 from mc.tariff_lifecycle_events inherited
+        where inherited.business_id=$1 and inherited.profile_id=c.profile_id
+          and inherited.details->>'selectionInherited'='true'
+          and not exists(select 1 from mc.tariff_lifecycle_events edited
+            where edited.business_id=$1 and edited.profile_id=c.profile_id
+              and edited.event_type='selection_confirmed'
+              and coalesce(edited.details->>'source','')<>'upgrade_selection_recovery'
+              and edited.confirmed_at>=inherited.confirmed_at)) as selection_inherited,
       (select count(*)::int from mc.active_profile_products where business_id=$1 and store_id<>$2) other_product_count
       from mc.effective_tariff_context($1) c join mc.billing_plan_versions v on v.id=c.plan_version_id
       join mc.billing_plans p on p.id=v.plan_id`,[businessId,storeId])).rows[0];
     const selection=plan?.selection_confirmed?(await client.query(`select id,status,product_limit_snapshot from mc.product_selections where business_id=$1 and store_id=$2`,[businessId,storeId])).rows[0]??null:null;
-    return {stream,products,selection,productLimit:Math.max(0,(plan?.product_limit??0)-(plan?.other_product_count??0)),freeSelectionLocked:plan?.code==='free'&&plan?.selection_confirmed===true};
+    return {stream,products,selection,selectionInherited:plan?.code!=='free'&&plan?.selection_confirmed===true&&plan?.selection_inherited===true,productLimit:Math.max(0,(plan?.product_limit??0)-(plan?.other_product_count??0)),freeSelectionLocked:plan?.code==='free'&&plan?.selection_confirmed===true};
   });
 }
 

@@ -252,3 +252,15 @@ test('attention card without a publication remains noninteractive',()=>{
   assert.match(html,/<article class="design-attention-card">[\s\S]*?Подробности недоступны[\s\S]*?<\/article>/);
   assert.doesNotMatch(html,/<a class="design-attention-card"/);
 });
+
+test('inherited tariff selection offers remaining store capacity and retains checked products',()=>{
+  const store={id:'11111111-2222-4333-8444-555555555555',name:'WB',connected:true,status:'active'};
+  const catalog={products:[{id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',title:'Товар',selected:true}],productLimit:97,selectionInherited:true};
+  const html=productsPage(user,[store],catalog);
+  assert.match(html,/Ваши товары сохранены — можно добавить ещё 96 в этом магазине/);
+  assert.match(html,/href="#product-selection"/);
+  assert.match(html,/id="product-selection"/);
+  assert.match(html,/name="productIds"[^>]*checked/);
+  assert.doesNotMatch(productsPage(user,[store],{...catalog,selectionInherited:false}),/Тариф повышен/);
+  assert.doesNotMatch(productsPage(user,[store],{...catalog,productLimit:1}),/Тариф повышен/);
+});
