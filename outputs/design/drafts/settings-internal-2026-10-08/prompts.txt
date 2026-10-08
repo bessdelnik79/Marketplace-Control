@@ -1,0 +1,78 @@
+Marketplace Control settings internals v1. Built-in Image Gen, 2026-10-08.
+Eight distinct requested pages, one shared approved visual system; not eight competing design directions.
+
+COMMON PROMPT
+Use case: ui-mockup. Create a realistic production-quality high-fidelity UI mockup for Marketplace Control, a Russian Wildberries seller web app. This is ONE requested screen in a coordinated eight-page set, NOT multiple alternatives or a collage. Target dimensions 1920 x 1080 landscape desktop viewport, content only, no browser chrome. Anchor date 2026-10-08. All data are illustrative mockup data, no personal information. Image 1 is the APPROVED VISUAL SYSTEM reference. Image 2 is the old screen for existing functionality/content only; redesign its main content, do not copy its dated spacing.
+Keep the approved reference's exact logo Marketplace Control, white sidebar about244px wide, thin vertical divider, outline blue icons, menu Обзор / АНАЛИТИКА / SKU / Продвижение / Регионы / Остатки / Настройки and bottom Помощь. Настройки is active with a pale blue rectangular highlight. Main content starts at x280. Header: store selector Кстати top left, three-position CSS-style sun/moon/monitor theme pill at top right, sun selected. Everything belongs to the same accepted app, not a new brand. White background #ffffff, subtle near-white cool surfaces #f7faff, thin borders #dce7ff, navy #0d1e42 text, slate #536c93 secondary copy, blue #0866ff only for actionable controls/icons, restrained teal/amber/red semantic statuses. Avoid too much blue text. Match the reference typography and thin outline icon style, 8px cards, 6px buttons, no heavy shadows or decorative gradients. Body14-16px, headings26-32px, calm hierarchy, compact but readable. All actions are clearly bounded BUTTONS, including navigation; no naked hyperlinks, underlines or text-only arrow links. Top content header has outlined button 'Вернуться в личный кабинет', page heading, one short subtitle. Consistent left alignment. Do not place entire app in a floating card; use the page surface. Group normal list rows in a table/list with separators, not nested cards per item. One clear primary action and a few existing secondary actions. No invented charts, AI, recommendations, payments, forecasts or new features. Fit the screen cleanly within 1080 height with bottom breathing room; no clipped content, no microscopic labels, no sprawling empty center. Render all Russian text crisply and accurately, no extra words. Focus on the specific page described next.
+
+
+PAGE costs
+References:
+C:/Users/Bamsenses/Documents/Codex/Marketplace Control/outputs/design/Makets/settings-account-pc-light-v3.png
+C:/Users/Bamsenses/Documents/Codex/Marketplace Control/work/design-audit/settings-flow-2026-10-08/04-costs-pc-light.jpg
+Page-specific prompt:
+
+SCREEN 'Себестоимость товаров'. Short subtitle 'Укажите стоимость вручную или загрузите таблицу'. Header right secondary outlined buttons 'Скачать шаблон' and 'Управлять товарами'. Compact inline summary under title: amber dot 'Не заполнено: 3 варианта' and muted 'Заполнено 0 из 3', NOT a huge dashboard metric. Main area: broad left panel about1000px wide titled 'Товары и варианты'; right compact panel about500px titled 'Загрузка из файла'. Left a tidy table with columns 'Товар', 'Вариант', 'Себестоимость', 'Действует с', action. Exactly three watch products with small thumbnails from image2, navy product names 'Часы наручные кварцевые', small article/WB codes 517676362,517676364,788764165. Variant labels розовый / бордовый / серебристый. Rows2and3 show amber 'Не указана' and outline button 'Указать'. First row has an OPEN inline edit section (not a popup), empty cost input labeled 'Стоимость за единицу, ₽', date08.10.2026, primary 'Сохранить', outline 'Отменить'. Keep the table compact with thin separators, no giant empty rowheight. Right import panel short copy 'CSV, TSV или XLSX', dashed file drop area with upload icon and outline 'Выбрать файл', small 'Файл не выбран', blue primary 'Загрузить и сохранить', subtle note 'Данные сохранятся после проверки файла'. Bottom of table one quiet note 'История стоимости сохраняется. Изменения действуют с указанной даты.' Everything visible and aligned, no financial totals, no invented preview step.
+
+
+PAGE expenses
+References:
+C:/Users/Bamsenses/Documents/Codex/Marketplace Control/outputs/design/Makets/settings-account-pc-light-v3.png
+C:/Users/Bamsenses/Documents/Codex/Marketplace Control/work/design-audit/settings-flow-2026-10-08/06-expenses-pc-light.jpg
+Page-specific prompt:
+
+SCREEN 'Дополнительные расходы'. Subtitle 'Расходы вне отчётов Wildberries'. Under subtitle one compact info strip 'Не добавляйте комиссии, логистику и хранение WB повторно'. Header secondary outline buttons 'Скачать шаблон', 'Экспорт CSV'. Main two-column composition with broad left list and right form, unlike the old full-width exposed spreadsheet form. Left panel title 'Расходы' with small '0 активных записей'. Empty list region with subtle receipt outline icon and concise message 'Расходов пока нет' / 'Добавьте расход справа или загрузите таблицу', no fabricated expenses or totals. Beneath, compact import band title 'Импорт расходов', short 'CSV, TSV или XLSX', outline 'Выбрать файл' and button 'Загрузить и сохранить'; neutral note 'Ошибка в строке отменяет весь импорт'. Right panel title 'Добавить расход', nine existing fields arranged clearly in2columns: Категория (Упаковка), Сумма, ₽ (empty), Отнести к (Магазину), Способ учёта (В указанную дату), Начало периода (08.10.2026), Конец периода (08.10.2026), Канал или поставщик (empty), Описание (empty textarea), optional Товар only if linkingtoSKU do NOT show extra field in currentstore state. Primary 'Сохранить расход' and outline 'Отменить'. No made-up budget charts or recommendations. Comfortable 16px labels, restrained navy titles, no small all-caps paragraphs. All visible within1080.
+
+
+PAGE taxes
+References:
+C:/Users/Bamsenses/Documents/Codex/Marketplace Control/outputs/design/Makets/settings-account-pc-light-v3.png
+C:/Users/Bamsenses/Documents/Codex/Marketplace Control/work/design-audit/settings-flow-2026-10-08/07-taxes-pc-light.jpg
+Page-specific prompt:
+
+SCREEN 'Налоги'. Subtitle 'Настройки для всего бизнеса — применяются ко всем магазинам'. Existing initial state: NO tax setting yet. Keep honest missingness. Top compact amber information band with title 'Налог не настроен' and line 'Без ставки расчёт будет неполным'. Do not label zero tax or any payable business tax amount. Main broad left form about850px and right explanation/history about600px in accepted reference cardstyle. Left title 'Настроить налог'. Fields regime select 'УСН «Доходы»', empty input 'Ставка УСН, %', VAT select 'Без НДС', date 'Действует с'08.10.2026, optional comment blank. Explain with one small line 'Новая настройка действует только с указанной даты'. Primary 'Сохранить настройку', outline 'Отменить'. Right top simple section 'Что учитывается' with two short paragraphs: 'В MVP доступна УСН «Доходы».' and 'Расчёт по товарам — справочная оценка, не сумма налога бизнеса к уплате.' Right lower section 'История изменений', muted empty state 'Настроек пока нет'. Clearly business-level, not per-store form. No extra tax regimes active, no fictitious tax computations, no big red error for incomplete initialsetup, no payments, no taxadvice. Proper readable labels16px, align top ofcolumns and balanced whitespace.
+
+
+PAGE api-uploads
+References:
+C:/Users/Bamsenses/Documents/Codex/Marketplace Control/outputs/design/Makets/settings-account-pc-light-v3.png
+C:/Users/Bamsenses/Documents/Codex/Marketplace Control/work/design-audit/settings-flow-2026-10-08/08-data-api-pc-light.jpg
+Page-specific prompt:
+
+SCREEN 'Загрузки по API'. Subtitle 'Финансовые отчёты и готовность расчёта'. Use actual current source facts exactly but restructure to be instantly readable. Main left broad panel 'Финансовые отчёты WB' with tealstatus 'Загружены', info 'Покрытие проверено по 4 октября 2026', primary 'Обновить отчёты'. Below a clean2column table of metadata: 'Проверено недель' '52 из 52'; 'Недель с отчётами' '45'; 'Отсутствуют в списке WB' '7'; 'Отчётов' '64'; 'Обновлено' '7 октября, 21:29'. Do NOT call the missing7 an upload error, do NOT show fake chronological APIhistory. Beneath left a separate simple section 'Сверка отчётов' with compact table columns 'Совпали'38 teal / 'Требуют проверки'0 / 'Пока нельзя сверить'26 amber. Short caveat 'Сверяется сумма к перечислению, не поступление в банк.' Right narrower panel 'Готовность расчёта' with period '1–4 октября 2026' and prominent amber state 'Расчёт неполный'. Exactly two actionable checklist rows: 'Себестоимость не указана' with outline 'Заполнить'; 'Налог не настроен' with outline 'Настроить'. Short supporting sentence 'Опубликован результат по доступным данным'. Bottom right subtle text 'Незаполненные данные не заменяются нулём'. No repeated3tilesfromsettings, no charts, no fake profit, no numeric tax0, no hidden caveats. Visually separate successful source loading from incomplete businessinputs. Fit easily in1080 and use existingapprovedstyle.
+
+
+PAGE products
+References:
+C:/Users/Bamsenses/Documents/Codex/Marketplace Control/outputs/design/Makets/settings-account-pc-light-v3.png
+C:/Users/Bamsenses/Documents/Codex/Marketplace Control/work/design-audit/settings-flow-2026-10-08/03-products-pc-light.jpg
+Page-specific prompt:
+
+SCREEN 'Товары для анализа'. Subtitle 'Выбранные товары участвуют в расчётах и отчётах'. Current state free plan, 3selected and limit3, initialfreechoiceconfirmedandlocked. Above the list show one compact line 'Выбрано 3 из 3' and right outlined controls 'Себестоимость', 'Сменить тариф'. Broad clean table/list panel titled 'Выбранные товары'. Exactly3watchproductsfromreference2 shown as full-width rows with thin separators, thumbnail about64x80, product navy name 'Часы наручные кварцевые', muted merchantarticles Ч1СР / Ч1СВ / Ч1СБ and exactWBids517676362 /517676364 /788764165. Columns 'Товар', 'Артикул WB', 'Статус', 'Действие'. Eachstatus small teal 'Выбран'. Eachrow has real outlined button 'Открыть на WB' with external-link icon; no裸nakedhyperlinks. Do NOT show editable checkboxes or removal action for currentlockedfreeplan. Below list one compact pale amber strip 'Бесплатный набор подтверждён. Для расширения списка выберите платный тариф.' with outlined 'Сменить тариф'. No fabricated unselectedproducts, no stock/profitmetrics, no extra searchfilterinventory justtofillspace. Keep list compact and readable. Preserve approvedsidebar/header exactly andfit1080.
+
+
+PAGE tariff
+References:
+C:/Users/Bamsenses/Documents/Codex/Marketplace Control/outputs/design/Makets/settings-account-pc-light-v3.png
+C:/Users/Bamsenses/Documents/Codex/Marketplace Control/work/design-audit/settings-flow-2026-10-08/10-tariff-pc-light.jpg
+Page-specific prompt:
+
+SCREEN 'Тарифный план'. Subtitle 'Выберите лимиты товаров и магазинов'. Current plan Бесплатный. Display4equal-width aligned plan cards inone row in maincontent, with unifiedcompactheightnotoversizedsaleslandingpage. Firstcurrentcardtitled 'Бесплатный', price 'Бесплатно', small badge 'Текущий', attributes 'До 3 товаров', '1 магазин', 'Основные отчёты MVP'; others 'Минимальный' 'До 10 товаров' '1 магазин', 'Плюс' 'До 100 товаров' '2 магазина', 'Про' 'До 1000 товаров' '2 магазина', all3paidpricecopy 'Цена готовится' and 'Основные отчёты MVP'. Small radio control top right ofeachpaidcard, none selected; currentcardborderbluewithmutedcurrentstate. No inventedrublesprices, no paybuttons. Belowplans important pale amber band 'Оплата пока не подключена. Выбор тарифа не включает платный доступ.' Then a single primary button 'Сохранить выбор тарифа' disabled before anynewselection, and outlinedsecondary 'Управлять товарами'. Onequietline 'Сохранённый набор товаров восстановится при повторной оплате'. Keep no fake invoices, creditcard inputs, promotional recommendationbadgeor bestchoiceflag. All readable16px; match acceptedneutralcardstyle blueactionsonly. Contentstartsleftx280notfloatingcenterposter.
+
+
+PAGE password
+References:
+C:/Users/Bamsenses/Documents/Codex/Marketplace Control/outputs/design/Makets/settings-account-pc-light-v3.png
+C:/Users/Bamsenses/Documents/Codex/Marketplace Control/work/design-audit/settings-flow-2026-10-08/09-password-pc-light.jpg
+Page-specific prompt:
+
+SCREEN 'Изменить пароль'. Subtitle 'Безопасность аккаунта'. Main content alignedwithotherpagesleftx280, backoutlinedbuttonconsistent. Focused form card width720px startingbelowtitle, nothugefullwidthinputs. Titleinside 'Новый пароль' with outline lockicon. Three full-width labeled EMPTY inputs 'Текущий пароль', 'Новый пароль', 'Повторите новый пароль'; small visibleeyeicon buttons ineachfieldforvisibilitybutnorealvealedpasswordvalues. Short helper 'От 10 до 128 символов'. Below: primarybutton 'Изменить пароль' and outlined 'Отменить', equalheight42px. To right alignedatcardtop, quiet simpleinfoarea NOT anothergiantcard, small shieldoutlineicon and title 'Другие сеансы будут завершены', one line 'После смены пароля войдите заново на остальных устройствах.' Keep typography readable, plentyofbreathingroomwithoutplacingformdeadcenterwithhugeblanktop. Do not invent passwordstrengthscores,2FA, sessionsmanagement, biometricsecurityorotherfeatures. Sidebar Настройки remainsactive. Clearly saferordinaryaccountformnotmarketingpage. All8pagevisualsysteminvariantsapply.
+
+
+PAGE delete-account
+References:
+C:/Users/Bamsenses/Documents/Codex/Marketplace Control/outputs/design/Makets/settings-account-pc-light-v3.png
+C:/Users/Bamsenses/Documents/Codex/Marketplace Control/work/design-audit/settings-flow-2026-10-08/11-delete-confirm-pc-light.jpg
+Page-specific prompt:
+
+SCREEN 'Удаление аккаунта'. Subtitle 'Аккаунт и связанные данные'. Backbutton 'Вернуться в личный кабинет' is clearlyoutlinedandprominent. Main focusedcard width760px alignedleftunderheadingwithrestrainedredwarningaccentnotfullredpage. Warningtitle 'Это действие нельзя отменить' and concisebody 'Будут удалены аккаунт, магазины, подключения и финансовые данные. Все сеансы завершатся.' Form2emptyfullwidthinputs labels 'Текущий пароль' and 'Введите УДАЛИТЬ для подтверждения'. Underthese a redoutlineaction 'Удалить аккаунт и данные' shownDISABLEDuntilfieldsfilled; nexttoit normalblueoutlined 'Отменить' with equalheight. Red is onlydestructivewarningandbutton, no brightblueprimarydelete. To therightonequietshortsafetyexplanation 'Проверьте, что сохранили необходимые данные' withoutinventinganyexportbuttonorbackupfeature. No confirmationcheckboxes,newsecuritymethodsoradditionaldestructiveactions. Matchallapprovedshellbrandpalettefonts. No realpersonalemailorpassword. No animationorbrowserchrome. Modestboundedform, clearwarning, noalarmistillustrations.
