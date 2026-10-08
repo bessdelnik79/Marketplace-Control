@@ -4,7 +4,7 @@ import {accountErasurePage,settingsPage} from './pages.mjs';
 
 test('account deletion preserves store navigation and explicit irreversible confirmation',()=>{
   const user={user_id:'owner',display_name:'User',email:'mail@example.test'};
-  assert.match(settingsPage(user,[]),/href="\/account\/delete">Удалить аккаунт/);
+  assert.match(settingsPage(user,[]),/href="\/account\/delete">[\s\S]*?<span>Удалить аккаунт<\/span>[\s\S]*?<\/a>/);
   const html=accountErasurePage(user,{csrf:'"<unsafe>',hasPassword:true,stores:[{id:'owned-store',name:'Existing store'}]});
   assert.match(html,/method="post" action="\/account\/delete"/);
   assert.match(html,/name="currentPassword"/);assert.match(html,/pattern="УДАЛИТЬ"/);

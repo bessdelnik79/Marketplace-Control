@@ -17,6 +17,21 @@ const paths = {
   moon:'M 21 14 A 9 9 0 1 1 10 3 A 8 8 0 0 0 21 14 Z',
   monitor:'M 3 3 L 21 3 L 21 17 L 3 17 Z M 12 17 L 12 22 M 8 22 L 16 22',
   menu:'M 3 5 L 21 5 M 3 12 L 21 12 M 3 19 L 21 19',
+  // Tabler Icons outline paths (MIT), see app/frontend/THIRD_PARTY_NOTICES.md.
+  storefront:'M3 21l18 0 M3 7v1a3 3 0 0 0 6 0v-1m0 1a3 3 0 0 0 6 0v-1m0 1a3 3 0 0 0 6 0v-1h-18l2 -4h14l2 4 M5 21l0 -10.15 M19 21l0 -10.15 M9 21v-4a2 2 0 0 1 2 -2h2a2 2 0 0 1 2 2v4',
+  lock:'M5 13a2 2 0 0 1 2 -2h10a2 2 0 0 1 2 2v6a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2v-6 M11 16a1 1 0 1 0 2 0a1 1 0 0 0 -2 0 M8 11v-4a4 4 0 1 1 8 0v4',
+  chain:'M9 15l6 -6 M11 6l.463 -.536a5 5 0 0 1 7.071 7.072l-.534 .464 M13 18l-.397 .534a5.068 5.068 0 0 1 -7.127 0a4.972 4.972 0 0 1 0 -7.071l.524 -.463',
+  book:'M3 19a9 9 0 0 1 9 0a9 9 0 0 1 9 0 M3 6a9 9 0 0 1 9 0a9 9 0 0 1 9 0 M3 6l0 13 M12 6l0 13 M21 6l0 13',
+  list:'M9 6l11 0 M9 12l11 0 M9 18l11 0 M5 6l0 .01 M5 12l0 .01 M5 18l0 .01',
+  category:'M4 4h6v6h-6l0 -6 M14 4h6v6h-6l0 -6 M4 14h6v6h-6l0 -6 M14 17a3 3 0 1 0 6 0a3 3 0 1 0 -6 0',
+  calculator:'M4 5a2 2 0 0 1 2 -2h12a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-12a2 2 0 0 1 -2 -2l0 -14 M8 8a1 1 0 0 1 1 -1h6a1 1 0 0 1 1 1v1a1 1 0 0 1 -1 1h-6a1 1 0 0 1 -1 -1l0 -1 M8 14l0 .01 M12 14l0 .01 M16 14l0 .01 M8 17l0 .01 M12 17l0 .01 M16 17l0 .01',
+  notes:'M5 5a2 2 0 0 1 2 -2h10a2 2 0 0 1 2 2v14a2 2 0 0 1 -2 2h-10a2 2 0 0 1 -2 -2l0 -14 M9 7l6 0 M9 11l6 0 M9 15l4 0',
+  percentage:'M16 17a1 1 0 1 0 2 0a1 1 0 1 0 -2 0 M6 7a1 1 0 1 0 2 0a1 1 0 1 0 -2 0 M6 18l12 -12',
+  download:'M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2 -2v-2 M7 11l5 5l5 -5 M12 4l0 12',
+  fileDownload:'M14 3v4a1 1 0 0 0 1 1h4 M17 21h-10a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v11a2 2 0 0 1 -2 2 M12 17v-6 M9.5 14.5l2.5 2.5l2.5 -2.5',
+  crown:'M12 6l4 6l5 -4l-2 10h-14l-2 -10l5 4l4 -6',
+  logout:'M14 8v-2a2 2 0 0 0 -2 -2h-7a2 2 0 0 0 -2 2v12a2 2 0 0 0 2 2h7a2 2 0 0 0 2 -2v-2 M9 12h12l-3 -3 M18 15l3 -3',
+  trash:'M4 7l16 0 M10 11l0 6 M14 11l0 6 M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2 -2l1 -12 M9 7v-3a1 1 0 0 1 1 -1h4a1 1 0 0 1 1 1v3',
   chevron:'M 6 9 L 12 15 L 18 9', right:'M 8 5 L 15 12 L 8 19'
 };
 const icon = name => `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="${paths[name] || paths.info}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`;

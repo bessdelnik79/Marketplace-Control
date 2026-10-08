@@ -1,3 +1,27 @@
+# Settings v3 — implementation QA
+
+final result: blocked
+
+## Current visual target
+
+Source: `outputs/design/Makets/settings-account-pc-dark-v3.png` (user-provided 1799×874), PC light (1798×875), mobile light (783×2009), mobile dark (783×2008). All four images inspected. The three variants were produced with built-in image generation before the implementation pass, as requested. Previous v2 assets are retained.
+
+Implementation: existing `/settings` application route, not a separate prototype. Required comparison viewports: source-sized desktop, 1920×1080 with browser-chrome allowance, and 390 CSS px mobile in both themes. Mobile sources are approximately @2x references; normalize density before comparison. Real account/store/plan data replace mock values intentionally.
+
+## Blocking evidence gap
+
+Browser startup was retried for this v3 request and failed before connecting to any page: `node_repl kernel exited unexpectedly`, `windows sandbox failed: helper_unknown_error: setup refresh had errors`. No browser-rendered implementation screenshot, console inspection, overflow measurements, or combined source/implementation comparison is available. Implementation screenshot path: unavailable. Full-view and focused comparisons: blocked, not performed. No visual QA pass is claimed.
+
+Required fidelity surfaces remain visually unverified: typography and wrapping; card/header spacing and desktop height; light/dark token contrast; brand/icon rendering quality; exact copy and real-data state fit. Source intent is recorded in `outputs/ui-site.md`; automated HTML/client-script tests do not substitute for these checks.
+
+## Non-visual verification
+
+Local targeted account/pages/erasure/theme tests: 100/100 passed. Independent read-only review found no blocking code issues and independently passed 26 account/erasure/theme tests. Full application suite on dedicated VM `marketplacecontrol`, isolated source checkout: 689/689 passed, zero skipped (2026-10-08). Forms, real escaped profile/store/plan values, count plurals, catalog states, route context, separate forms, reset/logout and theme hooks are covered. Backend routes, database schema and financial formulas are unchanged. Graphify AST map updated; SQL extraction remains unavailable in that tool because its optional parser is not installed, unrelated to these frontend changes.
+
+Next verification: capture matching desktop/mobile light/dark states; compare each source and capture together; inspect store, profile, data and tariff regions; exercise theme, menu, token disclosure, help dialog and navigation without mutating account data; verify console and horizontal/vertical overflow. Only change the final result after this evidence exists.
+
+## Historical v2 QA
+
 # Personal account v2 — implementation QA
 
 final result: blocked
