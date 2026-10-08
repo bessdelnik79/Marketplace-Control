@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFile } from 'node:fs/promises';
 import { createAccountPage } from './account.page.mjs';
 
 const esc = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[char]));
@@ -59,12 +60,20 @@ test('profile retains POST contract, editable name, readonly email and existing 
 
 test('connected token form is collapsed, scoped to the store and has actionable help', () => {
   const html = accountPage(user, [store]);
-  assert.match(html, /<details class="account-token-details"><summary class="account-button"><span[^>]*data-icon="chain"[^>]*><\/span>Заменить токен/);
+  assert.match(html, /<details class="account-token-details"><summary class="account-button"><span[^>]*data-icon="chain"[^>]*><\/span><span class="account-token-show">Заменить токен<\/span><span class="account-token-cancel">Отмена<\/span>/);
   assert.match(html, /method="post" action="\/connections\/wb"/);
   assert.match(html, /name="storeId" value="store-1"/);
   assert.match(html, /type="password" name="token" autocomplete="off"[^>]*minlength="40" maxlength="4096" required/);
   assert.match(html, /type="button" data-modal="token-help"><span[^>]*data-icon="book"[^>]*><\/span>Инструкция/);
   assert.doesNotMatch(html, /name="token"[^>]*value=/);
+});
+
+test('token summary displays cancellation only while replacement form is open', async () => {
+  const css = await readFile(new URL('./public/account.css', import.meta.url), 'utf8');
+  assert.ok(css.includes('.account-token-details:not([open]) .account-token-cancel,.account-token-details[open] .account-token-show{display:none}'));
+  const unconnected = accountPage(user, [{ ...store, connected: false }]);
+  assert.doesNotMatch(unconnected, /account-token-show|account-token-cancel/);
+  assert.match(unconnected, /Подключить Wildberries<\/summary>/);
 });
 
 test('unconnected store opens connection form and explains unavailable catalog', () => {

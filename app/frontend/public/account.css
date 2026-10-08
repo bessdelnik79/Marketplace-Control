@@ -30,6 +30,7 @@ html[data-theme=dark] .account-page .account-primary{background:#2685ff;border-c
 .account-token-details{min-width:0}
 .account-token-details>summary{list-style:none;width:100%}
 .account-token-details>summary::-webkit-details-marker{display:none}
+.account-token-details:not([open]) .account-token-cancel,.account-token-details[open] .account-token-show{display:none}
 .account-token-help{width:100%}
 .account-token-form{display:grid;gap:14px;margin:18px 0 0}
 .account-token-details[open]{grid-column:1/-1}
