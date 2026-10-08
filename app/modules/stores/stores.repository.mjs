@@ -11,12 +11,21 @@ export async function listStores(userId) {
             (exists(select 1 from mc.active_profile_stores a where a.business_id=s.business_id and a.store_id=s.id)
               or (counts.store_count<plan.store_limit and (billing.code<>'free' or not tariff.selection_confirmed))) as selectable,
             (counts.store_count<plan.store_limit and (billing.code<>'free' or not tariff.selection_confirmed)) as can_add_store,
+            (select count(*)::int from mc.products product where product.business_id=s.business_id
+              and product.store_id=s.id and product.status='active'
+              and not exists(select 1 from mc.active_profile_products selected
+                where selected.business_id=product.business_id and selected.store_id=product.store_id
+                  and selected.product_id=product.id)) as unselected_product_count,
+            greatest(0,plan.product_limit-counts.product_count)::int as remaining_product_slots,
+            (s.status='active' and (billing.code<>'free' or not tariff.selection_confirmed)
+              and exists(select 1 from mc.active_profile_stores a where a.business_id=s.business_id and a.store_id=s.id)) as can_expand_selection,
             (c.status='active') as connected,c.status as connection_status,c.scopes,c.last_checked_at
        from mc.stores s
        cross join mc.effective_tariff_context($1) tariff
        join mc.billing_plan_versions plan on plan.id=tariff.plan_version_id
        join mc.billing_plans billing on billing.id=plan.plan_id
-       cross join lateral (select count(*) as store_count from mc.active_profile_stores where business_id=$1) counts
+       cross join lateral (select (select count(*) from mc.active_profile_stores where business_id=$1) as store_count,
+         (select count(*) from mc.active_profile_products where business_id=$1) as product_count) counts
        left join mc.connections c on c.business_id=s.business_id and c.store_id=s.id
       where s.business_id=$1 and s.status<>'archived'
       order by entitled desc,s.created_at,s.id`,

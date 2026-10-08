@@ -9,7 +9,6 @@ if(!url)throw new Error('Set TARIFF_LIFECYCLE_INTEGRATION_DATABASE_URL to an emp
 if(!new URL(url).pathname.slice(1).toLowerCase().includes('test'))throw new Error('Refusing tariff lifecycle integration outside a database whose name contains "test".');
 process.env.DATABASE_URL=url;
 const {pool,migrate}=await import('../../app/infrastructure/database/client.mjs');
-const {getCatalogState}=await import('../../app/modules/catalog/catalog.repository.mjs');
 test.after(async()=>{await pool.end();});
 
 async function context(scope,action,role){
@@ -63,7 +62,6 @@ test('full tariff lifecycle uses profile limits, frozen free selection, exact ex
   assert.deepEqual(await selected(recoverable),recoverable.products.slice(0,3).sort(),'recover untouched first paid activation from authoritative free selection');
   const recoveryAfter=await effective(recoverable);
   assert.equal(recoveryAfter.selection_confirmed,true);
-  assert.equal((await getCatalogState(recoverable.user,recoverable.store)).selectionInherited,true,'catalog explains the recovered inherited selection');
   assert.equal(recoveryAfter.period_end.toISOString(),recoveryBefore.period_end.toISOString(),'recovery preserves paid period');
   assert.notEqual(recoveryAfter.scope_token,recoveryBefore.scope_token,'recovery invalidates the empty paid financial scope');
   await context(recoverable,async client=>{
@@ -135,7 +133,6 @@ test('full tariff lifecycle uses profile limits, frozen free selection, exact ex
   assert.equal(paidScope.code,'plus');
   assert.equal(paidScope.selection_confirmed,true);
   assert.deepEqual(await selected(scope),scope.products.slice(0,3).sort(),'first paid activation inherits the effective confirmed selection');
-  assert.equal((await getCatalogState(scope.user,scope.store)).selectionInherited,true,'catalog explains the first inherited paid selection');
   await context(scope,async client=>{
     const details=(await client.query(`select details from mc.tariff_lifecycle_events where event_key=$1`,[key])).rows[0].details;
     assert.equal(details.selectionInherited,true);
@@ -146,11 +143,9 @@ test('full tariff lifecycle uses profile limits, frozen free selection, exact ex
   assert.equal((await effective(scope)).scope_token,paidScope.scope_token,'duplicate confirmation is a no-op');
   await choose(scope,scope.products.slice(0,3),'replace',role);
   assert.equal((await effective(scope)).scope_token,paidScope.scope_token,'confirming the inherited set unchanged is a no-op');
-  assert.equal((await getCatalogState(scope.user,scope.store)).selectionInherited,true,'duplicate payment and identical selection preserve the inheritance notice');
   await assert.rejects(()=>issue(scope,key,confirmed,'minimum'),{code:'23514'});
   await assert.rejects(()=>issue(scope,randomUUID(),confirmed,'minimum'),{code:'23514'},'no implicit cross-paid transition');
   await choose(scope,scope.products.slice(0,8),'replace',role);
-  assert.equal((await getCatalogState(scope.user,scope.store)).selectionInherited,false,'user selection replaces the inheritance notice');
   await choose(scope,scope.products.slice(3,23),'replace',role);
   const paidProducts=scope.products.slice(3,23).sort();
   assert.deepEqual(await selected(scope),paidProducts);
@@ -177,7 +172,6 @@ test('full tariff lifecycle uses profile limits, frozen free selection, exact ex
   await forceExpired(scope);
   const fallback=await effective(scope);
   assert.equal(fallback.code,'free');
-  assert.equal((await getCatalogState(scope.user,scope.store)).selectionInherited,false,'expired paid access never shows the inheritance notice on free');
   assert.ok(Number(fallback.activation_revision)<0);
   assert.notEqual(fallback.scope_token,beforeExpiry.scope_token);
   assert.deepEqual(await selected(scope),scope.products.slice(0,3).sort(),'exact access fallback precedes the background transition');
@@ -191,7 +185,6 @@ test('full tariff lifecycle uses profile limits, frozen free selection, exact ex
   assert.ok(Number((await effective(scope)).activation_revision)>0);
   await issue(scope);
   assert.deepEqual(await selected(scope),paidProducts,'repayment restores last saved paid subset');
-  assert.equal((await getCatalogState(scope.user,scope.store)).selectionInherited,false,'restoring an edited saved paid set does not revive the inheritance notice');
   await context(scope,async client=>assert.equal((await client.query(`select status from mc.stores where id=$1`,[extraStore])).rows[0].status,'active','expiry does not archive retained paid stores'));
 
   const beforeFree=await fixture();

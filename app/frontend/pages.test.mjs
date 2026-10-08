@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {emptyOverviewPage,expensesPage,financialSyncView,overviewPage,passwordPage,productsPage,settingsPage,settingsDataPage,storeOnboardingPage,taxesPage,tariffPage,placeholderPage,uiRoutes} from './pages.mjs';
+import {frame,emptyOverviewPage,expensesPage,financialSyncView,overviewPage,passwordPage,productsPage,settingsPage,settingsDataPage,storeOnboardingPage,taxesPage,tariffPage,placeholderPage,uiRoutes} from './pages.mjs';
 import { operationalOverviewPanel, operationalLoadStatus } from './pages.mjs';
 test('historical deleted catalog product has an explanation and no WB link or image',()=>{
   const store={id:'store-history',connected:true},product={id:'deleted',wb_article:'800001',seller_article:'DELETED',historical_deleted:true,image_url:'https://basket-01.wbbasket.ru/old.webp',selected:true};
@@ -253,14 +253,18 @@ test('attention card without a publication remains noninteractive',()=>{
   assert.doesNotMatch(html,/<a class="design-attention-card"/);
 });
 
-test('inherited tariff selection offers remaining store capacity and retains checked products',()=>{
-  const store={id:'11111111-2222-4333-8444-555555555555',name:'WB',connected:true,status:'active'};
-  const catalog={products:[{id:'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',title:'Товар',selected:true}],productLimit:97,selectionInherited:true};
-  const html=productsPage(user,[store],catalog);
-  assert.match(html,/Ваши товары сохранены — можно добавить ещё 96 в этом магазине/);
-  assert.match(html,/href="#product-selection"/);
-  assert.match(html,/id="product-selection"/);
-  assert.match(html,/name="productIds"[^>]*checked/);
-  assert.doesNotMatch(productsPage(user,[store],{...catalog,selectionInherited:false}),/Тариф повышен/);
-  assert.doesNotMatch(productsPage(user,[store],{...catalog,productLimit:1}),/Тариф повышен/);
+test('header product prompt sits between store selection and theme and links to the current store',()=>{
+  const store={id:'11111111-2222-4333-8444-555555555555',name:'WB',status:'active',connected:true,entitled:true,unselected_product_count:2,remaining_product_slots:97,can_expand_selection:true};
+  const html=frame(user,'/overview','',[store]);
+  assert.match(html,/Вы можете добавить больше товаров/);
+  assert.match(html,/href="\/products\?storeId=11111111-2222-4333-8444-555555555555">Выбрать товары/);
+  assert.ok(html.indexOf('class="store-select"')<html.indexOf('class="header-product-prompt"'));
+  assert.ok(html.indexOf('class="header-product-prompt"')<html.indexOf('class="theme-control"'));
+  for(const update of [{remaining_product_slots:0},{can_expand_selection:false}]){
+    const limited=frame(user,'/overview','',[{...store,...update}]);
+    assert.match(limited,/Отслеживайте все ваши товары/);
+    assert.match(limited,/href="\/tariff\?storeId=11111111-2222-4333-8444-555555555555">Сменить тариф/);
+    assert.doesNotMatch(limited,/Вы можете добавить больше товаров/);
+  }
+  for(const update of [{unselected_product_count:0},{connected:false},{entitled:false},{status:'paused'}])assert.doesNotMatch(frame(user,'/overview','',[{...store,...update}]),/class="header-product-prompt"/);
 });

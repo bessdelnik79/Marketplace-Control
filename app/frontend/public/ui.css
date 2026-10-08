@@ -110,3 +110,9 @@ html[data-theme=dark] .theme-switch button.selected{background:var(--selected);c
 }
 @media(prefers-reduced-motion:reduce){.theme-switch button{transition:none}}
 @media(max-width:650px){.onboarding-header{height:auto;flex-wrap:wrap;gap:14px}.onboarding-header .mc-brand{flex:1}.onboarding-header .theme-control{order:3;width:100%;justify-content:center}.onboarding-header .theme-switch button{width:60px}.onboarding-main{min-height:calc(100vh - 132px)}}
+
+/* Product capacity prompt in the shared header. */
+.app-header.has-product-prompt{height:auto;min-height:60px;flex-wrap:wrap}.has-product-prompt .store-select{flex:0 1 352px}.header-product-prompt{display:flex;align-items:center;justify-content:center;gap:14px;flex:1 1 350px;min-width:0;padding:8px 14px;border:1px solid var(--border);border-radius:8px;background:#b42332;border-color:#e34858;color:#fff;font-size:15px}.header-product-prompt .outline-button{flex-shrink:0;padding:6px 12px;min-height:34px;font-size:14px;white-space:nowrap;color:#fff;border-color:#fff;background:transparent}.header-product-prompt .outline-button:hover{background:#ffffff1f}
+@media(max-width:1250px){.header-product-prompt{order:5;flex-basis:100%}}
+@media(max-width:650px){.header-product-prompt{gap:10px;padding:10px;font-size:14px}.header-product-prompt span{flex:1}.header-product-prompt .outline-button{white-space:normal;text-align:center}}
+@media(max-width:650px){.app-header>.header-product-prompt{grid-column:1/-1;grid-row:3}.has-product-prompt>.demo-label{grid-row:4}}
