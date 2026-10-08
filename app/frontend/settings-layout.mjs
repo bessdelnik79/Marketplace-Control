@@ -1,5 +1,5 @@
-export function settingsBack(esc, storeHref, storeId) {
-  return `<a class="outline-button settings-back" href="${esc(storeHref('/settings', storeId))}">← Вернуться в личный кабинет</a>`;
+export function settingsBack(esc, storeHref, storeId, backIcon = '') {
+  return `<a class="outline-button settings-back${backIcon?' reference-back':''}" href="${esc(storeHref('/settings', storeId))}">${backIcon||'← '}Вернуться в личный кабинет</a>`;
 }
 
 export function settingsHeading(title, subtitle, actions = '') {

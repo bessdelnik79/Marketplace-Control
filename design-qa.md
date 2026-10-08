@@ -1,3 +1,17 @@
+# Cabinet return button — visual QA, 2026-10-08
+
+final result: passed
+
+Scope: `/expenses`, `/taxes`, `/settings/data`, `/tariff`, `/password`, `/products`, including locked expenses/products states. No form behavior, access checks, financial data or navigation targets changed. Costs and account deletion retain their existing return controls.
+
+Reference: user attachment `codex-clipboard-061f2636-74ba-4298-be1f-0d71b28375e0.png` (304×66 raster; approximately 278×44 button). Actual control measures 276.23×44 CSS pixels: separate existing chevron, 12px gap, 16px regular Arial text, 6px radius, thin theme-aware outline and page background. The sub-2px width difference follows browser text metrics rather than fixed image dimensions.
+
+Checked all six routes in light/dark at 1920×1080 and 390×844 (24 states): correct icon, unchanged store-scoped target, 44px height and no horizontal overflow. Clicked the return control and confirmed `/settings?storeId=test-store`. Source and implementation were visually compared together. Layout/density, typography, palette, existing icon reuse and control affordance match the requested narrow scope. VM targeted renderer tests: 82/82 passed. Independent review is exempt for this presentation-only patch.
+
+Evidence (ignored local files): `work/settings-button-qa/expenses-dark-pc.png`, `expenses-light-pc.jpg`, `products-dark-mobile.jpg`. These show read-only fixtures rendered by the actual application templates, not live financial records. The attempted cropped screenshot is excluded because the browser ignored the requested crop origin; full-page evidence was inspected instead.
+
+---
+
 # Settings internal pages v1 — implementation QA, 2026-10-08
 
 final result: passed

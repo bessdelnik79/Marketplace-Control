@@ -3,7 +3,14 @@ import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
 import {createContext,runInContext} from 'node:vm';
 import {financialMetadata} from './settings-layout.mjs';
-import {financialSyncView,settingsDataPage,tariffPage,passwordPage,taxesPage} from './pages.mjs';
+import {financialSyncView,settingsDataPage,tariffPage,passwordPage,taxesPage,expensesPage,productsPage,accountErasurePage} from './pages.mjs';
+
+test('reference return button is applied to six requested pages and their locked states',()=>{
+  const owner={id:'owner'},stores=[{id:'store',connected:true}],renderers=[expensesPage,taxesPage,settingsDataPage,tariffPage,passwordPage,productsPage];
+  for(const render of renderers){const html=render(owner,stores);assert.match(html,/class="outline-button settings-back reference-back" href="\/settings\?storeId=store"><svg[^>]*aria-hidden="true"/);assert.match(html,/<\/svg>Вернуться в личный кабинет<\/a>/);}
+  for(const render of [productsPage,expensesPage])assert.match(render(owner,[]),/class="back-link reference-back"/);
+  assert.doesNotMatch(accountErasurePage(owner,{stores,csrf:'test'}),/reference-back/);
+});
 
 test('financial metadata keeps absent counts unavailable and preserves confirmed zeroes',()=>{
   assert.equal(financialMetadata({}).checked,'— из —');assert.equal(financialMetadata({}).reports,'—');

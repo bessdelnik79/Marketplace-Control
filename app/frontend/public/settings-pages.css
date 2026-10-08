@@ -180,3 +180,7 @@ html[data-theme=dark] body:has(.settings-page){--text:#e6efff;--muted:#9bb6d6;--
  .settings-page.taxes-page .cost-table td[colspan]{display:block;padding:20px 12px}
  .tax-cell-label{display:block;color:var(--muted)}
 }
+/* Screenshot-matched cabinet return: six requested settings routes only. */
+body.mc-app .reference-back{display:inline-flex;align-items:center;justify-content:center;gap:12px;width:max-content;max-width:100%;min-height:44px;padding:11px 16px;border:1px solid color-mix(in srgb,var(--accent) 60%,var(--border));border-radius:6px;background:var(--bg);color:var(--accent);font:400 16px/20px Arial,sans-serif;text-align:center;text-decoration:none;white-space:normal}
+body.mc-app .reference-back:hover{background:var(--selected);border-color:var(--accent);text-decoration:none}
+body .reference-back>.ui-icon{width:16px;height:16px;transform:rotate(180deg);flex-shrink:0}
