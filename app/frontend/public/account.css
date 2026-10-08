@@ -48,6 +48,8 @@ html[data-theme=dark] .account-page .account-primary{background:#2685ff;border-c
 .account-page .account-data-link{display:flex;justify-content:flex-start;text-align:left;padding:6px 20px;min-height:52px;border-color:var(--border);background:color-mix(in srgb,var(--bg) 45%,transparent);gap:26px}
 .account-data-link .account-data-copy{display:grid;min-width:0;gap:1px;color:var(--account-text)}
 .account-data-copy small{font-size:14px;line-height:1.3}
+.account-data-copy .account-data-complete{display:flex;align-items:center;gap:7px}
+.account-data-complete i{width:8px;height:8px;border-radius:50%;background:var(--success);flex-shrink:0}
 .account-data-link>.ui-icon:first-child{width:28px;height:28px}
 .account-data-link>.ui-icon:last-child{width:18px;height:18px;margin-left:auto}
 .account-api{padding-top:12px;padding-bottom:12px}

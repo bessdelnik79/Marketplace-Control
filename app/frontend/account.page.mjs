@@ -14,7 +14,7 @@ function plural(value, forms) {
 }
 
 export function createAccountPage({ frame, esc, icon, storeHref }) {
-  return function accountPage(user, stores = [], { notice = '', error = '', billing = null, catalog = null } = {}) {
+  return function accountPage(user, stores = [], { notice = '', error = '', billing = null, catalog = null, costs = null, taxes = null } = {}) {
     const store = stores[0];
     const plan = billing?.current ?? { name: 'Бесплатный', product_limit: 3, store_limit: 1, status: 'active' };
     const limit = catalog?.productLimit ?? plan.product_limit ?? 3;
@@ -38,11 +38,17 @@ export function createAccountPage({ frame, esc, icon, storeHref }) {
       products = `<div class="account-catalog-state"><strong>${running ? 'Загружаем каталог Wildberries' : failed ? 'Каталог пока не загружен' : ready ? 'В каталоге пока нет товаров' : 'Подготавливаем первую загрузку каталога'}</strong><p class="muted">${failed ? esc(catalogErrors[catalog.stream.error_code] || 'Попробуйте запустить загрузку ещё раз.') : ready ? 'Добавьте товары в Wildberries и обновите каталог.' : 'Страница обновится после получения товаров.'}</p><form method="post" action="/catalog/sync"><input type="hidden" name="storeId" value="${esc(store.id)}"><button class="account-button" type="submit"${running ? ' disabled' : ''}>${running ? 'Загрузка выполняется' : 'Загрузить каталог'}</button></form></div>`;
     }
 
-    const dataLink = (path, label, helper, symbol) => `<a class="account-button account-data-link" href="${href(path)}">${icon(symbol)}<span class="account-data-copy"><span>${label}</span><small>${helper}</small></span>${icon('right')}</a>`;
+    const costsComplete = store?.connected && selectedCount > 0 && costs?.summary?.totalVariants > 0
+      && costs.summary.configuredVariants === costs.summary.totalVariants
+      && (catalog?.products ?? []).filter(product => product.selected).every(product =>
+        costs.products?.some(costProduct => costProduct.id === product.id && costProduct.variants?.length > 0));
+    const taxRegimes = { usn_income: 'УСН «Доходы»', usn_income_expenses: 'УСН «Доходы минус расходы»', osno: 'ОСНО' };
+    const taxRegime = taxes?.current?.state === 'active' ? taxRegimes[taxes.current.regime_code] : null;
+    const dataLink = (path, label, helper, symbol, complete = false) => `<a class="account-button account-data-link" href="${href(path)}">${icon(symbol)}<span class="account-data-copy"><span>${label}</span><small${complete ? ' class="account-data-complete"' : ''}>${complete ? '<i aria-hidden="true"></i>' : ''}${esc(helper)}</small></span>${icon('right')}</a>`;
     const dataLinks = [
-      ['/costs', 'Себестоимость', 'Проверить заполнение по товарам', 'calculator'],
+      ['/costs', 'Себестоимость', costsComplete ? 'Всё заполнено' : 'Проверить заполнение по товарам', 'calculator', costsComplete],
       ['/expenses', 'Дополнительные расходы', 'Настроить расходы за период', 'notes'],
-      ['/taxes', 'Налоги', 'Проверить режим и ставки', 'percentage'],
+      ['/taxes', 'Налоги', taxRegime || 'Проверить режим и ставки', 'percentage', Boolean(taxRegime)],
     ].map(args => dataLink(...args)).join('');
     const planStatus = plan.status === 'past_due' ? '<p class="account-plan-status">Требует оплаты</p>' : plan.status && plan.status !== 'active' ? '<p class="account-plan-status muted">Завершён</p>' : '';
 

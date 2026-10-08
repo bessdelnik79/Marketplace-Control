@@ -183,3 +183,38 @@ test('profile and WB or catalog forms remain separate HTML forms', () => {
     assert.doesNotMatch(profileForm, /name="token"|\/catalog\/sync|data-logout/);
   }
 });
+
+test('cost status requires current costs for every variant of every selected product', () => {
+  const catalog = { products: [{ id: 'one', selected: true }, { id: 'two', selected: true }, { id: 'other', selected: false }] };
+  const costs = { summary: { totalVariants: 3, configuredVariants: 3 }, products: [
+    { id: 'one', variants: [{ unit_cost: '0' }, { unit_cost: '10' }] },
+    { id: 'two', variants: [{ unit_cost: '20' }] },
+  ] };
+  const costRow = (options, stores = [store]) => accountPage(user, stores, options).match(/<a[^>]*href="\/costs[^>]*>([\s\S]*?)<\/a>/)[1];
+  assert.match(costRow({ catalog, costs }), /<small class="account-data-complete"><i aria-hidden="true"><\/i>Всё заполнено/);
+  for (const options of [
+    { catalog },
+    { catalog, costs: { ...costs, summary: { totalVariants: 3, configuredVariants: 2 } } },
+    { catalog, costs: { ...costs, summary: { totalVariants: 0, configuredVariants: 0 } } },
+    { catalog: { products: [] }, costs },
+    { catalog, costs: { ...costs, products: [costs.products[0]] } },
+    { catalog, costs: { ...costs, products: [costs.products[0], { id: 'two', variants: [] }] } },
+  ]) {
+    const row = costRow(options);
+    assert.match(row, /Проверить заполнение по товарам/);
+    assert.doesNotMatch(row, /account-data-complete|Всё заполнено/);
+  }
+  assert.doesNotMatch(costRow({ catalog, costs }, [{ ...store, connected: false }]), /account-data-complete/);
+  assert.doesNotMatch(costRow({ catalog, costs }, []), /account-data-complete/);
+});
+
+test('tax status names the active regime and keeps reminders for missing or voided settings', () => {
+  const taxRow = taxes => accountPage(user, [store], { taxes }).match(/<a[^>]*href="\/taxes[^>]*>([\s\S]*?)<\/a>/)[1];
+  for (const [regime_code, label] of [['usn_income', 'УСН «Доходы»'], ['usn_income_expenses', 'УСН «Доходы минус расходы»'], ['osno', 'ОСНО']]) {
+    assert.ok(taxRow({ current: { state: 'active', regime_code } }).includes(`<small class="account-data-complete"><i aria-hidden="true"></i>${label}</small>`));
+  }
+  for (const taxes of [null, { current: null }, { current: { state: 'voided', regime_code: 'usn_income' } }, { current: { state: 'active', regime_code: '<unknown>' } }, { history: [{ state: 'active', regime_code: 'usn_income' }] }]) {
+    assert.match(taxRow(taxes), /Проверить режим и ставки/);
+    assert.doesNotMatch(taxRow(taxes), /account-data-complete|<unknown>/);
+  }
+});
