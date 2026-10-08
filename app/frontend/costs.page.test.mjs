@@ -1,7 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { costPage } from './pages.mjs';
 const user={id:'test-user',display_name:'<script>alert(1)</script>',email:'" autofocus onfocus="alert(1)'};
+test('globally loaded cost styles cannot affect expenses or taxes sharing the costs-page class',()=>{
+  const css=readFileSync(new URL('./public/costs-settings.css',import.meta.url),'utf8');
+  const rules=[...css.matchAll(/([^{}]+)\{/g)].map(match=>match[1].trim()).filter(selector=>!selector.startsWith('@'));
+  assert.ok(rules.length>0);
+  for(const rule of rules){
+    for(const selector of rule.split(',')){
+      assert.ok(selector.trim().startsWith(':where(body[data-page="/costs"]) '),`Unscoped cost selector: ${selector}`);
+    }
+  }
+});
 test('manual cost editors address each repository variant and preserve existing date-only values',()=>{
   const html=costPage(user,[{id:'store',connected:true}],{canEdit:true,rows:[
     {product_id:'product-1',id:'variant-1',wb_article:'123',unit_cost:'0',effective_from:new Date(2026,0,1)},
@@ -53,3 +64,31 @@ test('cost page offers a table import, template and current coverage',()=>{const
 test('cost page renders PostgreSQL DATE values without a UTC shift or Invalid Date',()=>{const store={id:'store-1',name:'WB',connected:true};const costs={summary:{totalVariants:1,configuredVariants:1},rows:[{wb_article:'123',seller_article:'SKU-1',title:'Товар',variant_id:'variant-1',unit_cost:'407',effective_from:new Date(2026,0,1)}]};const html=costPage(user,[store],costs);assert.match(html,/с 01\.01\.2026/);assert.doesNotMatch(html,/Invalid Date/);});
 test('cost page remains locked until Wildberries is connected',()=>{const html=costPage(user,[{id:'store-1',name:'Магазин',connected:false}],null);assert.match(html,/Сначала подключите Wildberries/);assert.doesNotMatch(html,/action="\/costs\/import"/);});
 test('cost page renders row-level import errors',()=>{const store={id:'store-1',name:'Магазин',connected:true};const html=costPage(user,[store],{rows:[],summary:{totalVariants:0,configuredVariants:0}},{error:'Файл не применён.',importErrors:[{rowNumber:7,code:'cost_variant_not_found'}]});assert.match(html,/Строка 7: вариант не найден среди выбранных товаров/);});
+
+test('cost settings status counts a zero cost as configured and keeps empty coverage explicit',()=>{
+  const store={id:'store-1',connected:true};
+  const partial=costPage(user,[store],{rows:[{id:'zero',wb_article:'123',unit_cost:'0'},{id:'missing',wb_article:'124',unit_cost:null}]});
+  assert.match(partial,/Не заполнено: 1 вариант/);
+  assert.match(partial,/Заполнено 1 из 2/);
+  assert.match(partial,/0,00 ₽/);
+  const complete=costPage(user,[store],{rows:[{id:'zero',wb_article:'123',unit_cost:'0'}]});
+  assert.match(complete,/Все варианты заполнены/);
+  assert.doesNotMatch(complete,/Не заполнено/);
+  const empty=costPage(user,[store],{rows:[]});
+  assert.match(empty,/Нет вариантов товаров/);
+  assert.match(empty,/Заполнено 0 из 0/);
+  assert.doesNotMatch(empty,/Все варианты заполнены|NaN|Infinity/);
+});
+
+test('cost settings keeps each nested variant editable and file validation intact',()=>{
+  const html=costPage(user,[{id:'store-1',connected:true}],{products:[{id:'product-1',wb_article:'123',title:'Часы',variants:[{id:'pink',color_label:'Розовый',unit_cost:null},{id:'silver',color_label:'Серебристый',unit_cost:'5',effective_from:'2026-10-01'}]}]});
+  assert.equal((html.match(/action="\/costs\/save"/g)||[]).length,2);
+  assert.equal((html.match(/name="unitCost"[^>]* required/g)||[]).length,2);
+  assert.equal((html.match(/type="date" name="effectiveFrom"[^>]* required/g)||[]).length,2);
+  assert.match(html,/name="variantId" value="pink"/);
+  assert.match(html,/name="variantId" value="silver"/);
+  assert.match(html,/name="file"[^>]*accept="\.csv,\.tsv,\.xlsx[^>]* required/);
+  assert.match(html,/История стоимости сохраняется/);
+  assert.match(html,/Отменить/);
+  assert.ok(html.indexOf('Товары и варианты') < html.indexOf('Загрузка из файла'));
+});

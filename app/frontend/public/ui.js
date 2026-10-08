@@ -89,7 +89,7 @@
   }else financialPollStorage.remove();
   const financialSync=$('[data-financial-sync-refresh]');
   if(financialSync){
-    const update=state=>{const title=$('[data-financial-sync-title]',financialSync),note=$('[data-financial-sync-note]',financialSync),button=$('[data-financial-sync-button]',financialSync);title.textContent=state.title;note.textContent=state.note;button.textContent=state.buttonLabel;button.disabled=state.buttonDisabled;financialSync.classList.toggle('has-error',state.failed||state.blocked);if(state.busy)financialSync.setAttribute('aria-busy','true');else financialSync.removeAttribute('aria-busy');if(!state.running)financialSync.removeAttribute('data-financial-sync-refresh')};
+    const update=state=>{const title=$('[data-financial-sync-title]',financialSync),note=$('[data-financial-sync-note]',financialSync),button=$('[data-financial-sync-button]',financialSync);title.textContent=state.title;note.textContent=state.note;if(financialSync.hasAttribute?.('data-financial-sync-compact'))note.textContent=state.compactNote??state.note;button.textContent=state.buttonLabel;button.disabled=state.buttonDisabled;all('[data-financial-sync-meta]').forEach(cell=>{if(typeof state.metadata?.[cell.dataset.financialSyncMeta]==='string')cell.textContent=state.metadata[cell.dataset.financialSyncMeta]});financialSync.classList.toggle('has-error',state.failed||state.blocked);if(state.busy)financialSync.setAttribute('aria-busy','true');else financialSync.removeAttribute('aria-busy');if(!state.running)financialSync.removeAttribute('data-financial-sync-refresh')};
     const showPollError=({reason})=>{const title=$('[data-financial-sync-title]',financialSync),note=$('[data-financial-sync-note]',financialSync),button=$('[data-financial-sync-button]',financialSync);financialSync.removeAttribute('aria-busy');financialSync.classList.add('has-error');if(reason==='auth'){title.textContent='Сеанс завершён';note.textContent='Войдите снова, чтобы проверить состояние загрузки. Сама загрузка на сервере не прерывается.';button.textContent='Войти снова';button.disabled=false;button.dataset.financialSyncLogin='true'}else{title.textContent='Не удалось проверить состояние загрузки';note.textContent='Загрузка на сервере продолжится. Повторим проверку автоматически.'}};
     financialSync.addEventListener('click',event=>{if(event.target.closest('[data-financial-sync-login]')){event.preventDefault();location.assign('/login')}});
     import('/financial-poll.js').then(({startFinancialSyncPolling})=>startFinancialSyncPolling({statusUrl:financialSync.dataset.financialSyncStatusUrl,fetchImpl:fetch,update,onError:showPollError,isHidden:()=>document.hidden,addVisibilityListener:listener=>document.addEventListener('visibilitychange',listener)})).catch(()=>{});
@@ -135,5 +135,25 @@
     update();
     const search=$('[data-catalog-search]',selectionForm);
     search?.addEventListener('input',()=>{const query=search.value.trim().toLocaleLowerCase('ru-RU');all('[data-catalog-product]',selectionForm).forEach(row=>row.hidden=query&&!row.dataset.search.includes(query))});
+  }
+  all('[data-password-toggle]').forEach(button=>{
+    const input=document.getElementById(button.dataset.passwordToggle);
+    if(!input)return;
+    const label=button.getAttribute('aria-label');
+    button.addEventListener('click',()=>{
+      const visible=input.type==='password';input.type=visible?'text':'password';
+      button.textContent=visible?'Скрыть':'Показать';button.setAttribute('aria-pressed',String(visible));
+      button.setAttribute('aria-label',visible?label.replace('Показать:','Скрыть:'):label);
+    });
+  });
+  const tariffForm=$('[data-tariff-form]');
+  if(tariffForm){
+    const update=()=>{const chosen=$('input[name="plan"]:checked',tariffForm);$('button[type="submit"]',tariffForm).disabled=!chosen||chosen.disabled||chosen.value===tariffForm.dataset.savedPlan;};
+    tariffForm.addEventListener('change',update);update();
+  }
+  const erasureForm=$('[data-erasure-form]');
+  if(erasureForm){
+    const update=()=>{const confirmation=$('[name="confirmation"]',erasureForm),password=$('[name="currentPassword"]',erasureForm);$('button[type="submit"]',erasureForm).disabled=confirmation.value!=='УДАЛИТЬ'||Boolean(password&&!password.value);};
+    erasureForm.addEventListener('input',update);erasureForm.addEventListener('change',update);update();
   }
 })();

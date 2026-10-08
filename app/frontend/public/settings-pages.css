@@ -1,0 +1,182 @@
+/* Approved settings v1: shared palette, cards and responsive page structure. */
+body:has(.settings-page){--text:#0d1e42;--muted:#536c93}
+html[data-theme=dark] body:has(.settings-page){--text:#e6efff;--muted:#9bb6d6;--accent:#4aa4ff}
+.settings-page{max-width:none;margin:0 0 30px;padding:0;display:block;min-width:0}
+.settings-page .settings-back{min-height:44px;margin:0 0 22px;padding:9px 16px;justify-self:start}
+.settings-page .settings-heading{display:flex;justify-content:space-between;align-items:center;gap:18px;margin:0 0 22px}
+.settings-page h1{font-size:34px;line-height:1.2;margin:0;font-weight:700}
+.settings-page .page-lead{font-size:18px;line-height:1.4;margin:8px 0 0;color:var(--muted)}
+.settings-heading-actions,.products-selection-summary>div{display:flex;gap:12px;flex-wrap:wrap}
+.settings-page h2{display:flex;align-items:center;gap:16px;font-size:22px;font-weight:700;margin:0 0 16px;line-height:1.3}
+.settings-page h2 .ui-icon{width:28px;height:28px}
+.settings-page .settings-columns{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(0,1fr);gap:22px;align-items:start}
+.settings-page .settings-stack{display:grid;gap:18px;min-width:0}
+.settings-page .settings-panel{border:1px solid var(--border);border-radius:8px;background:color-mix(in srgb,var(--surface) 65%,var(--bg));padding:22px;min-width:0;margin:0}
+.settings-page .settings-note{display:flex;align-items:center;justify-content:flex-start;gap:16px;padding:16px 20px;border:1px solid var(--border);border-radius:7px;background:var(--surface);margin:0 0 20px;min-width:0}
+.settings-note>span:not(.ui-icon){flex:1}
+.settings-note p{margin-top:4px;color:var(--muted)}
+.settings-page .warning-note{background:var(--warning-bg);border-color:color-mix(in srgb,var(--warning) 45%,var(--border))}
+.settings-page .danger-note{background:color-mix(in srgb,var(--danger) 8%,var(--bg));border-color:var(--danger)}
+.danger-note strong{color:var(--danger);font-size:20px}
+.settings-page .settings-footnote{margin:16px 0 0;font-size:15px;line-height:1.5}
+.settings-page a:not(.catalog-product-link):hover{text-decoration:none}
+.settings-page .outline-button,.settings-page .primary-button{display:inline-flex;align-items:center;justify-content:center;gap:10px;min-height:44px;border:1px solid color-mix(in srgb,var(--accent) 60%,var(--border));border-radius:6px;padding:9px 16px;font-size:16px;line-height:1.3;white-space:normal;text-align:center}
+.settings-page .primary-button{background:#087cff;color:#fff;border-color:#087cff}
+.settings-page .primary-button:hover{background:#0866e0}
+.settings-page button:disabled{opacity:.48;cursor:not-allowed}
+.settings-page .outline-button:hover{border-color:var(--accent);background:var(--selected)}
+.settings-page label{color:var(--muted);font-weight:400;font-size:15px}
+.settings-page input,.settings-page select,.settings-page textarea{font:inherit;min-height:44px;color:var(--text);background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:9px 12px;width:100%;min-width:0}
+.settings-page textarea{resize:vertical;min-height:76px}
+.settings-page input[type=checkbox],.settings-page input[type=radio]{width:20px;height:20px;min-height:20px;accent-color:var(--accent);flex-shrink:0}
+.settings-page .settings-form-actions{grid-column:1/-1;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;margin-top:4px}
+.settings-page .cost-import{display:block;padding:20px}
+.settings-page .cost-import form{display:flex;align-items:end;gap:12px;margin-top:14px;flex-wrap:wrap}
+.settings-page .cost-import form>label{flex:1;min-width:200px;display:grid;gap:6px}
+.settings-page input[type=file]{font-size:14px;padding:5px}
+.settings-page input[type=file]::file-selector-button{font:inherit;color:var(--accent);border:1px solid var(--border);border-radius:4px;background:var(--bg);padding:8px;margin-right:10px;cursor:pointer}
+.settings-page .expense-form{grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+.settings-page .expense-form label{font-size:15px;display:grid;gap:6px}
+.expenses-page .expense-create>.expense-form>label:has([name=channelName]),.expenses-page .expense-create>.expense-form>label:has(textarea){grid-column:1/-1}
+.settings-page .expense-list>.products-empty{display:grid;align-content:center;text-align:center;min-height:270px;color:var(--muted);font-size:19px}
+.settings-page .expense-row{gap:14px}
+.settings-page .expense-actions{gap:8px;flex-wrap:wrap}
+.settings-page .expense-actions .text-button{display:inline-flex;min-height:44px;align-items:center;padding:8px 12px;border:1px solid var(--border);border-radius:6px}
+.settings-page .expense-actions details[open] .expense-form{position:static;width:auto;box-shadow:none;margin-top:10px}
+.settings-page .expense-row:has(details[open]){grid-template-columns:1fr}
+.settings-page .taxes-columns{grid-template-columns:minmax(0,1.4fr) minmax(0,1fr)}
+.settings-page .tax-form{grid-template-columns:repeat(3,minmax(0,1fr))}
+.settings-page .tax-form label:has(textarea){grid-column:span 2}
+.settings-page .tax-scope-note{grid-column:1/-1;font-size:14px;line-height:1.5}
+.settings-page .tax-current{display:flex;flex-wrap:wrap}
+.settings-page .tax-current small{display:block;margin-top:4px}
+.settings-page .cost-table{width:100%;font-size:14px}
+.settings-page .cost-table th,.settings-page .cost-table td{padding:12px 10px;white-space:normal}
+.settings-page.taxes-page .cost-table{min-width:0;table-layout:fixed}
+.settings-page.taxes-page .cost-table td{width:auto;overflow-wrap:anywhere}
+.tax-cell-label{display:none}
+.settings-page .api-columns{grid-template-columns:minmax(0,1.25fr) minmax(0,1fr)}
+.settings-page .financial-sync-card{margin:0;border:0;padding:0;display:flex;align-items:flex-start;gap:16px;background:none}
+.settings-page .api-reports .financial-sync-card>.ui-icon,.settings-page .api-readiness .financial-sync-card>.ui-icon{display:none}
+.settings-page .financial-sync-card>div{min-width:0;flex:1}
+.settings-page .financial-sync-card strong{font-size:18px}
+.settings-page .financial-sync-card p{font-size:15px;line-height:1.5;margin-top:6px}
+.settings-page .financial-sync-card.has-error{color:var(--danger)}
+.settings-page .settings-metadata{margin:18px 0 0;border:1px solid var(--border);border-radius:6px;overflow:hidden;font-size:15px}
+.settings-metadata>div{display:grid;grid-template-columns:1.4fr 1fr;border-bottom:1px solid var(--border)}
+.settings-metadata>div:last-child{border:0}
+.settings-metadata dt,.settings-metadata dd{margin:0;padding:9px 14px;overflow-wrap:anywhere}
+.settings-metadata dt{color:var(--muted);border-right:1px solid var(--border)}
+.settings-metadata dd{font-weight:600}
+.settings-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));margin-top:20px;gap:12px}
+.settings-stats>div{display:grid;gap:6px;border-right:1px solid var(--border);padding-right:10px;color:var(--muted)}
+.settings-stats>div:last-child{border:0}
+.settings-stats strong{font-size:30px;color:var(--text)}
+.settings-stats .positive{color:var(--success)}.settings-stats .negative{color:var(--danger)}
+.settings-page .api-readiness>.financial-sync-card{margin-bottom:22px;padding-bottom:18px;border-bottom:1px solid var(--border)}
+.settings-readiness-row{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--border);border-radius:6px;padding:10px 12px;margin:8px 0}
+.settings-readiness-row>span{display:flex;align-items:center;gap:14px}
+.settings-page .products-selection-summary{margin:0 0 16px;justify-content:space-between}
+.products-selection-summary>strong{font-size:22px}
+.settings-page .catalog-products{display:block;border:0;background:none;margin:0}
+.settings-page .settings-product-row,.settings-product-table-heading{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(0,1.1fr) minmax(100px,.7fr) minmax(145px,.9fr);gap:18px;align-items:center}
+.settings-page .settings-product-row{padding:14px 0;border:0;border-top:1px solid var(--border);border-radius:0;background:none;min-width:0;margin:0}
+.settings-page .settings-product-row.selected{background:none}
+.settings-page .settings-product-row.locked{opacity:.55}
+.settings-product-table-heading{font-size:14px;color:var(--muted);padding:10px 0}
+.settings-product-name{display:flex;align-items:center;gap:16px;min-width:0}
+.settings-product-name>span{min-width:0;overflow-wrap:anywhere}
+.settings-product-row .catalog-product-link:not(.catalog-product-media){color:var(--text)}
+.settings-page .settings-product-row .catalog-product-image{width:58px;height:72px;object-fit:cover;border-radius:4px}
+.settings-product-article{display:grid;gap:4px;overflow-wrap:anywhere}
+.settings-page .catalog-search{max-width:460px;margin:0 0 12px}
+.settings-page .catalog-submit{margin-top:16px;padding:0}
+.settings-page.tariff-layout{max-width:none}
+.settings-page .tariff-form{margin-top:20px}
+.settings-page .tariff-grid{gap:18px;margin-bottom:24px}
+.settings-page .tariff-card{border-radius:7px;min-height:310px;padding:24px;background:var(--surface)}
+.settings-page .tariff-card strong{font-size:27px;margin-top:14px;color:var(--text)}
+.settings-page .tariff-card ul{border-top:1px solid var(--border);padding-top:18px;padding-left:20px;line-height:2.1}
+.settings-page .tariff-state{font-size:12px;letter-spacing:0}
+.settings-page .tariff-actions{margin-top:22px}
+.settings-page.password-layout{max-width:none;margin:0 0 30px}
+.settings-page .security-columns{grid-template-columns:minmax(0,1.6fr) minmax(0,1fr);align-items:stretch}
+.settings-page .password-card{border-radius:8px;padding:26px;max-width:none;width:100%}
+.settings-page .password-card form{margin:0;gap:22px}
+.settings-page .password-card label{font-size:17px;font-weight:400}
+.settings-password-input{display:flex;border:1px solid var(--border);border-radius:6px;background:var(--bg);min-width:0;align-items:stretch}
+.settings-page .settings-password-input input{border:0;background:transparent}
+.settings-password-input button{border-left:1px solid var(--border);border-radius:0 6px 6px 0;padding:8px 12px;min-width:86px;font-size:13px}
+.settings-page .security-note p{font-size:17px;line-height:1.6}
+.settings-page.password-layout:not(.account-erasure-layout) .security-note{align-self:start;border:0;background:none}
+.settings-page .account-delete-button{background:var(--danger);border-color:var(--danger);color:var(--bg)}
+.settings-page .account-delete-button:disabled{background:color-mix(in srgb,var(--danger) 30%,var(--bg));color:var(--muted);opacity:1}
+@media(min-width:1100px){body:has(.settings-page) .workspace{padding:18px 28px}body:has(.settings-page) .app-header{height:48px;margin-bottom:22px}}
+@media(max-width:1100px){.settings-page .settings-columns{grid-template-columns:minmax(0,1fr)}.settings-page .settings-heading{align-items:flex-start}.settings-heading-actions{max-width:45%}.settings-page .tariff-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.settings-page .security-columns{grid-template-columns:1.3fr 1fr}.settings-page .settings-product-row,.settings-product-table-heading{grid-template-columns:minmax(0,1.3fr) minmax(0,1fr) minmax(100px,.7fr)}.settings-product-row>.outline-button{grid-column:3;grid-row:1/span 2}.settings-product-row>span{grid-column:2}.settings-product-table-heading>span:last-child{display:none}}
+@media(max-width:700px){
+ .settings-page.products-page>.warning-note{flex-direction:column;align-items:stretch}
+ .settings-page .expenses-columns>.settings-stack{display:contents}
+ .settings-page .expenses-columns>.settings-stack>.expense-list{order:0}
+ .settings-page .expenses-columns>.expense-create{order:1}
+ .settings-page .expenses-columns>.settings-stack>.cost-import{order:2}
+ body:has(.settings-page) .sidebar{display:none}body.menu-open:has(.settings-page) .sidebar{display:flex}
+ body:has(.settings-page) .workspace{margin:0;padding:16px 18px 30px}
+ body:has(.settings-page) .app-header{display:grid;grid-template-columns:minmax(0,1fr) auto;height:auto;gap:18px 10px;margin:0 0 24px}
+ body:has(.settings-page) .mobile-brand{display:flex;margin:0;padding:0;font-size:20px;gap:12px}
+ body:has(.settings-page) .mobile-brand img{width:44px;height:44px}
+ body:has(.settings-page) .mobile-menu{display:block;justify-self:end}
+ body:has(.settings-page) .store-select{width:100%;max-width:none;grid-column:1;min-width:0}
+ body:has(.settings-page) .store-select summary{gap:8px;font-size:17px;padding:9px 10px}
+ body:has(.settings-page) .theme-control{grid-column:2;grid-row:2;margin:0}
+ body:has(.settings-page) .theme-control>span{display:none}
+ body:has(.settings-page) .theme-switch{padding:2px}
+ body:has(.settings-page) .theme-switch button{width:40px;height:40px;padding:8px}
+ body:has(.settings-page) .mobile-nav{display:none}
+ .settings-page .settings-back{width:100%;margin-bottom:22px}
+ .settings-page .settings-heading{display:block;margin-bottom:20px}
+ .settings-page h1{font-size:28px;overflow-wrap:anywhere}
+ .settings-page .page-lead{font-size:16px}
+ .settings-heading-actions{margin-top:16px;max-width:none;display:grid;grid-template-columns:1fr 1fr;gap:10px}
+ .settings-page .settings-columns,.settings-page .security-columns{grid-template-columns:minmax(0,1fr);gap:16px}
+ .settings-page .settings-panel{padding:16px}
+ .settings-page h2{font-size:21px;gap:12px}
+ .settings-page .settings-note{padding:14px;flex-wrap:wrap}
+ .settings-page .settings-form-actions{grid-template-columns:1fr;gap:10px}
+ .settings-page .expense-form,.settings-page .tax-form{grid-template-columns:1fr}
+ .settings-page .expense-form label:has(textarea),.settings-page .tax-form label:has(textarea){grid-column:auto}
+ .settings-page .expense-list>.products-empty{min-height:120px}
+ .settings-page .cost-import form{display:grid;grid-template-columns:1fr;align-items:stretch}
+ .settings-page .cost-import form>label{min-width:0}
+ .settings-page .expense-row{grid-template-columns:1fr}
+ .settings-page .financial-sync-card{flex-wrap:wrap}
+ .settings-page .financial-sync-card form{width:100%}
+ .settings-page .financial-sync-card form button{width:100%}
+ .settings-metadata dt,.settings-metadata dd{padding:10px;font-size:14px}
+ .settings-stats{grid-template-columns:1fr;gap:14px}
+ .settings-stats>div{grid-template-columns:1fr auto;align-items:center;border:0;padding:0}
+ .settings-stats strong{font-size:25px}
+ .settings-readiness-row{align-items:flex-start;flex-direction:column}
+ .settings-readiness-row .outline-button{width:100%}
+ .products-selection-summary>div{display:grid;grid-template-columns:1fr 1fr;width:100%;gap:10px}
+ .settings-product-table-heading{display:none}
+ .settings-page .settings-product-row{grid-template-columns:1fr;gap:12px;padding:16px 0}
+ .settings-product-row>.outline-button,.settings-product-row>span{grid-row:auto;grid-column:auto}
+ .settings-product-article{margin-left:74px;font-size:14px}
+ .settings-page .settings-product-row>span{margin-left:74px}
+ .settings-page .catalog-search{max-width:none}
+ .settings-page .catalog-submit{display:grid;gap:12px}
+ .settings-page .tariff-grid{grid-template-columns:1fr;gap:14px}
+ .settings-page .tariff-card{min-height:245px;padding:20px}
+ .settings-page .tariff-card strong{font-size:25px}
+ .settings-page .tariff-actions{display:grid;grid-template-columns:1fr;width:100%}
+ .settings-page .password-card{padding:18px}
+ .settings-page .password-card label{font-size:16px}
+ .settings-page .security-note p{font-size:15px}
+ .settings-page.password-layout:not(.account-erasure-layout) .security-note{border:1px solid var(--border);background:var(--surface)}
+ .settings-page.taxes-page .cost-table thead{display:none}
+ .settings-page.taxes-page .cost-table,.settings-page.taxes-page .cost-table tbody,.settings-page.taxes-page .cost-table tr{display:block}
+ .settings-page.taxes-page .cost-table tr+tr{border-top:1px solid var(--border)}
+ .settings-page.taxes-page .cost-table td{display:grid;grid-template-columns:100px minmax(0,1fr);gap:12px;border:0;padding:8px 12px}
+ .settings-page.taxes-page .cost-table td[colspan]{display:block;padding:20px 12px}
+ .tax-cell-label{display:block;color:var(--muted)}
+}

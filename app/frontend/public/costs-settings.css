@@ -1,0 +1,124 @@
+:where(body[data-page="/costs"]) .costs-page.settings-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 20px 16px;
+  max-width: 1500px;
+}
+:where(body[data-page="/costs"]) .costs-page > .back-link { grid-column: 1 / -1; justify-self: start; display: inline-flex; align-items: center; gap: 12px; margin: 0; }
+:where(body[data-page="/costs"]) .costs-page > .back-link .ui-icon { transform: rotate(180deg); width: 18px; height: 18px; }
+:where(body[data-page="/costs"]) .costs-page .costs-title { padding: 0; border: 0; margin: 0; align-self: center; }
+:where(body[data-page="/costs"]) .costs-page .costs-title h1 { margin: 0 0 8px; }
+:where(body[data-page="/costs"]) .costs-page .costs-title p { margin: 0; }
+:where(body[data-page="/costs"]) .costs-page .costs-actions { display: flex; gap: 12px; align-items: center; }
+:where(body[data-page="/costs"]) .costs-page .costs-actions a { display: inline-flex; gap: 14px; align-items: center; justify-content: center; white-space: nowrap; }
+:where(body[data-page="/costs"]) .costs-page .costs-actions .ui-icon { width: 26px; height: 26px; }
+:where(body[data-page="/costs"]) .costs-page > .settings-feedback, :where(body[data-page="/costs"]) .costs-page > .cost-row-errors,
+:where(body[data-page="/costs"]) .costs-page > .settings-locked { grid-column: 1 / -1; }
+:where(body[data-page="/costs"]) .costs-page .cost-summary {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 24px;
+  margin: 0;
+  padding: 17px 20px;
+  border-radius: 7px;
+  font-size: 15px;
+}
+:where(body[data-page="/costs"]) .costs-page .cost-summary strong { font-size: inherit; font-weight: 500; }
+:where(body[data-page="/costs"]) .costs-page .cost-summary > span { padding-left: 24px; border-left: 1px solid var(--border); font-size: inherit; letter-spacing: 0; }
+:where(body[data-page="/costs"]) .costs-page .cost-incomplete::before, :where(body[data-page="/costs"]) .costs-page .cost-complete::before,
+:where(body[data-page="/costs"]) .costs-page .cost-missing::before { content: ''; display: inline-block; width: 11px; height: 11px; margin-right: 10px; border-radius: 50%; background: var(--warning); }
+:where(body[data-page="/costs"]) .costs-page .cost-complete::before { background: var(--success); }
+:where(body[data-page="/costs"]) .costs-page .costs-columns { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 2.6fr) minmax(280px, 1fr); gap: 16px; align-items: start; }
+:where(body[data-page="/costs"]) .costs-page .cost-list { padding: 0; overflow: hidden; }
+:where(body[data-page="/costs"]) .costs-page .cost-list-heading { margin: 0; padding: 20px; border-bottom: 1px solid var(--border); }
+:where(body[data-page="/costs"]) .costs-page .settings-panel-heading h2 { display: flex; align-items: center; gap: 16px; margin: 0; font-size: 20px; }
+:where(body[data-page="/costs"]) .costs-page .settings-panel-heading .ui-icon { width: 28px; height: 28px; }
+:where(body[data-page="/costs"]) .costs-page .cost-table-wrap { overflow: visible; border: 0; border-radius: 0; }
+:where(body[data-page="/costs"]) .costs-page .cost-table { display: block; min-width: 0; width: 100%; font-size: 14px; }
+:where(body[data-page="/costs"]) .costs-page .cost-table thead, :where(body[data-page="/costs"]) .costs-page .cost-table tbody { display: block; }
+:where(body[data-page="/costs"]) .costs-page .cost-table tr { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, .8fr) 108px; align-items: center; position: relative; border-bottom: 1px solid var(--border); padding: 12px; gap: 12px; }
+:where(body[data-page="/costs"]) .costs-page .cost-table thead tr { padding-top: 11px; padding-bottom: 11px; }
+:where(body[data-page="/costs"]) .costs-page .cost-table th, :where(body[data-page="/costs"]) .costs-page .cost-table td { display: block; width: auto; min-width: 0; padding: 0; border: 0; }
+:where(body[data-page="/costs"]) .costs-page .cost-table th { background: transparent; font-size: 12px; }
+:where(body[data-page="/costs"]) .costs-page .cost-table td:nth-child(1), :where(body[data-page="/costs"]) .costs-page .cost-table td:nth-child(2) { width: auto; }
+:where(body[data-page="/costs"]) .costs-page .cost-product { gap: 14px; }
+:where(body[data-page="/costs"]) .costs-page .cost-product img { flex: 0 0 46px; width: 46px; height: 58px; border: 0; border-radius: 5px; }
+:where(body[data-page="/costs"]) .costs-page .cost-product strong { white-space: normal; line-height: 1.3; }
+:where(body[data-page="/costs"]) .costs-page .cost-product small, :where(body[data-page="/costs"]) .costs-page .cost-variant-cell small { display: block; margin-top: 4px; font-size: 12px; overflow-wrap: anywhere; }
+:where(body[data-page="/costs"]) .costs-page .cost-variant-cell strong { font-weight: 500; }
+:where(body[data-page="/costs"]) .costs-page .cost-date-cell { color: var(--muted); font-size: 12px; }
+:where(body[data-page="/costs"]) .costs-page .cost-missing { font-weight: 400; white-space: nowrap; }
+:where(body[data-page="/costs"]) .costs-page .cost-editor { min-width: 0; margin: 0; }
+:where(body[data-page="/costs"]) .costs-page .cost-editor summary { display: flex; justify-content: center; padding: 8px 10px; min-height: 38px; font-size: 14px; list-style: none; cursor: pointer; }
+:where(body[data-page="/costs"]) .costs-page .cost-editor summary::-webkit-details-marker { display: none; }
+:where(body[data-page="/costs"]) .costs-page .cost-cancel-label { display: none; }
+:where(body[data-page="/costs"]) .costs-page tr:has(.cost-editor[open]) .cost-value-cell,
+:where(body[data-page="/costs"]) .costs-page tr:has(.cost-editor[open]) .cost-date-cell { display: none; }
+:where(body[data-page="/costs"]) .costs-page tr:has(.cost-editor[open]) .cost-action-cell { grid-column: 3 / -1; }
+:where(body[data-page="/costs"]) .costs-page .cost-editor[open] { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, .8fr) 108px; gap: 5px 12px; align-items: center; }
+:where(body[data-page="/costs"]) .costs-page .cost-editor[open]::details-content { display: contents; }
+:where(body[data-page="/costs"]) .costs-page .cost-editor[open] .cost-edit-label { display: none; }
+:where(body[data-page="/costs"]) .costs-page .cost-editor[open] .cost-cancel-label { display: inline; }
+:where(body[data-page="/costs"]) .costs-page .cost-editor[open] summary { grid-column: 3; grid-row: 2; }
+:where(body[data-page="/costs"]) .costs-page .cost-edit-form { margin: 0; max-width: none; }
+:where(body[data-page="/costs"]) .costs-page .cost-editor[open] .cost-edit-form { display: contents; }
+:where(body[data-page="/costs"]) .costs-page .cost-edit-form label { gap: 5px; color: var(--muted); font-size: 0; grid-row: 1 / 3; }
+:where(body[data-page="/costs"]) .costs-page .cost-edit-form label:first-of-type { grid-column: 1; }
+:where(body[data-page="/costs"]) .costs-page .cost-edit-form label:nth-of-type(2) { grid-column: 2; }
+:where(body[data-page="/costs"]) .costs-page .cost-edit-form input { width: 100%; height: 43px; font-size: 12px; padding: 8px; }
+:where(body[data-page="/costs"]) .costs-page .cost-edit-form button { grid-column: 3; grid-row: 1; font-size: 14px; }
+:where(body[data-page="/costs"]) .costs-page .cost-edit-error { grid-column: 1 / -1; grid-row: 3; font-size: 12px; }
+:where(body[data-page="/costs"]) .costs-page .cost-history-note { display: flex; align-items: start; gap: 12px; padding: 20px; margin: 0; font-size: 13px; }
+:where(body[data-page="/costs"]) .costs-page .cost-history-note .ui-icon { width: 20px; height: 20px; }
+:where(body[data-page="/costs"]) .costs-page .cost-import { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; padding: 20px; border: 1px solid var(--border); }
+:where(body[data-page="/costs"]) .costs-page .cost-import > p { font-size: 14px; line-height: 1.4; }
+:where(body[data-page="/costs"]) .costs-page .cost-import form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+:where(body[data-page="/costs"]) .costs-page .cost-file { display: grid; gap: 16px; padding: 20px 12px; border: 1px dashed var(--border); border-radius: 6px; background: transparent; }
+:where(body[data-page="/costs"]) .costs-page .cost-file-hint { display: grid; justify-items: center; gap: 12px; text-align: center; color: var(--muted); font-size: 14px; font-weight: 400; }
+:where(body[data-page="/costs"]) .costs-page .cost-file-hint .ui-icon { width: 32px; height: 32px; }
+:where(body[data-page="/costs"]) .costs-page .cost-file input { padding: 0; border: 0; border-radius: 0; background: transparent; font-size: 12px; color: var(--muted); }
+:where(body[data-page="/costs"]) .costs-page .cost-file input::file-selector-button { border-color: var(--accent); padding: 8px 12px; background: var(--bg); }
+:where(body[data-page="/costs"]) .costs-page .cost-import .primary-button { min-height: 44px; }
+:where(body[data-page="/costs"]) .costs-page .cost-import > .settings-note { margin: -6px 0 0; font-size: 13px; }
+:where(body[data-page="/costs"]) .costs-page .cost-import-status { padding: 12px 0 0; border-top: 1px solid var(--border); border-radius: 0; background: transparent; flex-direction: column; gap: 6px; overflow-wrap: anywhere; }
+:where(body[data-page="/costs"]) .costs-page .cost-import-status small, :where(body[data-page="/costs"]) .costs-page .cost-import-status time { font-size: 12px; }
+:where(body[data-page="/costs"]) .costs-page .cost-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+@media (max-width: 1350px) {
+  :where(body[data-page="/costs"]) .costs-page.settings-page { grid-template-columns: minmax(0, 1fr); }
+  :where(body[data-page="/costs"]) .costs-page .costs-actions { grid-row: 3; }
+  :where(body[data-page="/costs"]) .costs-page .costs-columns { grid-template-columns: minmax(0, 1fr); }
+  :where(body[data-page="/costs"]) .costs-page .cost-import { max-width: 620px; width: 100%; }
+}
+@media (max-width: 650px) {
+  :where(body[data-page="/costs"]) .costs-page.settings-page { gap: 16px; }
+  :where(body[data-page="/costs"]) .costs-page .costs-title h1 { font-size: 27px; }
+  :where(body[data-page="/costs"]) .costs-page .costs-title p { font-size: 16px; }
+  :where(body[data-page="/costs"]) .costs-page .costs-actions { grid-row: auto; order: 10; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+  :where(body[data-page="/costs"]) .costs-page .costs-actions a { gap: 8px; padding: 10px 8px; font-size: 13px; white-space: normal; text-align: center; }
+  :where(body[data-page="/costs"]) .costs-page .costs-actions .ui-icon { width: 22px; height: 22px; }
+  :where(body[data-page="/costs"]) .costs-page .cost-summary { padding: 13px 12px; gap: 12px; flex-wrap: wrap; font-size: 13px; }
+  :where(body[data-page="/costs"]) .costs-page .cost-summary > span { padding-left: 12px; }
+  :where(body[data-page="/costs"]) .costs-page .cost-list-heading { padding: 14px 12px; }
+  :where(body[data-page="/costs"]) .costs-page .settings-panel-heading h2 { font-size: 19px; gap: 12px; }
+  :where(body[data-page="/costs"]) .costs-page .cost-table thead { display: none; }
+  :where(body[data-page="/costs"]) .costs-page .cost-table tbody { padding: 0 5px; }
+  :where(body[data-page="/costs"]) .costs-page .cost-table tr { grid-template-columns: 48px minmax(0, 1fr) 88px; gap: 5px 10px; padding: 12px 10px; margin-bottom: 5px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); font-size: 13px; }
+  :where(body[data-page="/costs"]) .costs-page .cost-table .cost-product-cell { grid-column: 1 / -1; grid-row: 1; padding-left: 58px; min-height: 34px; }
+  :where(body[data-page="/costs"]) .costs-page .cost-product img { position: absolute; top: 12px; left: 10px; width: 46px; height: 58px; }
+  :where(body[data-page="/costs"]) .costs-page .cost-table .cost-variant-cell { grid-column: 2; grid-row: 2; }
+  :where(body[data-page="/costs"]) .costs-page .cost-product small, :where(body[data-page="/costs"]) .costs-page .cost-variant-cell small { font-size: 11px; margin-top: 2px; }
+  :where(body[data-page="/costs"]) .costs-page .cost-table .cost-value-cell { grid-column: 2 / -1; grid-row: 3; }
+  :where(body[data-page="/costs"]) .costs-page .cost-table .cost-date-cell { grid-column: 2 / -1; grid-row: 4; }
+  :where(body[data-page="/costs"]) .costs-page .cost-table .cost-action-cell { grid-column: 3; grid-row: 2; }
+  :where(body[data-page="/costs"]) .costs-page .cost-editor summary { min-height: 36px; font-size: 13px; }
+  :where(body[data-page="/costs"]) .costs-page tr:has(.cost-editor[open]) .cost-action-cell { grid-column: 1 / -1; grid-row: 3; margin-top: 7px; }
+  :where(body[data-page="/costs"]) .costs-page .cost-editor[open] { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 9px; }
+  :where(body[data-page="/costs"]) .costs-page .cost-edit-form label { grid-row: 1; font-size: 12px; }
+  :where(body[data-page="/costs"]) .costs-page .cost-edit-form input { font-size: 13px; }
+  :where(body[data-page="/costs"]) .costs-page .cost-edit-form button { grid-column: 1; grid-row: 2; }
+  :where(body[data-page="/costs"]) .costs-page .cost-editor[open] summary { grid-column: 2; grid-row: 2; }
+  :where(body[data-page="/costs"]) .costs-page .cost-edit-error { grid-row: 3; }
+  :where(body[data-page="/costs"]) .costs-page .cost-history-note { padding: 13px 12px; font-size: 13px; gap: 10px; }
+  :where(body[data-page="/costs"]) .costs-page .cost-import { max-width: none; padding: 16px 12px; }
+  :where(body[data-page="/costs"]) .costs-page .cost-file { padding: 16px 12px; }
+}

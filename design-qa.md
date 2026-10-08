@@ -1,3 +1,43 @@
+# Settings internal pages v1 — implementation QA, 2026-10-08
+
+final result: passed
+
+## Current scope and references
+
+Eight internal pages follow the approved four-state references in `outputs/design/Новый дизайн/Настройки/`: calculation inputs (costs, expenses, taxes), analysis products, API loads, tariff, password, account deletion. Main settings v3 is included as a regression surface. This is the existing server-rendered app, not a replacement prototype.
+
+Reference desktop rasters are approximately 1672×941; implementation captures use the requested 1920×1080 CSS viewport. Mobile references are high-density, variable-width raster compositions; implementation uses 390×844 CSS pixels. Compare normalized content proportions and hierarchy, not literal raster pixels. Existing sidebar, Interface/Roboto Condensed font and icon paths are deliberately retained. Live data can change row count and page height.
+
+## Evidence
+
+Thirty-six implementation captures: `work/settings-design-qa/{costs,expenses,taxes,products,settings-data,tariff,password,account-delete,settings}-{pc,mobile}-{light,dark}.png`. Files remain ignored and local. Fixtures invoke actual page renderers without a database and reject all POST requests. Fixtures use explicit example values, not live financial records; missing fixture product images exercise the existing placeholder. This does not claim end-to-end persistence validation.
+
+Sources and implementation screenshots were supplied together in paired visual comparisons: all eight desktop and mobile page types, with focused review of expense grids, tax history, cost/import layout, API status/table, security columns and product warnings. Full reference and implementation states were inspected for hierarchy, wrapping, density, palette, asset reuse and action affordances.
+
+All nine routes at 1920×1080 in both themes: scrollWidth 1920 and scrollHeight 1080 in the baseline states. All mobile routes: document width does not exceed the 390px viewport (375px content width with scrollbar), natural vertical scrolling; no horizontal overflow. Browser console error list empty.
+
+## Iterations and resolutions
+
+1. Cost styles initially leaked to expenses/taxes through a legacy shared class. Every cost selector now has the exact `/costs` body scope; a regression test checks selectors.
+2. Removed tax-history minimum table width and added visible field labels for stacked mobile rows.
+3. Made the password security note quiet on desktop and restored its card on mobile. Removed the legacy maximum-width restriction from security forms so columns do not leave a central gap.
+4. Fixed the expense-note alignment, mobile expense order (list → manual form → import), and stacked the product tariff warning rather than squeezing its text beside a button.
+5. API status no longer repeats the metadata table as a long paragraph. Polling updates both status and metadata, preserving errors and retry states.
+6. Restored tariff cancellation/replacement semantics by comparing against the saved request rather than effective access. Settings remains active on account/tariff subpages.
+
+## Fidelity and interaction rubric
+
+- Layout/density: desktop cards and split columns, responsive single-column mobile, bounded actions, compact baseline at 1920×1080. Long real tables remain scrollable rather than hiding data.
+- Typography/copy: project font retained; generated sample seller/WB identifiers are corrected semantically. Existing important warnings, input/versioning rules and honest incompleteness descriptions retained.
+- Color: established theme tokens, blue accents for actions/icons, muted secondary information, amber warnings, green confirmed state and red danger. Outline controls remain distinguishable in both themes.
+- Assets: existing logo, SVG icon system and actual catalog image fields; no new external fonts or fabricated product photos.
+- Controls: keyboard-operable native inputs, focus styles and theme buttons. Password reveal uses explicit text rather than a new eye asset. File import uses an honest native picker rather than promising unsupported drag/drop.
+- Safe checks: theme light/dark/system and persistence, mobile menu open/close, store-context back navigation, password reveal ARIA, tariff save enabling, deletion disabled without confirmation. Server validation and CSRF remain authoritative. No live password change/account deletion or financial write performed.
+
+VM: 704/704 application tests passed, 179 schema checks passed earlier in this pass; independent code review has no blockers. Remaining differences are intentional brand/font/native-control and real-data adaptations, not pixel-perfect claims. Historical blocked browser results below are retained as history and superseded for this scope.
+
+## Historical settings v3 QA
+
 # Settings v3 — implementation QA
 
 final result: blocked

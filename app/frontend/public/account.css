@@ -1,3 +1,5 @@
+@import url('/settings-pages.css');
+@import url('/costs-settings.css');
 .account-page{--account-text:#0d1e42;--account-muted:#536c93;--account-surface:color-mix(in srgb,var(--surface) 75%,var(--bg));color:var(--account-text);padding-top:0;margin:0}
 html[data-theme=dark] .account-page{--account-text:var(--text);--account-muted:var(--muted);--account-surface:color-mix(in srgb,var(--surface) 45%,var(--bg))}
 .account-page .muted,.account-page small{color:var(--account-muted)}
