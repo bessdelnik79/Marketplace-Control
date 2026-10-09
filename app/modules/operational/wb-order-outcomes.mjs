@@ -76,9 +76,11 @@ export async function loadWbOrderOutcomes(token,{dateFrom,fetchImpl=fetch,before
           if(typeof row.isCancel!=='boolean')throw invalid();
           insertImmutable(orders,id.srid,{...id,orderedAt});
           if(row.isCancel){
-            const outcomeAt=timestamp(row.cancelDate,pageNow);
-            if(outcomeAt<orderedAt)throw invalid();
-            insertImmutable(events,sourceKey,{...id,outcome:'refused',outcomeAt,changedAt,sourceKey});
+            // Preliminary WB cancellation flags may have sentinel, missing or
+            // pre-order dates. Keep the order, but its refusal is unconfirmed.
+            let outcomeAt=null;
+            try{outcomeAt=timestamp(row.cancelDate,pageNow);}catch{}
+            if(outcomeAt!==null&&outcomeAt>=orderedAt)insertImmutable(events,sourceKey,{...id,outcome:'refused',outcomeAt,changedAt,sourceKey});
           }
         }else{
           if(typeof row.saleID!=='string'||!/^\S+$/.test(row.saleID)||!['S','R'].includes(row.saleID[0]))throw invalid();

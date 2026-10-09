@@ -40,7 +40,7 @@ export function calculateBuyout({ sku, periodEnd, history } = {}) {
   const historyEnd = coverage.end < bounds.end ? coverage.end : bounds.end;
   const historyLimited = coverage.start > bounds.start || coverage.end < bounds.end || coverage.sourceLimited === true;
   const sourceLimitations = Array.isArray(coverage.sourceLimitations) ? coverage.sourceLimitations.filter(value => typeof value === 'string' && value.trim()) : [];
-  if (coverage.sourceLimited === true && !sourceLimitations.length) sourceLimitations.push('Статистика WB предварительная и может не включать заказы без подтверждённой оплаты.');
+  if (coverage.sourceLimited === true && !sourceLimitations.length) sourceLimitations.push('Статистика WB предварительная и может не включать заказы без подтверждённой оплаты.', 'Отказы без достоверной даты подтверждения не учитываются.');
   const observationEnd = moscowDay(historyEnd) + DAY;
   const coverageStart = Math.max(start, moscowDay(coverage.start));
   const candidateIds = new Set();

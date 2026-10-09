@@ -59,10 +59,20 @@ test('identical duplicates accepted; conflicting immutable events rejected acros
   await assert.rejects(loadWbOrderOutcomes('secret',options([[order,{...order,isCancel:true,cancelDate:'2026-10-07T10:00:00'}],[]])),/duplicate_conflict/);
 });
 test('rejects malformed dates, future dates, unsafe identifiers and unsupported events',async()=>{
-  for(const patch of [{date:'2026-02-30T10:00:00'},{date:'2026-10-01T25:00:00'},{lastChangeDate:'2026-10-11T10:00:00'},{nmId:9007199254740992},{nmId:'42'},{srid:123},{isCancel:true,cancelDate:'2026-09-30T10:00:00'}]){
+  for(const patch of [{date:'2026-02-30T10:00:00'},{date:'2026-10-01T25:00:00'},{lastChangeDate:'2026-10-11T10:00:00'},{nmId:9007199254740992},{nmId:'42'},{srid:123}]){
     await assert.rejects(loadWbOrderOutcomes('secret',options([[{...order,...patch}],[]])),/invalid_response/);
   }
   await assert.rejects(loadWbOrderOutcomes('secret',options([[],[{...sale,saleID:'X001'}]])),/invalid_response/);
+});
+test('unconfirmed cancellation dates keep valid orders without invented refusal or replacement date',async()=>{
+  const cancellations=['0001-01-01T00:00:00','2026-09-30T10:00:00',undefined,'not-a-date','2026-10-11T10:00:00'];
+  const rows=cancellations.map((cancelDate,index)=>({...order,srid:`unknown-${index}`,isCancel:true,cancelDate}));
+  rows.push({...order,srid:'valid-refusal',isCancel:true,cancelDate:'2026-10-02T10:00:00'},order);
+  const result=await loadWbOrderOutcomes('secret',options([rows,[sale]]));
+  assert.equal(result.orders.length,7);
+  assert.deepEqual(result.events.map(e=>[e.srid,e.outcome]),[['valid-refusal','refused'],['00123','retained']]);
+  assert.ok(result.orders.every(o=>o.orderedAt==='2026-10-01T07:00:00.000Z'));
+  assert.ok(result.events.every(e=>e.outcomeAt!==null));
 });
 test('safe errors for HTTP, malformed bodies, size limits and network errors',async()=>{
   for(const [status,code] of [[401,'unauthorized'],[403,'unauthorized'],[402,'payment_required'],[429,'rate_limited'],[500,'outcomes_unavailable'],[400,'invalid_request']]){

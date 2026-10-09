@@ -57,6 +57,7 @@ test('source-limited complete coverage discloses partial quality without suppres
   assert.equal(result.historyEnd, '2026-08-31');
   assert.equal(result.quality, 'partial');
   assert.match(result.sourceLimitations[0], /без подтверждённой оплаты/);
+  assert.match(result.sourceLimitations[1], /Отказы без достоверной даты подтверждения не учитываются/);
   assert.equal(calculate([record('a')]).quality, 'complete');
 });
 
