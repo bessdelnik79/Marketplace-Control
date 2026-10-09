@@ -42,7 +42,7 @@ export function createDrilldownRoutes({listStores, getFinancialOverview, readPub
         limit:pageLimit, cursor:params.get(url.pathname === '/sku' ? 'cursor' : 'listCursor'),
         viewSort:params.get('viewSort')??'attention',viewFilter:params.get('viewFilter')??'all',hideZero:params.get('hideZero')==='1'};
       if (listState.search.length > 256 || !['result_asc','result_desc','revenue_asc','revenue_desc'].includes(listState.sort)) invalid();
-      if(!['attention','result_asc','result_desc','revenue_asc','revenue_desc','margin_asc','title_asc'].includes(listState.viewSort)||
+      if(!['attention',...['result','revenue','margin','title','wb','cost','buyout'].flatMap(key=>[`${key}_asc`,`${key}_desc`])].includes(listState.viewSort)||
         !['all','loss','near','profit','incomplete'].includes(listState.viewFilter)||params.has('hideZero')&&!['0','1'].includes(params.get('hideZero')))invalid();
       const options = {listState, selectedStoreId:store?.id ?? null, period:requested,
         today:new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())};
@@ -80,7 +80,11 @@ export function createDrilldownRoutes({listStores, getFinancialOverview, readPub
         data = await readPublishedSkuList(current.user_id, {...input, ...listState});
         renderer = skuListPage;
       } else if (url.pathname === '/sku/card') {
-        data = await readPublishedSkuCard(current.user_id, {...input, productId:params.get('productId')});
+        if(params.has('format')&&params.get('format')!=='json')invalid();
+        data = await readPublishedSkuCard(current.user_id, {...input, productId:params.get('productId'),...(params.get('format')==='json'?{includeWeekly:true}:{})});
+        if(params.get('format')==='json'){
+          send(res,200,JSON.stringify(data),{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});return true;
+        }
         renderer = skuCardPage;
       } else {
         if (params.has('taxBasis') && params.get('taxBasis') !== '1') invalid();

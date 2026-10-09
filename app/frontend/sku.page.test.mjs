@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { skuListPage, skuCardPage, skuSourcesPage } from './sku.page.mjs';
-import { compareAmounts, compareRows, isZeroAmount, marginPercent, productStatus, matchesFilter, csvCell } from './public/sku.js';
+import { compareAmounts, compareRows, isZeroAmount, marginPercent, productStatus, matchesFilter, csvCell, csvHeaders, csvRecord, cardContent, completeWeeks, formatMoney, buyoutFields, buyoutPercent } from './public/sku.js';
 
 const user={id:'viewer',stores:[]},stores=[{id:'store-one',name:'Магазин',connected:true}];
 const context={storeId:'store-one',publication:{source:'daily',id:'frozen-publication',publishedAt:'2026-10-01'},period:{start:'2026-09-01',end:'2026-09-30'},method:{version:'financial-result-v36'},quality:'partial',missingReasons:[{code:'operation_unclassified',scope:'store'}],resultBasis:'before_tax',coverage:{covered:{start:'2026-09-01',end:'2026-09-25'},complete:false},scope:{productIds:['product-one'],includesStoreResult:true},totals:{selectedProductsResultBeforeTax:'123.0000',storeLevelResultBeforeTax:'-8.0000',availableResultBeforeTax:'115.0000',availableResultAfterTax:null},update:{status:'running',availablePublicationId:'new-publication'}};
@@ -98,7 +98,7 @@ test('approved complete-scope SKU list has calendar, cards and full-row immutabl
   assert.match(calendar,/action="\/sku"/);assert.match(calendar,/name="periodStart" value="2026-09-01"/);assert.doesNotMatch(calendar,/publicationId|publicationSource/);
   const card=links(html,'/sku/card')[0];fixed(card);assert.equal(card.searchParams.get('viewFilter'),'loss');assert.equal(card.searchParams.get('hideZero'),'1');
   const back=links(html,'/overview').find(link=>!link.searchParams.has('publicationId')&&link.searchParams.has('periodStart'));assert.ok(back);
-  assert.match(html,/Выкуп/);assert.match(html,/Полной истории заказов пока нет/);assert.match(html,/100 завершённых/);assert.match(html,/14 дней/);
+  assert.match(html,/Выкуп/);assert.match(html,/Если история отсутствует или неполна/);assert.match(html,/100 завершённых/);assert.match(html,/14 дней/);
 });
 
 test('SKU exact presentation arithmetic and filters distinguish unavailable, zero and tiny loss',()=>{
@@ -122,4 +122,95 @@ test('reconciliation mismatch suppresses reliable-looking row amounts and margin
   const row={...item,quality:'complete',status:'profit',marginPercent:'10.0',metrics:{revenue:complete('100.0000'),availableResultAfterTax:complete('10.0000')}};
   const html=skuListPage(user,stores,{context:{...context,quality:'complete'},reconciliation:{status:'mismatch'},presentation:{quality:'unavailable',items:[row],summary:{skuResult:null,revenue:null,incompleteCount:1}}},options);
   assert.match(html,/data-status="incomplete"/);assert.match(html,/data-result=""/);assert.doesNotMatch(html,/10,0%|100,00 ₽|10,00 ₽|● Полные финансовые данные/);
+});
+
+test('complete SKU screen exposes native modal, every sortable heading and raw CSV fields',()=>{
+  const complete=amount=>({amount,availability:'complete'});
+  const row={...item,status:'loss',marginPercent:'-5.0',salesCount:14,returnsCount:2,reportIds:['report<&'],metrics:{revenue:complete('100.0000'),availableResultAfterTax:complete('-5.0000'),externalExpenses:complete('12.3456'),tax:complete('6.0000')}};
+  const html=skuListPage(user,stores,{context,presentation:{items:[row],summary:{skuResult:'-5.0000'}},storeLines:[]},options);
+  assert.match(html,/<dialog class="sku-product-dialog" data-sku-dialog aria-labelledby="sku-dialog-title"/);
+  assert.match(html,/data-sku-dialog-close aria-label="Закрыть карточку"/);
+  for(const key of ['title','revenue','wb','cost','margin','buyout','result'])assert.match(html,new RegExp(`data-sku-column="${key}"`));
+  for(const key of ['title','margin','wb','cost','buyout'])for(const direction of ['asc','desc'])assert.match(html,new RegExp(`value="${key}_${direction}"`));
+  assert.match(html,/data-margin="-5.0"/);assert.match(html,/data-external="12.3456"/);assert.match(html,/data-tax="6.0000"/);
+  assert.match(html,/data-sales="14"/);assert.match(html,/data-returns="2"/);assert.match(html,/data-reports="report&lt;&amp;"/);
+  assert.match(html,/Продажи: 14 · Возвраты: 2/);
+  assert.doesNotMatch(html.match(/<tbody>[\s\S]*?<\/tbody>/)[0],/\/sku\/sources/);
+});
+
+test('all numeric heading sorts preserve exact precision and keep unavailable values last',()=>{
+  for(const key of ['result','revenue','wb','cost','margin','buyout']){
+    assert.equal(compareRows({[key]:'9007199254740993.0001'},{[key]:'9007199254740993.0000'},`${key}_asc`),1);
+    assert.equal(compareRows({[key]:'-2.25'},{[key]:'-2.50'},`${key}_desc`),-1);
+    for(const direction of ['asc','desc'])assert.equal(compareRows({[key]:''},{[key]:'0'},`${key}_${direction}`),1);
+  }
+  assert.ok(compareRows({name:'Арбуз'},{name:'Яблоко'},'title_asc')<0);
+  assert.ok(compareRows({name:'Арбуз'},{name:'Яблоко'},'title_desc')>0);
+});
+
+test('complete CSV contract preserves known data and leaves unconfirmed order/promotion facts blank',()=>{
+  const record=csvRecord({name:'=danger',seller:'article',article:'123',status:'loss',revenue:'12.123456',wb:'1.25',cost:'20',external:'-1',tax:'2',result:'-10',margin:'-5.0',sales:'14',returns:'2',reports:'001, 002'});
+  assert.equal(csvHeaders.length,22);assert.equal(record.length,22);
+  assert.equal(record[3],'С убытком');assert.equal(record[4],'12.123456');assert.equal(record[6],'');assert.match(record[7],/Нет подтверждённых/);
+  assert.deepEqual(record.slice(8,15),['20','-1','2','-10','-5.0','14','2']);
+  assert.equal(record[15],'');assert.match(record[16],/Полной истории/);assert.deepEqual(record.slice(17,21),['','','','']);assert.equal(record[21],'001, 002');
+  assert.equal(csvCell(record[0]),'"\'=danger"');assert.equal(csvCell(record[9]),'"-1"');
+});
+
+test('modal is compact, escaped and shows signed categories, external expenses, tax, reports and complete weeks',()=>{
+  const complete=amount=>({amount,availability:'complete'});
+  const presentation={...item,status:'loss',quality:'complete',salesCount:14,returnsCount:2,reportIds:['001','<img onerror="bad">'],metrics:{revenue:complete('100'),wbExpenses:complete('25'),costOfGoods:complete('80'),externalExpenses:complete('0'),tax:complete('1'),availableResultAfterTax:complete('-6')},groups:[{categoryCode:'logistics',amountSigned:'-25',reportIds:['001']},{categoryCode:'daily_tax_range',amountSigned:'-1',reportIds:[]}],weeklyResults:[{start:'2026-09-07',end:'2026-09-13',result:'-6',quality:'complete'},{start:'2026-09-14',end:'2026-09-20',result:null,quality:'partial'},{start:'2026-09-28',end:'2026-10-04',result:'9',quality:'complete'}]};
+  const html=cardContent({context,item,presentation});
+  assert.match(html,/Логистика/);assert.match(html,/−25,00 ₽/);assert.match(html,/Налог за период/);assert.match(html,/Внешние расходы/);assert.match(html,/14 \/ 2/);assert.match(html,/−6,0%/);
+  assert.match(html,/№ 001/);assert.match(html,/&lt;img onerror=&quot;bad&quot;&gt;/);assert.doesNotMatch(html,/<img|\/sku\/sources|Методика|публикаци|04\.10\.2026/);
+  assert.match(html,/07\.09\.2026/);assert.match(html,/Нет полных данных/);assert.match(html,/Последние 100/);assert.match(html,/14 дней/);
+  assert.equal(formatMoney('9007199254740993.125'),'9 007 199 254 740 993,13 ₽');assert.equal(formatMoney('-0.005'),'−0,01 ₽');assert.equal(formatMoney(null),'—');
+});
+
+test('weekly chart excludes partial calendar edges for arbitrary ranges and retains unknown full weeks',()=>{
+  const weeks=[{start:'2026-08-31',end:'2026-09-06'},{start:'2026-09-07',end:'2026-09-13',result:null},{start:'2026-09-14',end:'2026-09-20'},{start:'2026-09-15',end:'2026-09-21'},{start:'2026-09-21',end:'2026-09-26'}];
+  assert.deepEqual(completeWeeks(weeks,{start:'2026-09-04',end:'2026-09-18'}),[weeks[1]]);
+  assert.deepEqual(completeWeeks(weeks,{start:'2026-09-08',end:'2026-09-12'}),[]);
+});
+
+test('modal fail-closed suppresses all amounts and weekly bars on reconciliation mismatch',()=>{
+  const complete=amount=>({amount,availability:'complete'});
+  const html=cardContent({context,reconciliation:{status:'mismatch'},presentation:{...item,quality:'complete',status:'profit',metrics:{revenue:complete('777.12'),availableResultAfterTax:complete('77.12')},groups:[{categoryCode:'logistics',amountSigned:'-77.12',reportIds:[]}],weeklyResults:[{start:'2026-09-07',end:'2026-09-13',quality:'complete',result:'777.12'}]}});
+  assert.match(html,/Неполные данные/);assert.doesNotMatch(html,/777,12 ₽|77,12 ₽|10,0%/);assert.match(html,/height:0%/);
+});
+
+test('period footer uses presentation report metadata and persisted store totals independent of product filters',()=>{
+  const shared={categoryCode:'storage',amountSigned:'-8.0000'};
+  const data={context:{...context,totals:{...context.totals,availableResultAfterTax:'90.0000'}},storeLines:[shared],presentation:{items:[],storeLines:[{...shared,reportIds:['001','<report>']}],summary:{skuResult:'98.0000'}}};
+  const html=skuListPage(user,stores,data,{...options,listState:{viewFilter:'loss',search:'missing'}});
+  const footer=html.match(/<section class="sku-period-footer"[\s\S]*?<details class="sku-technical">/)[0];
+  assert.match(footer,/№ 001, № &lt;report&gt;/);assert.match(footer,/−8,00 ₽/);assert.match(footer,/90,00 ₽/);assert.match(footer,/98,00 ₽/);assert.match(footer,/Входят в итог магазина/);assert.doesNotMatch(footer,/\/sku\/sources/);
+  const excluded=skuListPage(user,stores,{...data,context:{...data.context,scope:{...context.scope,includesStoreResult:false}}},options);
+  assert.match(excluded,/Общие строки магазина \(не включены\)/);assert.match(excluded,/Не включены в итог по методике/);
+});
+
+test('confirmed buyout is shown in row and card with sample details and dates under information only',()=>{
+  const buyout={status:'available',percent:66.66666666666666,sampleSize:3,counts:{retained:2,returned:1,refused:0},bounds:{start:'2025-09-30',cutoff:'2026-09-16',end:'2026-09-30'},sampleStart:'2026-08-01',sampleEnd:'2026-08-15',smallSample:true};
+  const fields=buyoutFields(buyout);
+  assert.equal(buyoutPercent(fields.buyout),'66,7%');assert.equal(fields.buyoutreason,'');
+  const row={...item,buyout};
+  const html=skuListPage(user,stores,{context,presentation:{items:[row],summary:{}},storeLines:[]},options);
+  assert.match(html,/data-buyout="66\.66666666666666"/);assert.match(html,/data-samplesize="3"/);assert.match(html,/data-retained="2"/);assert.match(html,/data-returned="1"/);assert.match(html,/data-refused="0"/);assert.match(html,/66,7%/);
+  const modal=cardContent({context,item:row,presentation:row});
+  assert.match(modal,/<strong>66,7%<\/strong>/);assert.match(modal,/3 завершённых заказов · мало данных/);assert.match(modal,/ⓘ Как рассчитан/);
+  const info=modal.match(/<details class="sku-card-buyout">[\s\S]*?<\/details>/)[0];
+  assert.match(info,/30\.09\.2025 — 16\.09\.2026/);assert.match(info,/2 из 3 заказов/);assert.match(info,/Возвраты после выкупа: 1; отказы и отмены: 0/);assert.match(info,/01\.08\.2026 — 15\.08\.2026/);
+  assert.doesNotMatch(modal.replace(info,''),/30\.09\.2025|16\.09\.2026|01\.08\.2026|15\.08\.2026/);
+  const record=csvRecord({...fields});assert.deepEqual(record.slice(15,21),['66.66666666666666','','3','2','1','0']);
+});
+
+test('unavailable and inconsistent buyout retain explicit reason without zero or fictitious sample',()=>{
+  const unknown={status:'unavailable',reason:'history_missing',percent:null,sampleSize:0,bounds:{start:'2025-09-30',cutoff:'2026-09-16',end:'2026-09-30'}};
+  const fields=buyoutFields(unknown);
+  assert.equal(fields.buyout,'');assert.equal(fields.samplesize,'');assert.equal(fields.retained,'');assert.match(fields.buyoutreason,/Нет индивидуальной истории/);assert.equal(buyoutPercent(fields.buyout),'—');
+  const modal=cardContent({context,item:{...item,buyout:unknown}});
+  assert.match(modal,/Расчёт недоступен/);assert.match(modal,/ⓘ Почему недоступен/);assert.match(modal,/Нет индивидуальной истории/);assert.doesNotMatch(modal,/<strong>0,0%|(?<!\d)0 завершённых заказов/);
+  assert.deepEqual(csvRecord(fields).slice(17,21),['','','','']);
+  const invalid=buyoutFields({status:'available',percent:75,sampleSize:4,counts:{retained:3,returned:1,refused:1}});
+  assert.equal(invalid.buyout,'');assert.match(invalid.buyoutreason,/без корректных/);assert.equal(buyoutPercent('NaN'),'—');
 });

@@ -1,5 +1,6 @@
 import { pool as defaultPool } from '../../infrastructure/database/client.mjs';
 import {buildSkuPresentation} from './sku-presentation.mjs';
+import {loadSkuSourceMetadata,completeSkuWeeks} from './sku-source-metadata.mjs';
 import {tariffPublicationAllowed} from '../billing/tariff-access.mjs';
 import { aggregateDailyPublicationPeriod, aggregatePublishedPeriodEnvelopes, loadPublishedPeriodEnvelopes } from './calculation.repository.mjs';
 import { buildFinancialPeriodOverview, financialResultIncludesStore, validateCalendarPeriod } from '../overview/financial-overview.mjs';
@@ -22,8 +23,10 @@ function safeImage(value,historical){
 }
 function unavailable(periodStart,periodEnd,reasons){return{period_start:periodStart,period_end:periodEnd,quality:'unavailable',missing_reasons:reasons,
   totals:null,lines:[],covered_period:null,taxReference:null};}
-function publicGroup({lineRefs,...group}){return group;}
+function publicGroup({lineRefs,reportIds,...group}){return group;}
 function publicItem(item){return{...item,groups:item.groups.map(publicGroup)};}
+function presentationGroup(group){return {...publicGroup(group),reportIds:group.reportIds??[]};}
+function presentationItem(item){return {...publicItem(item),groups:item.groups.map(presentationGroup)};}
 
 async function legacySnapshot(client,businessId,input){
   const publication=(await client.query(`select p.id,p.created_at as published_at,r.id as run_id,r.request_id,
@@ -79,7 +82,7 @@ async function dailySnapshot(client,businessId,input){
   const productIds=original.product_ids;
   const compatible=generations.every(row=>row.parser_method_version_id===publication.parser_method_version_id&&
     row.result_method_version_id===publication.result_method_version_id&&JSON.stringify(row.product_ids)===JSON.stringify(productIds));
-  let envelope,lines=[],taxFacts=[];
+  let envelope,lines=[],taxFacts=[],dailyInputs=null;
   if(!compatible)envelope=unavailable(input.periodStart,input.periodEnd,['drilldown_publication_incompatible']);
   else{
     const args=[businessId,input.storeId,input.publicationId,input.periodStart,input.periodEnd];
@@ -101,6 +104,7 @@ async function dailySnapshot(client,businessId,input){
       where mapped.business_id=$1 and mapped.store_id=$2 and mapped.publication_id=$3 and mapped.accounting_date between $4 and $5
       order by fact.accounting_date,fact.product_id,fact.id`,args)).rows;
     envelope=aggregateDailyPublicationPeriod(input.periodStart,input.periodEnd,{days,lines:rows,reasons,taxFacts:facts});
+    dailyInputs={days,lines:rows,reasons,taxFacts:facts};
     if(envelope.quality!=='unavailable'){
       lines=rows.map(row=>({lineRef:{source:'daily',generationId:row.generation_id,accountingDate:row.accounting_date,dailyResultId:row.id},
         scope:row.scope==='store'?'store':'selected_product',productId:row.product_id,variantId:row.variant_id,accountingDate:row.accounting_date,
@@ -115,7 +119,7 @@ async function dailySnapshot(client,businessId,input){
     method:{id:publication.result_method_version_id,code:publication.code,version:publication.implementation_version,
       parserMethodVersionId:publication.parser_method_version_id,resultMethodVersionId:publication.result_method_version_id,
       generations:generations.map(row=>({generationId:row.id,parserMethodVersionId:row.parser_method_version_id,resultMethodVersionId:row.result_method_version_id}))},
-    productIds,envelope,lines,taxFacts};
+    productIds,envelope,lines,taxFacts,dailyInputs};
 }
 
 async function updateState(client,businessId,input){
@@ -183,19 +187,37 @@ export function createPublishedDrilldownRepository({pool=defaultPool}={}){
       for(const item of model.items)for(const group of item.groups){
         if(publication.source==='legacy'&&group.categoryCode==='estimated_usn_tax')group.taxBasisAvailable=true;
       }
-      const result=await action({client,input,context,model,lines,taxFacts,businessId,overviewEnvelope});
+      const result=await action({client,input,context,model,lines,taxFacts,businessId,overviewEnvelope,snapshot});
       await client.query('commit');return result;
     }catch(error){await client.query('rollback');throw error;}finally{client.release();}
   }
-  const readPublishedSkuList=(userId,input)=>read(userId,input,({model,input})=>{
+  const readPublishedSkuList=(userId,input)=>read(userId,input,async({client,context,model,input,businessId})=>{
+    await loadSkuSourceMetadata(client,{context,model,businessId});
     const page=paginatePublishedSkuList(model,input);
-    return{...page,items:page.items.map(publicItem),storeLines:page.storeLines.map(publicGroup),presentation:buildSkuPresentation({...model,items:model.items.map(publicItem)})};
+    return{...page,items:page.items.map(publicItem),storeLines:page.storeLines.map(publicGroup),presentation:{...buildSkuPresentation({...model,items:model.items.map(presentationItem)}),storeLines:model.storeLines.map(presentationGroup)}};
   });
   const readPublishedSkuCard=(userId,input)=>{
     uuid(input?.productId);
-    return read(userId,input,({model})=>{
+    return read(userId,input,async({client,context,model,businessId,snapshot:periodSnapshot})=>{
+      await loadSkuSourceMetadata(client,{context,model,businessId});
       const item=model.items.find(row=>row.productId===input.productId.toLowerCase());if(!item)invalid('drilldown_not_found');
-      return{context:model.context,item:publicItem(item),storeLines:model.storeLines.map(publicGroup),reconciliation:model.reconciliation};
+      const presentation=buildSkuPresentation({...model,items:[presentationItem(item)]}).items[0];
+      if(input.includeWeekly){
+        presentation.weeklyResults=[];
+        for(const period of completeSkuWeeks(context.period)){
+          const within=row=>row.accounting_date>=period.start&&row.accounting_date<=period.end;
+          const snapshot=context.publication.source==='daily'?{...periodSnapshot,
+            envelope:periodSnapshot.dailyInputs?aggregateDailyPublicationPeriod(period.start,period.end,Object.fromEntries(Object.entries(periodSnapshot.dailyInputs).map(([key,rows])=>[key,rows.filter(within)]))):unavailable(period.start,period.end,periodSnapshot.envelope.missing_reasons),
+            lines:periodSnapshot.lines.filter(row=>row.accountingDate>=period.start&&row.accountingDate<=period.end),
+            taxFacts:periodSnapshot.taxFacts.filter(row=>row.accountingDate>=period.start&&row.accountingDate<=period.end)}:
+            await legacySnapshot(client,businessId,{...input,periodStart:period.start,periodEnd:period.end});
+          const weekContext={...context,period,quality:snapshot.envelope.quality,totals:snapshot.envelope.totals};
+          const weekModel=buildPublishedDrilldownModel({context:weekContext,envelope:{...snapshot.envelope,publication_id:context.publication.id,method_version:snapshot.method.version,scope:'selected_products',coverage:{productIds:snapshot.productIds},period_start:period.start,period_end:period.end},products:model.items,lines:snapshot.lines,taxFacts:snapshot.taxFacts});
+          const weekItem=buildSkuPresentation(weekModel).items.find(row=>row.productId===item.productId);
+          presentation.weeklyResults.push({...period,result:weekModel.reconciliation.status==='mismatch'||weekItem?.metrics.availableResultAfterTax.availability!=='complete'?null:weekItem.metrics.availableResultAfterTax.amount,quality:weekModel.reconciliation.status==='mismatch'?'unavailable':weekItem?.quality??'unavailable'});
+        }
+      }
+      return{context:model.context,item:publicItem(item),presentation,storeLines:model.storeLines.map(publicGroup),reconciliation:model.reconciliation};
     });
   };
   const readSituations=(userId,input,confirmAbsence=false)=>read(userId,input,async({client,model,context,overviewEnvelope})=>{

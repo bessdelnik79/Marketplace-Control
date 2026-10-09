@@ -31,6 +31,19 @@ test('a calendar period without a publication resolves that exact range and pres
   assert.equal(canonical.searchParams.get('publicationId'),'august-publication');
   assert.equal(canonical.searchParams.get('periodEnd'),'2026-08-31');assert.equal(canonical.searchParams.get('viewFilter'),'near');assert.equal(canonical.searchParams.get('hideZero'),'1');
 });
+test('modal JSON reads the pinned authorized card with complete weeks and remains private',async()=>{
+  const s=setup();await s.run(route('/sku/card',{productId:'product',format:'json'}));
+  assert.equal(s.calls[0].input.includeWeekly,true);assert.equal(s.calls[0].input.publicationId,base.publicationId);
+  assert.equal(s.response.status,200);assert.equal(s.response.headers['content-type'],'application/json; charset=utf-8');
+  assert.equal(s.response.headers['cache-control'],'no-store');assert.ok(JSON.parse(s.response.body));
+  const denied=setup({listStores:async()=>[]});await denied.run(route('/sku/card',{productId:'product',format:'json'}));assert.equal(denied.response.status,404);assert.equal(denied.calls.length,0);
+});
+test('every clickable demo column sort survives a pinned card request',async()=>{
+  for(const key of ['result','revenue','margin','title','wb','cost','buyout'])for(const direction of ['asc','desc']){
+    const s=setup(),viewSort=`${key}_${direction}`;await s.run(route('/sku/card',{productId:'product',format:'json',viewSort}));
+    assert.equal(s.response.status,200);assert.equal(s.calls[0].name,'card');
+  }
+});
 test('display state is validated and survives card return without resolving another publication',async()=>{
   const s=setup();await s.run(route('/sku/card',{productId:'product',viewSort:'title_asc',viewFilter:'loss',hideZero:'1'}));
   assert.equal(s.response.body.options.listState.viewFilter,'loss');assert.equal(s.response.body.options.listState.hideZero,true);

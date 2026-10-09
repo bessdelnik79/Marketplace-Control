@@ -22,3 +22,9 @@ test('mismatched reconciliation suppresses summary and reliable classifications'
   const source=model([item('a','10.0000')]);source.reconciliation.status='mismatch';
   const result=buildSkuPresentation(source);assert.equal(result.items[0].status,'incomplete');assert.equal(result.items[0].marginPercent,null);assert.equal(result.summary.skuResult,null);assert.equal(result.summary.revenue,null);
 });
+test('buyout presentation uses the demo confirmed-order method per SKU and exposes missing history',()=>{
+  const source=model([item('a','10.0000'),item('b','10.0000')]);source.context.period={start:'2026-08-01',end:'2026-08-31'};
+  assert.equal(buildSkuPresentation(source).items[0].buyout.reason,'history_missing');
+  source.orderOutcomeHistory={coverage:{start:'2025-08-31',end:'2026-08-31',complete:true},records:[{sku:'a',srid:'order-a',orderedAt:'2026-08-01',outcomeAt:'2026-08-10',outcome:'retained'}]};
+  const result=buildSkuPresentation(source);assert.equal(result.items[0].buyout.percent,100);assert.equal(result.items[0].buyout.sampleSize,1);assert.equal(result.items[1].buyout.reason,'no_confirmed_orders');
+});
