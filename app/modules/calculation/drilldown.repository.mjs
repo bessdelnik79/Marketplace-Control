@@ -1,6 +1,7 @@
 import { pool as defaultPool } from '../../infrastructure/database/client.mjs';
 import {buildSkuPresentation} from './sku-presentation.mjs';
 import {loadSkuSourceMetadata,completeSkuWeeks} from './sku-source-metadata.mjs';
+import {loadSkuOrderHistories} from './sku-order-history.repository.mjs';
 import {tariffPublicationAllowed} from '../billing/tariff-access.mjs';
 import { aggregateDailyPublicationPeriod, aggregatePublishedPeriodEnvelopes, loadPublishedPeriodEnvelopes } from './calculation.repository.mjs';
 import { buildFinancialPeriodOverview, financialResultIncludesStore, validateCalendarPeriod } from '../overview/financial-overview.mjs';
@@ -193,6 +194,7 @@ export function createPublishedDrilldownRepository({pool=defaultPool}={}){
   }
   const readPublishedSkuList=(userId,input)=>read(userId,input,async({client,context,model,input,businessId})=>{
     await loadSkuSourceMetadata(client,{context,model,businessId});
+    model.orderOutcomeHistories=await loadSkuOrderHistories(client,{businessId,storeId:input.storeId,periodEnd:context.period.end,productIds:model.items.map(item=>item.productId)});
     const page=paginatePublishedSkuList(model,input);
     return{...page,items:page.items.map(publicItem),storeLines:page.storeLines.map(publicGroup),presentation:{...buildSkuPresentation({...model,items:model.items.map(presentationItem)}),storeLines:model.storeLines.map(presentationGroup)}};
   });
@@ -201,6 +203,7 @@ export function createPublishedDrilldownRepository({pool=defaultPool}={}){
     return read(userId,input,async({client,context,model,businessId,snapshot:periodSnapshot})=>{
       const item=model.items.find(row=>row.productId===input.productId.toLowerCase());if(!item)invalid('drilldown_not_found');
       await loadSkuSourceMetadata(client,{context,model:{items:[item],storeLines:[]},businessId});
+      model.orderOutcomeHistories=await loadSkuOrderHistories(client,{businessId,storeId:input.storeId,periodEnd:context.period.end,productIds:[item.productId]});
       const presentation=buildSkuPresentation({...model,items:[presentationItem(item)]}).items[0];
       if(input.includeWeekly){
         presentation.weeklyResults=[];

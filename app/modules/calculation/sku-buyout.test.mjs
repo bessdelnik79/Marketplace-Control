@@ -22,12 +22,42 @@ test('latest 100 are sorted by order date, not outcome date', () => {
   assert.equal(result.sampleStart, '2026-08-01');
 });
 
-test('100 confirmed orders allow complete shorter coverage; 99 do not', () => {
-  const coverage = { start: '2026-07-01', end: '2026-08-31', complete: true };
+test('continuous shorter coverage accepts 1, 29, 30, 99 and 100 confirmed orders with limits', () => {
+  const coverage = { start: '2026-07-01', end: '2026-08-31', complete: true, observedAt: '2026-09-01T12:00:00Z' };
   const rows = Array.from({ length: 100 }, (_, i) => record(String(i)));
-  assert.equal(calculate(rows, coverage).status, 'available');
-  assert.equal(calculate(rows.slice(1), coverage).reason, 'history_incomplete');
+  for (const size of [1, 29, 30, 99, 100]) {
+    const result = calculate(rows.slice(0, size), coverage);
+    assert.equal(result.status, 'available');
+    assert.equal(result.sampleSize, size);
+    assert.equal(result.percent, 100);
+    assert.equal(result.smallSample, size < 30);
+    assert.equal(result.quality, 'partial');
+    assert.equal(result.historyLimited, true);
+    assert.equal(result.historyStart, coverage.start);
+    assert.equal(result.historyEnd, coverage.end);
+    assert.equal(result.observedAt, coverage.observedAt);
+  }
   assert.equal(calculate(rows, { ...coverage, complete: false }).reason, 'history_incomplete');
+});
+
+test('outcomes stop at available coverage end; history before cutoff remains unavailable', () => {
+  const coverage = { start: '2026-07-01', end: '2026-08-20', complete: true };
+  const result = calculate([record('a'), record('a', 'returned', { outcomeAt: '2026-08-21' }), record('late', 'retained', { outcomeAt: '2026-08-21' })], coverage);
+  assert.equal(result.sampleSize, 1);
+  assert.equal(result.percent, 100);
+  assert.equal(result.historyEnd, '2026-08-20');
+  assert.equal(result.quality, 'partial');
+  assert.equal(calculate([record('a')], { ...coverage, end: '2026-08-16' }).reason, 'history_incomplete');
+});
+
+test('source-limited complete coverage discloses partial quality without suppressing confirmed zero', () => {
+  const result = calculate([record('a', 'refused')], { start: '2025-08-01', end: '2026-09-01', complete: true, sourceLimited: true });
+  assert.equal(result.percent, 0);
+  assert.equal(result.historyStart, '2025-08-31');
+  assert.equal(result.historyEnd, '2026-08-31');
+  assert.equal(result.quality, 'partial');
+  assert.match(result.sourceLimitations[0], /без подтверждённой оплаты/);
+  assert.equal(calculate([record('a')]).quality, 'complete');
 });
 
 test('calendar year and cutoff include their boundary days, exclude recent orders', () => {

@@ -17,7 +17,7 @@ export function buildSkuPresentation(model){
       }
       status=r<0n?'loss':r===0n?'zero':v>0n&&r*100n<=v*5n?'near':'profit';
     }
-    return {...item,status,marginPercent,buyout:calculateBuyout({sku:item.productId,periodEnd:model.context.period?.end,history:model.orderOutcomeHistory})};
+    return {...item,status,marginPercent,buyout:calculateBuyout({sku:item.productId,periodEnd:model.context.period?.end,history:model.orderOutcomeHistories?.[item.productId]??model.orderOutcomeHistory})};
   });
   const sumMetric=key=>mismatch||!items.length||items.some(item=>amount(item,key)===null||item.metrics?.[key]?.availability!=='complete')?null:formatScale4Money(items.reduce((total,item)=>total+parseScale4Money(amount(item,key)),0n));
   const counts=Object.fromEntries(['loss','near','profit','incomplete','zero'].map(status=>[`${status}Count`,items.filter(item=>item.status===status).length]));

@@ -269,3 +269,19 @@ test('unavailable and inconsistent buyout retain explicit reason without zero or
   const invalid=buyoutFields({status:'available',percent:75,sampleSize:4,counts:{retained:3,returned:1,refused:1}});
   assert.equal(invalid.buyout,'');assert.match(invalid.buyoutreason,/без корректных/);assert.equal(buyoutPercent('NaN'),'—');
 });
+
+test('available limited history retains percentage and discloses coverage and source in card and CSV',()=>{
+  const buyout={status:'available',percent:100,sampleSize:1,counts:{retained:1,returned:0,refused:0},bounds:{start:'2025-09-30',cutoff:'2026-09-16',end:'2026-09-30'},sampleStart:'2026-08-01',sampleEnd:'2026-08-01',smallSample:true,historyStart:'2026-07-01',historyEnd:'2026-09-20',observedAt:'2026-09-21T12:00:00Z',historyLimited:true,quality:'partial',sourceLimitations:['Статистика WB может не включать заказы без подтверждённой оплаты.']};
+  const fields=buyoutFields(buyout),modal=cardContent({context,item:{...item,buyout}});
+  assert.equal(fields.buyout,'100');
+  assert.match(fields.buyoutreason,/Ограниченная история/);
+  assert.match(fields.buyoutreason,/без подтверждённой оплаты/);
+  assert.match(modal,/<strong>100,0%<\/strong>/);
+  assert.match(modal,/Доступная история: 01\.07\.2026 — 20\.09\.2026/);
+  assert.match(modal,/Исходы известны на 20\.09\.2026/);
+  assert.match(modal,/Проверено: 2026-09-21T12:00:00Z/);
+  assert.match(modal,/Ограниченная история/);
+  assert.doesNotMatch(modal,/Расчёт недоступен|все доступные за год|<strong>0,0%/);
+  assert.equal(csvRecord(fields).length,22);
+  assert.equal(csvRecord(fields)[16],fields.buyoutreason);
+});

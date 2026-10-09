@@ -54,7 +54,7 @@ export const promotionReason = 'Нет подтверждённых данных
 export const buyoutReason = 'Полной истории завершённых заказов этой SKU пока нет';
 export const buyoutReasons = {
   history_missing: 'Нет индивидуальной истории заказов и подтверждённых исходов.',
-  history_incomplete: 'История загружена не полностью: нельзя подтвердить последние 100 завершённых заказов или весь год поиска.',
+  history_incomplete: 'В доступной истории есть пробелы или она не достигает даты отбора заказов.',
   invalid_request: 'Не указан товар или корректная дата периода.',
   invalid_record: 'В истории есть записи без корректных идентификаторов или дат.',
   identity_conflict: 'Один идентификатор заказа связан с разными товарами или датами.',
@@ -66,12 +66,16 @@ export function buyoutFields(buyout) {
   const available = buyout?.status === 'available' && Number.isFinite(buyout.percent) && buyout.percent >= 0 && buyout.percent <= 100 && Number.isInteger(buyout.sampleSize) && buyout.sampleSize > 0 && buyout.sampleSize <= 100 && ['retained', 'returned', 'refused'].every(key => Number.isInteger(counts?.[key]) && counts[key] >= 0) && counts.retained + counts.returned + counts.refused === buyout.sampleSize;
   return {
     buyout: available ? String(buyout.percent) : '',
-    buyoutreason: available ? '' : buyout?.status === 'available' ? buyoutReasons.invalid_record : buyoutReasons[buyout?.reason] ?? buyoutReason,
+    buyoutreason: available ? buyoutWarning(buyout) : buyout?.status === 'available' ? buyoutReasons.invalid_record : buyoutReasons[buyout?.reason] ?? buyoutReason,
     samplesize: available ? String(buyout.sampleSize) : '',
     retained: available ? String(counts.retained) : '',
     returned: available ? String(counts.returned) : '',
     refused: available ? String(counts.refused) : ''
   };
+}
+function buyoutWarning(buyout) {
+  const limitations = Array.isArray(buyout?.sourceLimitations) ? buyout.sourceLimitations.filter(value => typeof value === 'string' && value.trim()) : [];
+  return [buyout?.historyLimited ? 'Ограниченная история: показатель рассчитан по доступным подтверждённым заказам.' : '', ...limitations].filter(Boolean).join(' ');
 }
 export function buyoutPercent(value) {
   const amount = typeof value === 'string' && value !== '' ? Number(value) : NaN;
@@ -79,7 +83,7 @@ export function buyoutPercent(value) {
 }
 function buyoutExplanation(buyout, fields) {
   const bounds = buyout?.bounds;
-  return `<p>Последние 100 завершённых заказов конкретной SKU: выкупы, возвраты и отказы. Если их меньше — все доступные за год. Выкуп — доля товаров, оставленных покупателями. Заказы последних 14 дней исключены; продажа с последующим возвратом считается одним заказом. Будущие события не изменяют исторический показатель.</p>${bounds ? `<p>Глубина поиска: ${dateLabel(bounds.start)} — ${dateLabel(bounds.cutoff)}. Исходы известны на ${dateLabel(bounds.end)}. Даты определяются по московскому времени.</p>` : ''}${fields.buyout === '' ? `<p>${escapeHtml(fields.buyoutreason)}</p>` : `<p>${escapeHtml(fields.retained)} из ${escapeHtml(fields.samplesize)} заказов оставлены покупателями. Возвраты после выкупа: ${escapeHtml(fields.returned)}; отказы и отмены: ${escapeHtml(fields.refused)}.</p><p>Даты заказов выборки: ${dateLabel(buyout.sampleStart)} — ${dateLabel(buyout.sampleEnd)}.${buyout.smallSample ? ' Мало данных: менее 30 заказов.' : ''}</p>`}`;
+  return `<p>Последние 100 завершённых заказов конкретной SKU: выкупы, возвраты и отказы. Если их меньше — все подтверждённые заказы доступной истории в пределах года. Выкуп — доля товаров, оставленных покупателями. Заказы последних 14 дней исключены; продажа с последующим возвратом считается одним заказом. Будущие события не изменяют исторический показатель.</p>${bounds ? `<p>Глубина поиска: ${dateLabel(bounds.start)} — ${dateLabel(bounds.cutoff)}. Исходы известны на ${dateLabel(buyout.historyEnd ?? bounds.end)}. Даты определяются по московскому времени.</p>` : ''}${buyout?.historyStart && buyout?.historyEnd ? `<p>Доступная история: ${dateLabel(buyout.historyStart)} — ${dateLabel(buyout.historyEnd)}.${buyout.observedAt ? ` Проверено: ${escapeHtml(buyout.observedAt)}.` : ''}</p>` : ''}${fields.buyout === '' ? `<p>${escapeHtml(fields.buyoutreason)}</p>` : `<p>${escapeHtml(fields.retained)} из ${escapeHtml(fields.samplesize)} заказов оставлены покупателями. Возвраты после выкупа: ${escapeHtml(fields.returned)}; отказы и отмены: ${escapeHtml(fields.refused)}.</p><p>Даты заказов выборки: ${dateLabel(buyout.sampleStart)} — ${dateLabel(buyout.sampleEnd)}.${buyout.smallSample ? ' Мало данных: менее 30 заказов.' : ''}</p>${fields.buyoutreason ? `<p>${escapeHtml(fields.buyoutreason)}</p>` : ''}`}`;
 }
 export const csvHeaders = ['Товар', 'Артикул продавца', 'Артикул WB', 'Статус', 'Выручка, ₽', 'Расходы WB, ₽', 'Продвижение, ₽', 'Причина отсутствия продвижения', 'Себестоимость, ₽', 'Внешние расходы, ₽', 'Налог, ₽', 'Результат, ₽', 'Маржа, %', 'Продажи, шт.', 'Возвраты, шт.', 'Выкуп, %', 'Причина отсутствия выкупа', 'Размер выборки заказов', 'Выкуплены и оставлены', 'Возвраты после выкупа', 'Отказы и отмены', 'Финансовые отчёты'];
 export function csvRecord(row) {

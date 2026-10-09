@@ -2096,6 +2096,124 @@
 
 - `PRIMARY KEY (version)`
 
+## sku_order_batches
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| id | uuid | нет | — |
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| observed_at | timestamp with time zone | нет | — |
+| credential_generation | bigint | нет | — |
+| source_from | date | нет | — |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
+- `UNIQUE (business_id, store_id, id)`
+- `CHECK ((credential_generation >= 0))`
+- `PRIMARY KEY (id)`
+
+## sku_order_coverage
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| product_id | uuid | нет | — |
+| coverage_start | date | нет | — |
+| coverage_end | date | нет | — |
+| batch_id | uuid | нет | — |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id, batch_id) REFERENCES mc.sku_order_batches(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.products(business_id, store_id, id) DEFERRABLE`
+- `CHECK ((coverage_end >= coverage_start))`
+- `PRIMARY KEY (business_id, store_id, product_id)`
+
+## sku_order_events
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| source_key | text | нет | — |
+| changed_at | timestamp with time zone | нет | — |
+| srid | text | нет | — |
+| product_id | uuid | нет | — |
+| outcome | text | нет | — |
+| outcome_at | timestamp with time zone | нет | — |
+| batch_id | uuid | нет | — |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id, batch_id) REFERENCES mc.sku_order_batches(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.products(business_id, store_id, id) DEFERRABLE`
+- `CHECK ((outcome = ANY (ARRAY['retained'::text, 'returned'::text, 'refused'::text])))`
+- `PRIMARY KEY (business_id, store_id, source_key, changed_at)`
+- `CHECK (((length(source_key) >= 1) AND (length(source_key) <= 1024)))`
+- `CHECK (((length(srid) >= 1) AND (length(srid) <= 512)))`
+
+## sku_order_identities
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| srid | text | нет | — |
+| product_id | uuid | нет | — |
+| ordered_at | timestamp with time zone | нет | — |
+| batch_id | uuid | нет | — |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id, batch_id) REFERENCES mc.sku_order_batches(business_id, store_id, id) DEFERRABLE`
+- `FOREIGN KEY (business_id, store_id, product_id) REFERENCES mc.products(business_id, store_id, id) DEFERRABLE`
+- `PRIMARY KEY (business_id, store_id, srid)`
+- `CHECK (((length(srid) >= 1) AND (length(srid) <= 512)))`
+
+## sku_order_source_objects
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| batch_id | uuid | нет | — |
+| part_no | integer | нет | — |
+| endpoint | text | нет | — |
+| storage_key | text | нет | — |
+| checksum | text | нет | — |
+| byte_size | bigint | нет | — |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id, batch_id) REFERENCES mc.sku_order_batches(business_id, store_id, id) DEFERRABLE`
+- `CHECK ((byte_size > 0))`
+- `CHECK ((checksum ~ '^[0-9a-f]{64}$'::text))`
+- `CHECK ((endpoint = ANY (ARRAY['orders'::text, 'sales'::text])))`
+- `CHECK ((part_no >= 0))`
+- `PRIMARY KEY (business_id, store_id, batch_id, part_no)`
+
+## sku_order_sync_state
+
+| Поле | Тип | NULL | По умолчанию |
+|---|---|---|---|
+| business_id | uuid | нет | — |
+| store_id | uuid | нет | — |
+| orders_cursor | text | да | — |
+| sales_cursor | text | да | — |
+| scope_signature | text | да | — |
+| next_run_at | timestamp with time zone | нет | now() |
+| observed_at | timestamp with time zone | да | — |
+| last_error_code | text | да | — |
+| updated_at | timestamp with time zone | нет | now() |
+
+Ограничения и связи:
+
+- `FOREIGN KEY (business_id, store_id) REFERENCES mc.stores(business_id, id) DEFERRABLE`
+- `PRIMARY KEY (store_id)`
+
 ## source_documents
 
 | Поле | Тип | NULL | По умолчанию |

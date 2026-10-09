@@ -33,10 +33,15 @@ export function calculateBuyout({ sku, periodEnd, history } = {}) {
   if (!bounds || !identity(sku)) return unavailable('invalid_request');
   if (!history || !Array.isArray(history.records)) return unavailable('history_missing');
   const coverage = history.coverage;
-  if (coverage?.complete !== true || day(coverage.start) === null || day(coverage.end) === null || coverage.start > bounds.cutoff || coverage.end < bounds.end) return unavailable('history_incomplete');
+  if (coverage?.complete !== true || day(coverage.start) === null || day(coverage.end) === null || coverage.start > bounds.cutoff || coverage.end < bounds.cutoff || coverage.start > coverage.end) return unavailable('history_incomplete');
   const start = moscowDay(bounds.start);
   const cutoffEnd = moscowDay(bounds.cutoff) + DAY;
-  const observationEnd = moscowDay(bounds.end) + DAY;
+  const historyStart = coverage.start > bounds.start ? coverage.start : bounds.start;
+  const historyEnd = coverage.end < bounds.end ? coverage.end : bounds.end;
+  const historyLimited = coverage.start > bounds.start || coverage.end < bounds.end || coverage.sourceLimited === true;
+  const sourceLimitations = Array.isArray(coverage.sourceLimitations) ? coverage.sourceLimitations.filter(value => typeof value === 'string' && value.trim()) : [];
+  if (coverage.sourceLimited === true && !sourceLimitations.length) sourceLimitations.push('Статистика WB предварительная и может не включать заказы без подтверждённой оплаты.');
+  const observationEnd = moscowDay(historyEnd) + DAY;
   const coverageStart = Math.max(start, moscowDay(coverage.start));
   const candidateIds = new Set();
   for (const record of history.records) {
@@ -77,9 +82,8 @@ export function calculateBuyout({ sku, periodEnd, history } = {}) {
     if (outcome) eligible.push({ ...order, outcome });
   }
   const sample = eligible.sort((a, b) => b.orderedAt - a.orderedAt || a.srid.localeCompare(b.srid)).slice(0, 100);
-  if (sample.length < 100 && coverage.start > bounds.start) return unavailable('history_incomplete');
   if (!sample.length) return unavailable('no_confirmed_orders');
   const counts = { retained: 0, returned: 0, refused: 0 };
   sample.forEach((order) => { counts[order.outcome] += 1; });
-  return { status: 'available', reason: null, bounds, percent: counts.retained / sample.length * 100, sampleSize: sample.length, counts, sampleStart: moscowDate(sample.at(-1).orderedAt), sampleEnd: moscowDate(sample[0].orderedAt), smallSample: sample.length < 30 };
+  return { status: 'available', reason: null, bounds, percent: counts.retained / sample.length * 100, sampleSize: sample.length, counts, sampleStart: moscowDate(sample.at(-1).orderedAt), sampleEnd: moscowDate(sample[0].orderedAt), smallSample: sample.length < 30, historyStart, historyEnd, observedAt: coverage.observedAt ?? null, historyLimited, quality: historyLimited ? 'partial' : 'complete', sourceLimitations };
 }
