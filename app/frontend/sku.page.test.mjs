@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { skuListPage, skuCardPage, skuSourcesPage } from './sku.page.mjs';
-import { compareAmounts, compareRows, isZeroAmount, marginPercent, productStatus, matchesFilter, csvCell, csvHeaders, csvRecord, cardContent, completeWeeks, formatMoney, buyoutFields, buyoutPercent } from './public/sku.js';
+import { compareAmounts, compareRows, isZeroAmount, marginPercent, productStatus, matchesFilter, csvCell, csvHeaders, csvRecord, cardContent, completeWeeks, formatMoney, buyoutFields, buyoutPercent, createCardLoader } from './public/sku.js';
 
 const user={id:'viewer',stores:[]},stores=[{id:'store-one',name:'Магазин',connected:true}];
 const context={storeId:'store-one',publication:{source:'daily',id:'frozen-publication',publishedAt:'2026-10-01'},period:{start:'2026-09-01',end:'2026-09-30'},method:{version:'financial-result-v36'},quality:'partial',missingReasons:[{code:'operation_unclassified',scope:'store'}],resultBasis:'before_tax',coverage:{covered:{start:'2026-09-01',end:'2026-09-25'},complete:false},scope:{productIds:['product-one'],includesStoreResult:true},totals:{selectedProductsResultBeforeTax:'123.0000',storeLevelResultBeforeTax:'-8.0000',availableResultBeforeTax:'115.0000',availableResultAfterTax:null},update:{status:'running',availablePublicationId:'new-publication'}};
@@ -12,6 +12,61 @@ const reconciliation={status:'matched',checks:[{code:'selected_products_before_t
 const options={listState:{search:'кружка &',sort:'revenue_desc',cursor:'list-page',limit:25}};
 function links(html,path){return [...html.matchAll(/href="([^"]+)"/g)].map(match=>new URL(match[1].replaceAll('&amp;','&'),'https://mc.test')).filter(url=>url.pathname===path);}
 function fixed(url){for(const[key,value]of Object.entries({storeId:context.storeId,publicationSource:'daily',publicationId:context.publication.id,periodStart:context.period.start,periodEnd:context.period.end}))assert.equal(url.searchParams.get(key),value);}
+
+function cardUrl(overrides={}) {
+  return new URL(`/sku/card?${new URLSearchParams({storeId:context.storeId,publicationSource:context.publication.source,publicationId:context.publication.id,periodStart:context.period.start,periodEnd:context.period.end,productId:item.productId,...overrides})}`,'https://mc.test');
+}
+function cardResponse(url) {
+  const params=url.searchParams;
+  return {context:{storeId:params.get('storeId'),publication:{source:params.get('publicationSource'),id:params.get('publicationId')},period:{start:params.get('periodStart'),end:params.get('periodEnd')}},item:{productId:params.get('productId')}};
+}
+function jsonResponse(data) { return {ok:true,headers:new Headers({'content-type':'application/json'}),json:async()=>data}; }
+
+test('card cache reuses exact frozen context across list filters and expires after 60 seconds without sliding expiry',async()=>{
+  let time=0,calls=0;
+  const load=createCardLoader({now:()=>time,fetchCard:async(url,options)=>{calls++;assert.equal(options.cache,'no-store');return jsonResponse(cardResponse(url));}});
+  const first=await load(cardUrl());
+  time=59999;assert.equal(await load(cardUrl({sort:'revenue_desc',search:'changed',listCursor:'next'})),first);assert.equal(calls,1);
+  time=60000;assert.notEqual(await load(cardUrl()),first);assert.equal(calls,2);
+  for(const [field,value] of Object.entries({storeId:'other-store',publicationSource:'legacy',publicationId:'other-publication',periodStart:'2026-09-02',periodEnd:'2026-09-29',productId:'other-product'}))await load(cardUrl({[field]:value}));
+  assert.equal(calls,8);
+  const anotherPage=createCardLoader({fetchCard:async url=>{calls++;return jsonResponse(cardResponse(url));}});
+  await anotherPage(cardUrl());assert.equal(calls,9);
+});
+
+test('card cache retains at most 20 recent successful cards',async()=>{
+  let calls=0;
+  const load=createCardLoader({now:()=>0,fetchCard:async url=>{calls++;return jsonResponse(cardResponse(url));}});
+  for(let index=0;index<20;index++)await load(cardUrl({productId:`product-${index}`}));
+  await load(cardUrl({productId:'product-0'}));
+  await load(cardUrl({productId:'product-20'}));assert.equal(calls,21);
+  await load(cardUrl({productId:'product-0'}));assert.equal(calls,21);
+  await load(cardUrl({productId:'product-1'}));assert.equal(calls,22);
+});
+
+test('card cache never stores failed, mismatched or aborted responses',async()=>{
+  const url=cardUrl();
+  const failures=[
+    async()=>{throw new Error('offline');},
+    async()=>({...jsonResponse(cardResponse(url)),ok:false}),
+    async()=>({...jsonResponse(cardResponse(url)),headers:new Headers({'content-type':'text/html'})}),
+    async()=>({...jsonResponse(null),json:async()=>{throw new SyntaxError('invalid json');}}),
+    ...['storeId','publicationSource','publicationId','periodStart','periodEnd','productId'].map(field=>async()=>jsonResponse(cardResponse(cardUrl({[field]:'other'}))))
+  ];
+  for(const failure of failures){
+    let calls=0;
+    const load=createCardLoader({fetchCard:async request=>{calls++;return calls===1?failure():jsonResponse(cardResponse(request));}});
+    await assert.rejects(load(url));await load(url);await load(url);assert.equal(calls,2);
+  }
+  let complete,calls=0;
+  const load=createCardLoader({fetchCard:async request=>{calls++;return calls===1?{...jsonResponse(null),json:()=>new Promise(resolve=>{complete=resolve;})}:jsonResponse(cardResponse(request));}});
+  const controller=new AbortController(),pending=load(url,controller.signal);
+  await Promise.resolve();controller.abort();complete(cardResponse(url));
+  await assert.rejects(pending,{name:'AbortError'});
+  await load(url);assert.equal(calls,2);
+  await assert.rejects(load(url,controller.signal),{name:'AbortError'});assert.equal(calls,2);
+  await assert.rejects(load(cardUrl({publicationId:''})),/card_context_changed/);assert.equal(calls,2);
+});
 
 test('unpublished list keeps the selected store and requested period on return to overview',()=>{
   const html=skuListPage(user,stores,null,{selectedStoreId:'store-one',period:{start:'2026-09-01',end:'2026-09-30'}});

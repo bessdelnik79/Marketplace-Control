@@ -13,6 +13,15 @@ test('missing or partial quantity evidence is not a zero count',()=>{
     const model=sample();applySkuSourceMetadata(model,rows);assert.equal(model.items[0].salesCount,null);assert.equal(model.items[0].returnsCount,null);
   }
 });
+test('indexed metadata keeps quantities and evidence completeness isolated between SKU groups',()=>{
+  const model=sample();
+  model.items.push({productId:'other',quality:'complete',groups:[{groupKey:'other-revenue',categoryCode:'revenue',lineRefs:[{source:'daily',dailyResultId:'other-line'}]}]});
+  const row={category_code:'revenue',operation_type:'sale',quantity:'2.000000',line_amount:'100.0000',contribution_amount:'100.0000',report_id:'12'};
+  applySkuSourceMetadata(model,[{...row,group_key:'revenue-p',line_id:'line',evidence_id:'a',operation_id:'a'},
+    {...row,group_key:'other-revenue',line_id:'other-line',evidence_id:'b',operation_id:'b',quantity:'7',report_id:'99',contribution_amount:'50.0000'}]);
+  assert.equal(model.items[0].salesCount,2);assert.deepEqual(model.items[0].reportIds,['12']);
+  assert.equal(model.items[1].salesCount,null);assert.deepEqual(model.items[1].reportIds,['99']);
+});
 test('only fully included Monday–Sunday weeks across years and months are returned',()=>{
   assert.deepEqual(completeSkuWeeks({start:'2026-08-01',end:'2026-08-31'}),[{start:'2026-08-03',end:'2026-08-09'},{start:'2026-08-10',end:'2026-08-16'},{start:'2026-08-17',end:'2026-08-23'},{start:'2026-08-24',end:'2026-08-30'}]);
   assert.deepEqual(completeSkuWeeks({start:'2025-12-29',end:'2026-01-04'}),[{start:'2025-12-29',end:'2026-01-04'}]);

@@ -199,8 +199,8 @@ export function createPublishedDrilldownRepository({pool=defaultPool}={}){
   const readPublishedSkuCard=(userId,input)=>{
     uuid(input?.productId);
     return read(userId,input,async({client,context,model,businessId,snapshot:periodSnapshot})=>{
-      await loadSkuSourceMetadata(client,{context,model,businessId});
       const item=model.items.find(row=>row.productId===input.productId.toLowerCase());if(!item)invalid('drilldown_not_found');
+      await loadSkuSourceMetadata(client,{context,model:{items:[item],storeLines:[]},businessId});
       const presentation=buildSkuPresentation({...model,items:[presentationItem(item)]}).items[0];
       if(input.includeWeekly){
         presentation.weeklyResults=[];

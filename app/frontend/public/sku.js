@@ -140,6 +140,29 @@ export function cardContent(data) {
   }).join('')}</div>` : '<p>Полные сопоставимые недельные значения для выбранного периода недоступны.</p>';
   return `<div class="sku-dialog-result"><div><p>Результат после налога</p><strong class="${signClass(result)}">${escapeHtml(formatMoney(result))}</strong><p>Без общих строк магазина</p></div><span class="sku-tag sku-${escapeHtml(status)}">${escapeHtml(statusLabels[status] ?? statusLabels.incomplete)}</span></div><div class="sku-card-metric-grid"><div><span>Маржа</span><strong class="${signClass(result)}">${escapeHtml(marginPercent(result, revenue) ?? '—')}</strong><small>Результат к выручке</small></div><div><span>Продажи / возвраты</span><strong>${count(item.salesCount)} / ${count(item.returnsCount)}</strong><small>По операциям финансовых отчётов</small></div><div><span>Выкуп</span><strong>${buyoutPercent(orderFields.buyout)}</strong><small>${orderFields.buyout===''?'Расчёт недоступен · причина под ⓘ':`${escapeHtml(orderFields.samplesize)} завершённых заказов${buyout?.smallSample?' · мало данных':''}`}</small><details class="sku-card-buyout"><summary aria-label="Пояснение к проценту выкупа">ⓘ ${orderFields.buyout===''?'Почему недоступен':'Как рассчитан'}</summary>${buyoutExplanation(buyout,orderFields)}</details></div></div>${status === 'incomplete' ? '<p class="sku-card-notice">Часть исходных данных отсутствует или не подтверждена. Недоступные суммы не заменяются нулём; результат нельзя считать полным.</p>' : ''}<section class="sku-card-section"><h3>Продвижение</h3><p>${promotionReason}. Общие расходы магазина показаны отдельно и не распределяются пропорционально между товарами.</p></section><section class="sku-card-section"><h3>Из чего складывается результат</h3>${breakdown}${other}${line('Результат после налога', result, [], true)}<p>Строки сохранённого расчёта. Внутри категорий показаны знаковые вклады. Общие расходы магазина учитываются отдельно в итогах периода.</p></section><section class="sku-card-section"><h3>Полные недели выбранного периода</h3>${chart}</section><section class="sku-card-section"><h3>Финансовые отчёты</h3><p>Номера отчётов, включённых в расчёт товара за выбранный период.</p><div class="sku-card-reports">${reports(item.reportIds ?? data?.item?.reportIds)}</div></section>`;
 }
+// Each page owns a small cache; expiry revalidates access and tariff through HTTP.
+export function createCardLoader({ fetchCard = globalThis.fetch, now = Date.now } = {}) {
+  const cache = new Map();
+  return async (url, signal) => {
+    const fields = ['storeId', 'publicationSource', 'publicationId', 'periodStart', 'periodEnd', 'productId'].map(key => url.searchParams.get(key));
+    if (fields.some(value => !value)) throw new Error('card_context_changed');
+    const key = JSON.stringify(fields), time = now();
+    const checkAbort = () => { if (signal?.aborted) throw new DOMException('Card request aborted', 'AbortError'); };
+    checkAbort();
+    for (const [entryKey, entry] of cache) if (entry.expiresAt <= time) cache.delete(entryKey);
+    const cached = cache.get(key);
+    if (cached) { cache.delete(key); cache.set(key, cached); return cached.data; }
+    const response = await fetchCard(url, { cache: 'no-store', headers: { Accept: 'application/json' }, signal });
+    if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error('card_unavailable');
+    const data = await response.json();
+    checkAbort();
+    const actual = [data.context?.storeId, data.context?.publication?.source, data.context?.publication?.id, data.context?.period?.start, data.context?.period?.end, data.item?.productId];
+    if (actual.some((value, index) => value !== fields[index])) throw new Error('card_context_changed');
+    cache.delete(key); cache.set(key, { data, expiresAt: now() + 60000 });
+    while (cache.size > 20) cache.delete(cache.keys().next().value);
+    return data;
+  };
+}
 function initialize() {
   const list = document.querySelector('[data-sku-list]');
   if (!list) return;
@@ -147,6 +170,7 @@ function initialize() {
   const search = list.querySelector('[data-sku-search]'), sort = list.querySelector('[data-sku-sort]'), zero = list.querySelector('[data-sku-zero]');
   const initial = new URL(location.href).searchParams;
   const dialog = list.querySelector('[data-sku-dialog]'), content = dialog.querySelector('[data-sku-dialog-content]');
+  const loadCard = createCardLoader();
   let opener, request;
   const showCard = async (row, trigger) => {
     const link = row.querySelector('[data-sku-card]');
@@ -160,14 +184,12 @@ function initialize() {
     dialog.querySelector('[data-sku-dialog-close]').focus();
     try {
       const url = new URL(link.href); url.searchParams.set('format', 'json');
-      const response = await fetch(url, { cache: 'no-store', headers: { Accept: 'application/json' }, signal: controller.signal });
-      if (!response.ok || !response.headers.get('content-type')?.includes('application/json')) throw new Error('card_unavailable');
-      const data = await response.json();
+      if (url.searchParams.get('periodStart') !== list.dataset.start || url.searchParams.get('periodEnd') !== list.dataset.end) throw new Error('card_context_changed');
+      const data = await loadCard(url, controller.signal);
       if (controller.signal.aborted) return;
-      if (data.item?.productId !== url.searchParams.get('productId') || data.context?.publication?.id !== url.searchParams.get('publicationId') || data.context?.publication?.source !== url.searchParams.get('publicationSource') || data.context?.storeId !== url.searchParams.get('storeId') || data.context?.period?.start !== list.dataset.start || data.context?.period?.end !== list.dataset.end) throw new Error('card_context_changed');
       content.innerHTML = cardContent(data);
     } catch (error) {
-      if (error.name === 'AbortError') return;
+      if (error.name === 'AbortError' || controller.signal.aborted) return;
       content.textContent = 'Сохранённая карточка недоступна. Закройте её и попробуйте снова; суммы не заменены нулём.';
     } finally { if (request === controller) content.setAttribute('aria-busy', 'false'); }
   };
