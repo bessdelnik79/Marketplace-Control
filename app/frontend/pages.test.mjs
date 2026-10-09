@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {frame,emptyOverviewPage,expensesPage,financialSyncView,overviewPage,passwordPage,productsPage,settingsPage,settingsDataPage,storeOnboardingPage,taxesPage,tariffPage,placeholderPage,uiRoutes} from './pages.mjs';
-import { operationalOverviewPanel, operationalLoadStatus } from './pages.mjs';
+import { operationalOverviewPanel, operationalLoadStatus, overviewRangePicker } from './pages.mjs';
 test('historical deleted catalog product has an explanation and no WB link or image',()=>{
   const store={id:'store-history',connected:true},product={id:'deleted',wb_article:'800001',seller_article:'DELETED',historical_deleted:true,image_url:'https://basket-01.wbbasket.ru/old.webp',selected:true};
   const html=productsPage({id:'owner',display_name:'Owner'},[store],{stream:{},products:[product],selection:{status:'confirmed'},productLimit:3});
@@ -267,4 +267,10 @@ test('header product prompt sits between store selection and theme and links to 
     assert.doesNotMatch(limited,/Вы можете добавить больше товаров/);
   }
   for(const update of [{unselected_product_count:0},{connected:false},{entitled:false},{status:'paused'}])assert.doesNotMatch(frame(user,'/overview','',[{...store,...update}]),/class="header-product-prompt"/);
+});
+
+test('SKU reuses overview calendar with its own action and no pinned publication',()=>{
+ const html=overviewRangePicker({selectedStoreId:'store-one',rangeStart:'2026-08-01',rangeEnd:'2026-08-31',rangeLabel:'Август',action:'/sku',today:'2026-10-09'});
+ assert.match(html,/action="\/sku" data-range-picker/);assert.match(html,/name="periodStart" value="2026-08-01"/);assert.match(html,/data-range-preset="90"/);assert.doesNotMatch(html,/name="publicationId"|name="publicationSource"|name="cursor"/);
+ assert.match(overviewRangePicker({}),/action="\/overview"/);
 });

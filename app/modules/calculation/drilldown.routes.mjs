@@ -39,9 +39,13 @@ export function createDrilldownRoutes({listStores, getFinancialOverview, readPub
       const pageLimit = limit(params.get('limit'));
       const explicit = params.has('publicationId') || params.has('publicationSource');
       const listState = {search:params.get('search') ?? '', sort:params.get('sort') ?? 'result_asc',
-        limit:pageLimit, cursor:params.get(url.pathname === '/sku' ? 'cursor' : 'listCursor')};
+        limit:pageLimit, cursor:params.get(url.pathname === '/sku' ? 'cursor' : 'listCursor'),
+        viewSort:params.get('viewSort')??'attention',viewFilter:params.get('viewFilter')??'all',hideZero:params.get('hideZero')==='1'};
       if (listState.search.length > 256 || !['result_asc','result_desc','revenue_asc','revenue_desc'].includes(listState.sort)) invalid();
-      const options = {listState, selectedStoreId:store?.id ?? null, period:requested};
+      if(!['attention','result_asc','result_desc','revenue_asc','revenue_desc','margin_asc','title_asc'].includes(listState.viewSort)||
+        !['all','loss','near','profit','incomplete'].includes(listState.viewFilter)||params.has('hideZero')&&!['0','1'].includes(params.get('hideZero')))invalid();
+      const options = {listState, selectedStoreId:store?.id ?? null, period:requested,
+        today:new Intl.DateTimeFormat('sv-SE',{timeZone:'Europe/Moscow',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date())};
       if (!explicit) {
         if (!['/sku','/situations'].includes(url.pathname)) invalid();
         if (params.has('cursor')) invalid();
@@ -54,6 +58,8 @@ export function createDrilldownRoutes({listStores, getFinancialOverview, readPub
         const canonical = new URLSearchParams({storeId:store.id, publicationSource:financial.publicationSource,
           publicationId:financial.publicationId, periodStart:financial.period.start, periodEnd:financial.period.end,
           search:listState.search, sort:listState.sort, limit:String(pageLimit)});
+        canonical.set('viewSort',listState.viewSort);canonical.set('viewFilter',listState.viewFilter);
+        if(listState.hideZero)canonical.set('hideZero','1');
         redirect(res, `${url.pathname}?${canonical}`);
         return true;
       }

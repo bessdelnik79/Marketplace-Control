@@ -1,4 +1,5 @@
 import { pool as defaultPool } from '../../infrastructure/database/client.mjs';
+import {buildSkuPresentation} from './sku-presentation.mjs';
 import {tariffPublicationAllowed} from '../billing/tariff-access.mjs';
 import { aggregateDailyPublicationPeriod, aggregatePublishedPeriodEnvelopes, loadPublishedPeriodEnvelopes } from './calculation.repository.mjs';
 import { buildFinancialPeriodOverview, financialResultIncludesStore, validateCalendarPeriod } from '../overview/financial-overview.mjs';
@@ -188,7 +189,7 @@ export function createPublishedDrilldownRepository({pool=defaultPool}={}){
   }
   const readPublishedSkuList=(userId,input)=>read(userId,input,({model,input})=>{
     const page=paginatePublishedSkuList(model,input);
-    return{...page,items:page.items.map(publicItem),storeLines:page.storeLines.map(publicGroup)};
+    return{...page,items:page.items.map(publicItem),storeLines:page.storeLines.map(publicGroup),presentation:buildSkuPresentation({...model,items:model.items.map(publicItem)})};
   });
   const readPublishedSkuCard=(userId,input)=>{
     uuid(input?.productId);

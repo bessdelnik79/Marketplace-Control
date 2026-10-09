@@ -21,6 +21,22 @@ function setup(overrides={}){
   return {calls,response,run:(path='/sku',user=current,method='GET')=>handler({method},response,new URL(path,'http://localhost'),user)};
 }
 function route(path='/sku',extra={}){return `${path}?${new URLSearchParams({...base,...extra})}`;}
+
+test('a calendar period without a publication resolves that exact range and preserves display state',async()=>{
+  let requested;
+  const s=setup({getFinancialOverview:async(user,store,start,end)=>{requested={user,store,start,end};return{publicationId:'august-publication',publicationSource:'daily',period:{start,end}};}});
+  await s.run('/sku?storeId=store&periodStart=2026-08-01&periodEnd=2026-08-31&viewSort=margin_asc&viewFilter=near&hideZero=1');
+  assert.deepEqual(requested,{user:'viewer',store:'store',start:'2026-08-01',end:'2026-08-31'});
+  const canonical=new URL(s.response.location,'http://localhost');
+  assert.equal(canonical.searchParams.get('publicationId'),'august-publication');
+  assert.equal(canonical.searchParams.get('periodEnd'),'2026-08-31');assert.equal(canonical.searchParams.get('viewFilter'),'near');assert.equal(canonical.searchParams.get('hideZero'),'1');
+});
+test('display state is validated and survives card return without resolving another publication',async()=>{
+  const s=setup();await s.run(route('/sku/card',{productId:'product',viewSort:'title_asc',viewFilter:'loss',hideZero:'1'}));
+  assert.equal(s.response.body.options.listState.viewFilter,'loss');assert.equal(s.response.body.options.listState.hideZero,true);
+  assert.deepEqual(s.calls.map(call=>call.name),['card']);
+  for(const values of [{viewSort:'bad'},{viewFilter:'bad'},{hideZero:'true'}]){const invalid=setup();await invalid.run(route('/sku',values));assert.equal(invalid.response.status,400);assert.equal(invalid.calls.length,0);}
+});
 test('SKU routes require a session and leave unrelated routes untouched',async()=>{
   const s=setup();assert.equal(await s.run('/sku',null),true);assert.equal(s.response.location,'/login');assert.equal(s.calls.length,0);
   assert.equal(await s.run('/products'),false);assert.equal(await s.run('/sku',current,'POST'),false);

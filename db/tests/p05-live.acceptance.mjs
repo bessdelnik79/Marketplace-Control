@@ -88,10 +88,13 @@ async function profileRead(userId,profile){
     contextEqual(page.context,input);
     snapshot??=page;
     assert.deepEqual(page.context,snapshot.context);assert.deepEqual(page.storeLines,snapshot.storeLines);
+    assert.deepEqual(page.presentation,snapshot.presentation);
     for(const item of page.items){assert.ok(!seen.has(item.productId));seen.add(item.productId);items.push(item);}
     cursor=page.nextCursor;
   }while(cursor);
-  assert.equal(items.length,snapshot.totalItems);assert.equal(items.length,snapshot.scopeItemCount);
+  assert.equal(items.length,snapshot.totalItems);assert.ok(items.length<=snapshot.scopeItemCount);
+  assert.equal(snapshot.presentation.items.length,snapshot.scopeItemCount);
+  assert.ok(items.every(item=>snapshot.presentation.items.some(full=>full.productId===item.productId)));
   assert.notEqual(snapshot.reconciliation.status,'mismatch');
   if(profile.quality)assert.equal(snapshot.context.quality,profile.quality);
   if(profile.basis)assert.equal(snapshot.context.resultBasis,profile.basis);
@@ -128,7 +131,8 @@ async function profileRead(userId,profile){
   if(situations.total!==null)assert.equal(situations.total,situations.items.length);
   for(const item of situations.items){
     const detail=await reader.readPublishedSituation(userId,{...input,situationId:item.id});
-    assert.deepEqual(detail.item,item);contextEqual(detail.context,input);assert.equal(sum(item.groups),money(item.metric.value));
+    const {revenueAbsence,...detailItem}=detail.item;
+    assert.deepEqual(detailItem,item);contextEqual(detail.context,input);assert.equal(sum(item.groups),money(item.metric.value));
   }
   await assert.rejects(reader.readPublishedSituation(userId,{...input,situationId:'return_growth'}),{message:'drilldown_not_found'});
   stats.sku=items.length;stats.situations=situations.items.length;stats.situationStatus=situations.status;

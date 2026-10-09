@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { skuListPage, skuCardPage, skuSourcesPage } from './sku.page.mjs';
+import { compareAmounts, compareRows, isZeroAmount, marginPercent, productStatus, matchesFilter, csvCell } from './public/sku.js';
 
 const user={id:'viewer',stores:[]},stores=[{id:'store-one',name:'Магазин',connected:true}];
 const context={storeId:'store-one',publication:{source:'daily',id:'frozen-publication',publishedAt:'2026-10-01'},period:{start:'2026-09-01',end:'2026-09-30'},method:{version:'financial-result-v36'},quality:'partial',missingReasons:[{code:'operation_unclassified',scope:'store'}],resultBasis:'before_tax',coverage:{covered:{start:'2026-09-01',end:'2026-09-25'},complete:false},scope:{productIds:['product-one'],includesStoreResult:true},totals:{selectedProductsResultBeforeTax:'123.0000',storeLevelResultBeforeTax:'-8.0000',availableResultBeforeTax:'115.0000',availableResultAfterTax:null},update:{status:'running',availablePublicationId:'new-publication'}};
@@ -85,4 +86,40 @@ test('supported tax basis link, safe image and human reconciliation labels are r
   assert.doesNotMatch(html,/javascript:|selected_products_before_tax/);assert.match(html,/Результат выбранных SKU до налога/);
   assert.equal(links(html,'/sku/sources').find(url=>url.searchParams.has('taxBasis')).searchParams.get('taxBasis'),'1');
   const photo=skuCardPage(user,stores,{context,item:{...item,imageUrl:'https://images.example/photo?a=1&b=2'}},options);assert.match(photo,/src="https:\/\/images.example\/photo\?a=1&amp;b=2"/);
+});
+
+test('approved complete-scope SKU list has calendar, cards and full-row immutable links',()=>{
+  const completeMetric=amount=>({amount,availability:'complete'});
+  const complete={...item,quality:'complete',name:'Товар <img onerror="bad">',status:'loss',marginPercent:'-5.0',metrics:{revenue:completeMetric('100.0000'),wbExpenses:completeMetric('25.0000'),costOfGoods:completeMetric('80.0000'),availableResultAfterTax:completeMetric('-5.0000')}};
+  const html=skuListPage(user,stores,{context:{...context,quality:'complete'},items:[],presentation:{items:[complete],summary:{skuResult:'-5.0000',revenue:'100.0000',totalCount:1,lossCount:1,nearCount:0,profitCount:0,incompleteCount:0}},storeLines:[]},{...options,listState:{...options.listState,viewFilter:'loss',hideZero:true},today:'2026-10-09'});
+  assert.match(html,/Назад к обзору/);assert.match(html,/Товар &lt;img onerror=&quot;bad&quot;&gt;/);assert.doesNotMatch(html,/Товар <img/);
+  assert.match(html,/data-sku-row tabindex="0"/);assert.match(html,/data-sku-zero/);assert.match(html,/data-sku-export/);assert.match(html,/Продвижение/);assert.match(html,/−5,0%/);
+  const calendar=html.match(/<form class="overview-period-filter"[\s\S]*?<\/form>/)[0];
+  assert.match(calendar,/action="\/sku"/);assert.match(calendar,/name="periodStart" value="2026-09-01"/);assert.doesNotMatch(calendar,/publicationId|publicationSource/);
+  const card=links(html,'/sku/card')[0];fixed(card);assert.equal(card.searchParams.get('viewFilter'),'loss');assert.equal(card.searchParams.get('hideZero'),'1');
+  const back=links(html,'/overview').find(link=>!link.searchParams.has('publicationId')&&link.searchParams.has('periodStart'));assert.ok(back);
+  assert.match(html,/Выкуп/);assert.match(html,/Полной истории заказов пока нет/);assert.match(html,/100 завершённых/);assert.match(html,/14 дней/);
+});
+
+test('SKU exact presentation arithmetic and filters distinguish unavailable, zero and tiny loss',()=>{
+  assert.equal(isZeroAmount(null),false);assert.equal(isZeroAmount(''),false);assert.equal(isZeroAmount('-0.0000'),true);assert.equal(isZeroAmount('0.00001'),false);
+  assert.equal(compareAmounts('9007199254740993.0001','9007199254740993.0000'),1);
+  assert.equal(marginPercent('-5.0000','100.0000'),'−5,0%');assert.equal(marginPercent('1','0'),null);assert.equal(marginPercent(null,'100'),null);
+  const complete=amount=>({amount,availability:'complete'});
+  const sample={quality:'complete',metrics:{availableResultAfterTax:complete('0.0000'),revenue:complete('100.0000')}};
+  assert.equal(productStatus(sample),'zero');assert.equal(productStatus({...sample,quality:'partial'}),'incomplete');
+  assert.equal(productStatus({...sample,metrics:{...sample.metrics,availableResultAfterTax:complete('-0.00001')}}),'loss');
+  assert.equal(matchesFilter({search:'товар abc',status:'loss',result:'-0.00001'},{search:'ABC',filter:'loss',hideZero:true}),true);
+  assert.equal(matchesFilter({search:'товар',status:'incomplete',result:''},{hideZero:true}),true);
+  assert.equal(matchesFilter({search:'товар',status:'near',result:'0.0000'},{hideZero:true}),false);
+  assert.equal(csvCell('=HYPERLINK("bad")'),'"\'=HYPERLINK(""bad"")"');assert.equal(csvCell('0.0000'),'"0.0000"');
+  assert.equal(csvCell('-1.2500'),'"-1.2500"');assert.equal(csvCell('-cmd'),'"\'-cmd"');
+  assert.equal(compareRows({result:''},{result:'10'},'result_desc'),1);assert.equal(compareRows({revenue:null},{revenue:'10'},'revenue_asc'),1);
+});
+
+test('reconciliation mismatch suppresses reliable-looking row amounts and margin',()=>{
+  const complete=amount=>({amount,availability:'complete'});
+  const row={...item,quality:'complete',status:'profit',marginPercent:'10.0',metrics:{revenue:complete('100.0000'),availableResultAfterTax:complete('10.0000')}};
+  const html=skuListPage(user,stores,{context:{...context,quality:'complete'},reconciliation:{status:'mismatch'},presentation:{quality:'unavailable',items:[row],summary:{skuResult:null,revenue:null,incompleteCount:1}}},options);
+  assert.match(html,/data-status="incomplete"/);assert.match(html,/data-result=""/);assert.doesNotMatch(html,/10,0%|100,00 ₽|10,00 ₽|● Полные финансовые данные/);
 });
