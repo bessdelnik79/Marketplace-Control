@@ -1,15 +1,13 @@
 import { createHash } from 'node:crypto';
-import { pool, withBusinessContext, withOwnedBusinessContext } from '../../infrastructure/database/client.mjs';
+import { createApplicationPool, pool, withBusinessContext, withOwnedBusinessContext } from '../../infrastructure/database/client.mjs';
 import { verifyOperationalSnapshotObject } from '../../infrastructure/storage/operational-source-storage.mjs';
 import { validateCalendarDate } from '../overview/financial-overview.mjs';
 import { readFinancialReturnsCache } from './financial-returns-cache.mjs';
-import pg from 'pg';
 
 const parserVersion='wb-operational-cache-returns-v4';
 const dayMs=86400000;
 const runtimeLeases=new WeakMap();
-const leasePool=new pg.Pool({connectionString:process.env.DATABASE_URL??'postgres://marketplace_control:marketplace_control_local@127.0.0.1:5432/marketplace_control',
-  max:4,allowExitOnIdle:true,idleTimeoutMillis:1000,connectionTimeoutMillis:5000});
+const leasePool=createApplicationPool({max:4,allowExitOnIdle:true,idleTimeoutMillis:1000,connectionTimeoutMillis:5000});
 
 export async function closeOperationalSyncLeases(){await leasePool.end();}
 

@@ -3,10 +3,18 @@ import path from 'node:path';
 import pg from 'pg';
 
 const { Pool } = pg;
-export const pool = new Pool({
-  connectionString: process.env.DATABASE_URL ?? 'postgres://marketplace_control:marketplace_control_local@127.0.0.1:5432/marketplace_control',
-  max: 10
-});
+export function createApplicationPool(options = {}) {
+  const parameters = new pg.Client({ ...options,
+    connectionString: options.connectionString ?? process.env.DATABASE_URL ?? 'postgres://marketplace_control:marketplace_control_local@127.0.0.1:5432/marketplace_control'
+  }).connectionParameters;
+  // Keep pg's URI/socket parsing and redaction, then prevent URI overrides.
+  const config = { ...options, ...parameters, password: parameters.password,
+    options: `${parameters.options ?? ''} -c jit=off`.trim() };
+  delete config.connectionString;
+  return new Pool(config);
+}
+
+export const pool = createApplicationPool({ max: 10 });
 
 export async function migrate() {
   const exists = await pool.query("select to_regclass('mc.schema_migrations') as table_name");

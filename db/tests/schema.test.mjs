@@ -56,7 +56,21 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,81);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,82);
+  for(const [indexName,tableName,columns] of [
+    ['mc.financial_daily_evidence_result_order','mc.financial_daily_evidence',['daily_result_id','id']],
+    ['mc.operation_versions_normalization_date','mc.operation_versions',['report_normalization_id','accounting_date']]
+  ]){
+    const index=await one(`select i.indisvalid as valid,i.indisready as ready,i.indisunique as is_unique,
+      i.indrelid=$2::regclass as target_matches,am.amname as method,
+      array(select a.attname::text from unnest(i.indkey) with ordinality index_key(attnum,position)
+        join pg_attribute a on a.attrelid=i.indrelid and a.attnum=index_key.attnum
+        where index_key.position<=i.indnkeyatts order by index_key.position) as columns
+      from pg_index i join pg_class c on c.oid=i.indexrelid join pg_am am on am.oid=c.relam
+      where i.indexrelid=$1::regclass`,[indexName,tableName]);
+    assert.deepEqual(index,{valid:true,ready:true,is_unique:false,target_matches:true,method:'btree',columns});
+  }
+  pass('financial reads have valid nonunique btree indexes with ordered evidence and normalization date keys');
   assert.ok(await one("select 1 as ok from pg_proc where oid='mc.recover_historical_catalog(uuid,uuid)'::regprocedure"));
   const transportRoundingDefinition=(await one(
   `select pg_get_functiondef(
