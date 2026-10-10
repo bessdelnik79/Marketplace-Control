@@ -56,7 +56,7 @@ try {
   await insert('auth_identities',{user_id:user.id,provider:'password',subject:'owner@example.test'});
   await insert('auth_password_credentials',{user_id:user.id,password_hash:'scrypt$16384$8$1$salt$hash'});
   await insert('auth_sessions',{user_id:user.id,token_hash:'a'.repeat(64),expires_at:new Date(Date.now()+86400000)});
-  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,82);
+  assert.equal((await one('select max(version)::int as version from mc.schema_migrations')).version,83);
   for(const [indexName,tableName,columns] of [
     ['mc.financial_daily_evidence_result_order','mc.financial_daily_evidence',['daily_result_id','id']],
     ['mc.operation_versions_normalization_date','mc.operation_versions',['report_normalization_id','accounting_date']]
@@ -445,6 +445,17 @@ assert.match(
   for(const column of ['return_source','return_date_basis','return_amount_basis','return_source_refs'])assert.ok(returnColumns.some(row=>row.column_name===column));
   assert.equal((await one(`select mc.operational_financial_return_refs_current($1,$2,'{}'::jsonb) valid`,[b.id,store.id])).valid,false);
   pass('operational return source metadata requires current tenant financial evidence');
+  const scopedReader=await one(`select prosecdef,provolatile from pg_proc
+    where oid='mc.current_operational_daily_metrics_for_range(uuid,uuid,date,date,uuid[])'::regprocedure`);
+  assert.equal(scopedReader.prosecdef,false);assert.equal(scopedReader.provolatile,'s');
+  const originalMetrics=await q(`select * from mc.current_operational_daily_metrics
+    where business_id=$1 and store_id=$2 and metric_date between '2026-09-01' and '2026-09-30'
+      and product_id=any($3::uuid[]) order by metric_date,product_id`,[b.id,store.id,[products[0].id]]);
+  const scopedMetrics=await q(`select * from mc.current_operational_daily_metrics_for_range($1,$2,'2026-09-01','2026-09-30',$3::uuid[])
+    order by metric_date,product_id`,[b.id,store.id,[products[0].id]]);
+  assert.equal(scopedMetrics.length,7);
+  assert.deepEqual(scopedMetrics,originalMetrics);
+  pass('scoped operational reader preserves rows with invoker rights and stable evidence checks');
   await rejects('update mc.operational_daily_metrics set return_count=0,return_amount=0 where snapshot_id=$1',[operationalSnapshot.id],/immutable/,'old accepted snapshots cannot be relabeled as zero purchased returns');
   await rejects('update mc.operational_periods set current_snapshot_id=null where id=$1',[operationalPeriod.id],/cannot be cleared/,'accepted operational current pointer cannot be cleared');
 

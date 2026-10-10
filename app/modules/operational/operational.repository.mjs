@@ -444,9 +444,11 @@ export async function requestOperationalRangeRefresh(userId,storeId,start,end,{n
     const financialByDate=new Map();
     for(const metric of financialRows){const covered=financialByDate.get(metric.date)??new Set();covered.add(String(metric.nmId));financialByDate.set(metric.date,covered);}
     const financialDates=[...financialByDate].filter(([,covered])=>products.every(product=>covered.has(String(product.nm_id)))).map(([date])=>date);
-    const queued=await client.query(`insert into mc.operational_range_requests(business_id,store_id,metric_date,status,requested_at)
+    const queued=await client.query(`with range_metrics as materialized (
+      select * from mc.current_operational_daily_metrics_for_range($1,$2,$3::date,$4::date,$5::uuid[])
+    ) insert into mc.operational_range_requests(business_id,store_id,metric_date,status,requested_at)
       select $1,$2,day::date,'pending',$6::timestamptz from generate_series($3::date,$4::date,interval '1 day') day
-      where (select count(*) from mc.current_operational_daily_metrics m where m.business_id=$1 and m.store_id=$2 and m.metric_date=day::date and m.product_id=any($5::uuid[]) and m.available
+      where (select count(*) from range_metrics m where m.metric_date=day::date and m.available
         and (case when day::date=any($8::date[]) then m.return_source='financial_report' and m.return_count is not null and m.return_amount is not null
           else day::date<$7::date-89 or m.return_count is not null and m.return_amount is not null end)
         and (day::date<$7::date or m.fetched_at>=$6::timestamptz-interval '1 hour'))<cardinality($5::uuid[])
@@ -513,9 +515,14 @@ async function readOperationalProgress(client,businessId,storeId,range,products,
   const retryEligible=state?.status==='active'&&state?.store_status==='active'&&state?.scopes?.includes('analytics')&&state?.scopes?.includes('statistics');
   const updateStatus=deriveOperationalProgress({start,end:range.end,completeDays,pendingDays,failedDays,retryableDays,retryEligible,nextRunAt:state?.next_run_at,selected:products.length>0,blocked,waitingFinancial,errorCode,run:await runFor(start,range.end),now});
   if(outOfRange&&updateStatus.status==='unavailable')updateStatus.errorCode='operational_history_out_of_range';
-  const factoryRows=marker&&products.length?(await client.query(`select product_id,metric_date::text,available,return_count,return_amount
-    from mc.current_operational_daily_metrics where business_id=$1 and store_id=$2 and metric_date between $3 and $4
-      and product_id=any($5::uuid[])`,[businessId,storeId,marker.start,marker.end,products.map(row=>row.product_id)])).rows:[];
+  const readStart=new Date((calendarDay(range.start).number-range.days*4)*dayMs).toISOString().slice(0,10);
+  const factoryRows=marker&&products.length
+    ? marker.start>=readStart&&marker.end<=range.end
+      ? rows.filter(row=>row.metric_date>=marker.start&&row.metric_date<=marker.end)
+      : (await client.query(`select product_id,metric_date::text,available,return_count,return_amount
+          from mc.current_operational_daily_metrics_for_range($1,$2,$3::date,$4::date,$5::uuid[])`,
+          [businessId,storeId,marker.start,marker.end,products.map(row=>row.product_id)])).rows
+    : [];
   const factoryCompleteDates=new Map();
   for(const row of factoryRows)if(row.available&&(row.metric_date<returnsStart||row.return_count!=null&&row.return_amount!=null)){
     const ids=factoryCompleteDates.get(row.metric_date)??new Set();ids.add(row.product_id);factoryCompleteDates.set(row.metric_date,ids);
@@ -550,7 +557,7 @@ export async function getOperationalOverviewData(userId,storeId,options={}){
               m.order_count::text,m.order_amount::text,m.buyout_count::text,m.buyout_amount::text,
               m.quality,m.missing_reasons,m.fetched_at,m.accepted_at,m.cancel_count::text,m.cancel_amount::text,m.return_count::text,m.return_amount::text,
               m.return_source,m.return_date_basis,m.return_amount_basis,m.return_source_refs
-         from mc.current_operational_daily_metrics m
+         from mc.current_operational_daily_metrics_for_range($1,$2,$4::date-$6::int*4,$5::date,$3::uuid[]) m
         where m.business_id=$1 and m.store_id=$2
           and m.product_id=any($3::uuid[])
           and m.metric_date between $4::date-$6::int*4 and $5::date
@@ -570,14 +577,28 @@ export async function getOperationalOverviewData(userId,storeId,options={}){
           and p.period_start<=$5::date and p.period_end>=$4::date
           and (select count(*) from mc.operational_snapshot_products sp where sp.snapshot_id=s.id)=cardinality($3::uuid[])
           and not exists(select 1 from mc.operational_snapshot_products sp where sp.snapshot_id=s.id and not(sp.product_id=any($3::uuid[])))
-      ) select m.product_id,c.metric_date::text,c.snapshot_id,m.currency,true available,
+      ), selected_metrics as materialized (
+        select m.business_id,m.store_id,m.product_id,c.metric_date::text,c.snapshot_id,m.currency,true available,
           m.order_count::text,m.order_amount::text,m.buyout_count::text,m.buyout_amount::text,
           'complete' quality,'[]'::jsonb missing_reasons,c.fetched_at,c.accepted_at,m.cancel_count::text,m.cancel_amount::text,
-          case when m.return_source='financial_report' and not mc.operational_financial_return_refs_current(m.business_id,m.store_id,m.return_source_refs) then null else m.return_count::text end return_count,
-          case when m.return_source='financial_report' and not mc.operational_financial_return_refs_current(m.business_id,m.store_id,m.return_source_refs) then null else m.return_amount::text end return_amount,
+          m.return_count::text,m.return_amount::text,
           m.return_source,m.return_date_basis,m.return_amount_basis,m.return_source_refs
         from candidates c join mc.operational_daily_metrics m on m.business_id=c.business_id and m.store_id=c.store_id and m.snapshot_id=c.snapshot_id and m.metric_date=c.metric_date
-        where c.rank=1 order by c.metric_date,m.product_id`,[businessId,storeId,current.product_ids,range.start,range.end]
+        where c.rank=1
+      ), checked_refs as materialized (
+        select business_id,store_id,return_source_refs,
+          mc.operational_financial_return_refs_current(business_id,store_id,return_source_refs) refs_current
+        from (select distinct business_id,store_id,return_source_refs from selected_metrics where return_source='financial_report') refs
+      ) select m.product_id,m.metric_date,m.snapshot_id,m.currency,m.available,
+          m.order_count,m.order_amount,m.buyout_count,m.buyout_amount,m.quality,m.missing_reasons,m.fetched_at,m.accepted_at,
+          m.cancel_count,m.cancel_amount,
+          case when m.return_source='financial_report' and not checked.refs_current then null else m.return_count end return_count,
+          case when m.return_source='financial_report' and not checked.refs_current then null else m.return_amount end return_amount,
+          m.return_source,m.return_date_basis,m.return_amount_basis,m.return_source_refs
+        from selected_metrics m left join checked_refs checked
+          on checked.business_id=m.business_id and checked.store_id=m.store_id
+          and checked.return_source_refs is not distinct from m.return_source_refs
+        order by m.metric_date,m.product_id`,[businessId,storeId,current.product_ids,range.start,range.end]
     )).rows;
     const updateStatus=await readOperationalProgress(client,businessId,storeId,range,products,rows,options.now??new Date());
     return {store,current,rows,savedRows,updateStatus,today:range.today};

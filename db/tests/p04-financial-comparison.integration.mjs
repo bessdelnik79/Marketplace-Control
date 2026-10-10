@@ -15,7 +15,7 @@ test.after(()=>pool.end());
 
 // Persist minimal synthetic read-model values. These tests exercise publication
 // reads and overview comparison, not the calculation/publication pipeline.
-async function fixture({current='100.0000',amounts=['10.0000','20.0000','30.0000','1000.0000'],missing=false,partial=false}={}){
+async function fixture({current='100.0000',amounts=['10.0000','20.0000','30.0000','1000.0000'],missing=false,partial=false,methodVersion=null}={}){
   const ids={user:randomUUID(),business:randomUUID(),store:randomUUID(),product:randomUUID()};
   const selected={start:'2026-09-14',end:'2026-09-20'};
   const periods=[selected,...previousFourCalendarPeriods(selected)];
@@ -27,9 +27,14 @@ async function fixture({current='100.0000',amounts=['10.0000','20.0000','30.0000
     await client.query(`insert into mc.businesses(id,name) values($1,'Comparison test')`,[ids.business]);
     await client.query(`insert into mc.memberships(business_id,user_id,role) values($1,$2,'owner')`,[ids.business,ids.user]);
     await client.query(`insert into mc.stores(id,business_id,external_account_id,name,status) values($1,$2,$3,'Comparison store','active')`,[ids.store,ids.business,ids.store]);
+    await client.query(`select mc.apply_tariff_period($1,'plus',$2,clock_timestamp())`,[ids.business,`comparison:${randomUUID()}`]);
     await client.query(`insert into mc.products(id,business_id,store_id,wb_article,seller_article) values($1,$2,$3,720001,'Comparison')`,[ids.product,ids.business,ids.store]);
+    const catalog=(await client.query(`insert into mc.source_documents(business_id,store_id,origin,document_type,checksum,completeness)
+      values($1,$2,'wb_api','catalog',$3,'complete') returning id`,[ids.business,ids.store,randomUUID()])).rows[0];
+    await client.query(`select mc.confirm_product_selection($1,$2,$3::uuid[])`,[ids.store,catalog.id,[ids.product]]);
     const parser=(await client.query(`select id from mc.method_versions where code='wb_finance_import' order by version_no desc limit 1`)).rows[0].id;
-    const method=(await client.query(`select id from mc.method_versions where code='financial_result' and parameters @> '{"targetPeriod":true}'::jsonb order by version_no desc limit 1`)).rows[0].id;
+    const method=(await client.query(`select id from mc.method_versions where code='financial_result' and parameters @> '{"targetPeriod":true}'::jsonb
+      and ($1::text is null or implementation_version=$1) order by version_no desc limit 1`,[methodVersion])).rows[0].id;
     await client.query(`insert into mc.financial_store_event_state(business_id,store_id,next_generation) values($1,$2,3)`,[ids.business,ids.store]);
     let prior=null;
     for(let generationNo=1;generationNo<=2;generationNo+=1){
@@ -72,17 +77,21 @@ async function fixture({current='100.0000',amounts=['10.0000','20.0000','30.0000
       }
       prior=publication;
     }
+    assert.equal((await client.query(`select mc.financial_daily_publication_tariff_allowed($1) allowed`,[prior])).rows[0].allowed,true,
+      'comparison fixture publication must match its confirmed active tariff scope');
     await client.query('commit');
     return {...ids,publication:prior,periods};
   }catch(error){await client.query('rollback');throw error;}finally{client.release();}
 }
 
-test('repository reads all four same-publication periods and service uses positive median',async()=>{
+test('repository reads all four same-publication periods and latest overview loads each period once',async t=>{
   const ids=await fixture();
   const comparisonPeriods=previousFourCalendarPeriods(ids.periods[0]);
   const pair=await getPublishedFinancialPeriodPair(ids.user,ids.store,{periodStart:'2026-09-14',periodEnd:'2026-09-20',
     previousPeriodStart:'2026-09-07',previousPeriodEnd:'2026-09-13',comparisonPeriods});
   assert.equal(pair.publication_id,ids.publication);
+  assert.equal(pair.publication_source,'daily');
+  assert.ok(pair.current,'explicit period must retain its persisted daily publication');
   assert.equal(pair.history.length,4);
   assert.equal(pair.history[0],pair.previous);
   assert.deepEqual(pair.history.map(value=>[value.period_start,value.period_end]),comparisonPeriods.map(value=>[value.start,value.end]));
@@ -90,7 +99,26 @@ test('repository reads all four same-publication periods and service uses positi
   assert.equal(overview.comparison.amount,'25.0000');
   assert.equal(overview.comparison.changePercent,'300.0000');
   assert.equal(overview.comparison.comparable,true);
-  const latest=await getFinancialOverview(ids.user,ids.store,null);
+  const queries=[],requests=[];
+  const connect=pool.connect.bind(pool);
+  t.mock.method(pool,'connect',async()=>{
+    const client=await connect(),query=client.query.bind(client);
+    t.mock.method(client,'query',(...args)=>{queries.push(args);return query(...args);});
+    return client;
+  });
+  let latestPair;
+  const latest=await getFinancialOverview(ids.user,ids.store,null,{
+    loadPeriodPair:async(...args)=>{requests.push(args);latestPair=await getPublishedFinancialPeriodPair(...args);return latestPair;}
+  });
+  assert.deepEqual(requests,[[ids.user,ids.store,{comparisonPeriodCount:4}]]);
+  assert.equal(queries.filter(([sql])=>sql==='begin').length,1);
+  const mappedReads=queries.filter(([sql])=>sql.includes('day.coverage_complete,day.quality,day.tax_usable'));
+  assert.deepEqual(mappedReads.map(([,values])=>values),ids.periods.map(value=>[ids.publication,value.start,value.end]));
+  assert.equal(latestPair.publication_id,ids.publication);
+  assert.equal(latestPair.history[0],latestPair.previous);
+  assert.equal(latestPair.history.length,4);
+  assert.deepEqual(latestPair,pair);
+  assert.equal(latest.publicationId,ids.publication);
   assert.equal(latest.comparison.changePercent,'300.0000');
 });
 
@@ -112,7 +140,35 @@ test('service hides percentages for zero median, missing fourth week and partial
     assert.equal(overview.displayResult.amount,'100.0000');
     assert.equal(overview.comparison.changePercent,null);
     assert.equal(overview.comparison.reason,reason);
+    let latestReads=0;
+    const latest=await getFinancialOverview(ids.user,ids.store,null,{
+      loadPeriodPair:async(...args)=>{latestReads+=1;return getPublishedFinancialPeriodPair(...args);}
+    });
+    assert.equal(latestReads,1);
+    assert.equal(latest.publicationId,ids.publication);
+    assert.equal(latest.displayResult.amount,'100.0000');
+    assert.equal(latest.comparison.changePercent,null);
+    assert.equal(latest.comparison.reason,reason);
     const other=await fixture();
     assert.equal(await getPublishedFinancialPeriodPair(other.user,ids.store,{periodStart:'2026-09-14',periodEnd:'2026-09-20'}),null);
   }
+});
+
+test('latest obsolete publication keeps its frozen method and unavailable result',async()=>{
+  const ids=await fixture({methodVersion:'financial-result-v28'});
+  const pair=await getPublishedFinancialPeriodPair(ids.user,ids.store,{comparisonPeriodCount:4});
+  assert.equal(pair.publication_id,ids.publication);
+  assert.equal(pair.method_version,'financial-result-v28');
+  assert.equal(pair.method_upgrade_pending,true);
+  assert.equal(pair.history.length,4);
+  let reads=0;
+  const overview=await getFinancialOverview(ids.user,ids.store,null,{
+    loadPeriodPair:async(...args)=>{reads+=1;return getPublishedFinancialPeriodPair(...args);}
+  });
+  assert.equal(reads,1);
+  assert.equal(overview.publicationId,ids.publication);
+  assert.equal(overview.status,'unavailable');
+  assert.equal(overview.displayResult,null);
+  assert.equal(overview.comparison.changePercent,null);
+  assert.deepEqual(overview.missingReasons,['financial_method_upgrade_pending']);
 });

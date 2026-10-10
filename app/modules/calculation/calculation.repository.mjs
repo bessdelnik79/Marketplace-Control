@@ -828,7 +828,22 @@ async function getDailyUpdateStatus(client,businessId,storeId,periodStart=null,p
     lastErrorCode:job.last_error_code??null,affectedPeriod:{start:job.affected_from,end:job.affected_to},canRetry};
 }
 
-async function getLegacyPair(client,businessId,storeId,{periodStart,periodEnd,previousPeriodStart,previousPeriodEnd,comparisonPeriods=[]},canRetry=false){
+function comparisonPeriodsBeforeRange(periodStart,periodEnd,count){
+  const length=dateSpan(periodStart,periodEnd);
+  if(!length)throw new Error('calculation_invalid_period');
+  const start=new Date(`${periodStart}T00:00:00Z`),end=new Date(`${periodEnd}T00:00:00Z`);
+  const months=(end.getUTCFullYear()-start.getUTCFullYear())*12+end.getUTCMonth()-start.getUTCMonth()+1;
+  const calendarMonths=start.getUTCDate()===1&&end.getUTCDate()===new Date(Date.UTC(end.getUTCFullYear(),end.getUTCMonth()+1,0)).getUTCDate()
+    &&(months===1||months===3&&start.getUTCMonth()%3===0||months===12&&start.getUTCMonth()===0);
+  return Array.from({length:count},(_,index)=>({
+    start:calendarMonths?new Date(Date.UTC(start.getUTCFullYear(),start.getUTCMonth()-months*(index+1),1)).toISOString().slice(0,10)
+      :shiftCalendarDate(periodStart,-length*(index+1)),
+    end:calendarMonths?new Date(Date.UTC(start.getUTCFullYear(),start.getUTCMonth()-months*index,0)).toISOString().slice(0,10)
+      :shiftCalendarDate(periodEnd,-length*(index+1))
+  }));
+}
+
+async function getLegacyPair(client,businessId,storeId,{periodStart,periodEnd,previousPeriodStart,previousPeriodEnd,comparisonPeriods=[],comparisonPeriodCount=0},canRetry=false){
   let publication=await getCurrentPublicationContext(client,businessId,storeId);
   if(!publication)return null;
   if(!periodStart||!periodEnd){
@@ -839,6 +854,10 @@ async function getLegacyPair(client,businessId,storeId,{periodStart,periodEnd,pr
     if(!latest)return{...publication,publication_source:'legacy',current:null,previous:null};
     periodStart=latest.period_start;periodEnd=latest.period_end;
     previousPeriodStart=shiftCalendarDate(periodStart,-7);previousPeriodEnd=shiftCalendarDate(periodEnd,-7);
+  }
+  if(!comparisonPeriods.length&&comparisonPeriodCount){
+    comparisonPeriods=comparisonPeriodsBeforeRange(periodStart,periodEnd,comparisonPeriodCount);
+    previousPeriodStart=comparisonPeriods[0].start;previousPeriodEnd=comparisonPeriods[0].end;
   }
   let current=await getPeriodEnvelope(client,publication.run_id,periodStart,periodEnd);
   if(current?.quality==='unavailable'&&!current.period_result_id){
@@ -874,10 +893,11 @@ export async function getPublishedFinancialPeriod(userId,storeId,periodStart,per
   });
 }
 
-export async function getPublishedFinancialPeriodPair(userId,storeId,{periodStart=null,periodEnd=null,previousPeriodStart=null,previousPeriodEnd=null,comparisonPeriods=[]}={}){
+export async function getPublishedFinancialPeriodPair(userId,storeId,{periodStart=null,periodEnd=null,previousPeriodStart=null,previousPeriodEnd=null,comparisonPeriods=[],comparisonPeriodCount=0}={}){
+  if(!Number.isInteger(comparisonPeriodCount)||comparisonPeriodCount<0||comparisonPeriodCount>4)throw new Error('calculation_invalid_comparison_period_count');
   return withOwnedBusinessContext(userId,async(client,businessId,role)=>{
     const canRetry=['owner','editor'].includes(role);
-    const requested={periodStart,periodEnd,previousPeriodStart,previousPeriodEnd,comparisonPeriods};
+    const requested={periodStart,periodEnd,previousPeriodStart,previousPeriodEnd,comparisonPeriods,comparisonPeriodCount};
     const daily=await getCurrentDailyPublicationContext(client,businessId,storeId);
     if(daily){
       if(!periodStart||!periodEnd){
@@ -888,6 +908,10 @@ export async function getPublishedFinancialPeriodPair(userId,storeId,{periodStar
         }
       }
       if(periodStart&&periodEnd){
+        if(!comparisonPeriods.length&&comparisonPeriodCount){
+          comparisonPeriods=comparisonPeriodsBeforeRange(periodStart,periodEnd,comparisonPeriodCount);
+          previousPeriodStart=comparisonPeriods[0].start;previousPeriodEnd=comparisonPeriods[0].end;
+        }
         const current=await getDailyPeriodEnvelope(client,daily,periodStart,periodEnd);
         if(current){
           const previous=previousPeriodStart&&previousPeriodEnd

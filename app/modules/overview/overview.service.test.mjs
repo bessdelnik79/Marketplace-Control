@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getFinancialOverview, getOverviewState } from './overview.service.mjs';
 import { previousFourCalendarPeriods } from './financial-overview.mjs';
+import { getPublishedFinancialPeriodPair } from '../calculation/calculation.repository.mjs';
+import { pool } from '../../infrastructure/database/client.mjs';
 
 function period(start, end, { quality = 'complete', missingReasons = [] } = {}) {
   return {
@@ -182,15 +184,15 @@ test('missing persisted week returns an explicit unavailable model without recal
   assert.equal(overview.comparison.changePercent, null);
 });
 
-test('missing selected week loads the latest published week and its previous period',async()=>{
+test('missing selected week requests the latest publication and four preceding periods once',async()=>{
   const requests=[];
   const overview=await getFinancialOverview('user-1','store-1',null,{loadPeriodPair:async(...args)=>{requests.push(args);return pair();}});
-  assert.deepEqual(requests,[['user-1','store-1',{}]]);
+  assert.deepEqual(requests,[['user-1','store-1',{comparisonPeriodCount:4}]]);
   assert.deepEqual(overview.period,{start:'2026-09-14',end:'2026-09-20',timezone:'Europe/Moscow'});
   assert.equal(overview.comparison.comparable,true);
 });
 
-test('latest arbitrary period reloads its exact equal-length predecessor', async () => {
+test('latest arbitrary period retains the fallback for older injected readers', async () => {
   const requests = [];
   const current = period('2026-08-19', '2026-09-25');
   const previous = period('2026-07-12', '2026-08-18');
@@ -202,12 +204,103 @@ test('latest arbitrary period reloads its exact equal-length predecessor', async
         : pair({ current, previous });
     }
   });
+  assert.equal(requests.length,2);
+  assert.deepEqual(requests[0],['user-1','store-1',{comparisonPeriodCount:4}]);
   assert.deepEqual(requests.at(-1), ['user-1', 'store-1', {
     periodStart: '2026-08-19', periodEnd: '2026-09-25',
     previousPeriodStart: '2026-07-12', previousPeriodEnd: '2026-08-18',
     comparisonPeriods:previousFourCalendarPeriods({start:'2026-08-19',end:'2026-09-25'})
   }]);
   assert.deepEqual(overview.comparison.period, { start: '2026-07-12', end: '2026-08-18', timezone: 'Europe/Moscow' });
+});
+
+test('latest arbitrary published range with complete history is read once',async()=>{
+  const current=period('2026-08-19','2026-09-25'),previous=period('2026-07-12','2026-08-18');
+  const requests=[];
+  const overview=await getFinancialOverview('user-1','store-1',null,{
+    loadPeriodPair:async(...args)=>{requests.push(args);return pair({current,previous});}
+  });
+  assert.deepEqual(requests,[['user-1','store-1',{comparisonPeriodCount:4}]]);
+  assert.equal(overview.comparison.comparable,true);
+  assert.deepEqual(overview.comparison.period,{start:previous.period_start,end:previous.period_end,timezone:'Europe/Moscow'});
+});
+
+test('latest missing history remains unavailable without a second publication read',async()=>{
+  for(const missingIndex of [0,3]){
+    const data=pair();
+    data.history[missingIndex]=null;
+    if(missingIndex===0)data.previous=null;
+    let reads=0;
+    const overview=await getFinancialOverview('user-1','store-1',null,{
+      loadPeriodPair:async()=>{reads+=1;return data;}
+    });
+    assert.equal(reads,1);
+    assert.equal(overview.publicationId,'publication-1');
+    assert.equal(overview.displayResult.amount,'74.0000');
+    assert.equal(overview.comparison.changePercent,null);
+    assert.equal(overview.comparison.reason,'previous_period_unavailable');
+  }
+});
+
+test('latest obsolete method is kept unavailable after one history read',async()=>{
+  let reads=0;
+  const overview=await getFinancialOverview('user-1','store-1',null,{
+    loadPeriodPair:async()=>{reads+=1;return pair({method_version:'financial-result-v28',method_upgrade_pending:true});}
+  });
+  assert.equal(reads,1);
+  assert.equal(overview.status,'unavailable');
+  assert.equal(overview.displayResult,null);
+  assert.deepEqual(overview.missingReasons,['financial_method_upgrade_pending']);
+  assert.equal(overview.comparison.changePercent,null);
+});
+
+test('latest legacy reader resolves calendar and arbitrary history within its original publication',async t=>{
+  let selected,queries;
+  const client={release(){},async query(sql,values){
+    queries.push([sql,values]);
+    if(sql.includes('from mc.memberships'))return{rows:[{business_id:'business-1',role:'owner'}]};
+    if(sql.includes('from mc.publications p join mc.calculation_runs r'))return{rows:[{
+      publication_id:'legacy-1',run_id:'run-1',request_id:'request-1',method_version:'financial-result-v5',published_at:new Date('2026-09-21T10:00:00Z')
+    }]};
+    if(sql.includes('from mc.calculation_request_products'))return{rows:[{product_id:'product-a'}]};
+    if(sql.includes('mc.financial_tariff_scope_matches'))return{rows:[{allowed:true}]};
+    if(sql.includes('order by period_end desc,period_start desc limit 1'))return{rows:[{
+      period_start:selected.start,period_end:selected.end
+    }]};
+    if(sql.includes('select id as period_result_id'))return{rows:[{
+      ...period(values[1],values[2]),period_result_id:`${values[1]}:${values[2]}`
+    }]};
+    return{rows:[]};
+  }};
+  t.mock.method(pool,'connect',async()=>client);
+  for(selected of [{start:'2026-03-01',end:'2026-03-31'},{start:'2026-07-01',end:'2026-09-30'},
+    {start:'2024-01-01',end:'2024-12-31'},{start:'2026-08-19',end:'2026-09-25'},
+    {start:'2026-03-28',end:'2026-04-26'}]){
+    queries=[];
+    const data=await getPublishedFinancialPeriodPair('user-1','store-1',{comparisonPeriodCount:4});
+    const expected=previousFourCalendarPeriods(selected);
+    assert.equal(data.publication_id,'legacy-1');
+    assert.equal(data.method_version,'financial-result-v5');
+    assert.equal(data.history[0],data.previous);
+    assert.deepEqual(data.history.map(value=>[value.period_start,value.period_end]),expected.map(value=>[value.start,value.end]));
+    const envelopes=queries.filter(([sql])=>sql.includes('select id as period_result_id'));
+    assert.deepEqual(envelopes.map(([,values])=>values),[selected,...expected].map(value=>['run-1',value.start,value.end]));
+    assert.equal(queries.filter(([sql])=>sql==='begin').length,1);
+  }
+  queries=[];
+  const original=await getPublishedFinancialPeriodPair('user-1','store-1');
+  assert.deepEqual(original.history,[]);
+  assert.equal(queries.filter(([sql])=>sql.includes('select id as period_result_id')).length,2);
+});
+
+test('reader rejects unbounded comparison counts before opening a database transaction',async t=>{
+  const connect=t.mock.method(pool,'connect',()=>{throw new Error('unexpected_database_access');});
+  for(const count of [-1,5,1.5,'4']){
+    await assert.rejects(()=>getPublishedFinancialPeriodPair('user-1','store-1',{comparisonPeriodCount:count}),{
+      message:'calculation_invalid_comparison_period_count'
+    });
+  }
+  assert.equal(connect.mock.callCount(),0);
 });
 
 test('service rejects invalid date and foreign or missing publication stays absent', async () => {

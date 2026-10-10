@@ -6,6 +6,8 @@ import path from 'node:path';
 import test from 'node:test';
 
 const url=process.env.OPERATIONAL_CACHE_INTEGRATION_DATABASE_URL;
+const readRole=process.env.OPERATIONAL_CACHE_READ_ROLE;
+if(readRole&&!/^[a-z_][a-z0-9_]*$/.test(readRole))throw new Error('OPERATIONAL_CACHE_READ_ROLE must be a trusted disposable test role name.');
 if(!url||!new URL(url).pathname.toLowerCase().includes('test'))throw new Error('Set OPERATIONAL_CACHE_INTEGRATION_DATABASE_URL to a disposable test PostgreSQL database.');
 process.env.DATABASE_URL=url;
 const {migrate,pool}=await import('../../app/infrastructure/database/client.mjs');
@@ -100,6 +102,68 @@ test('closed operational days have no daily refetch TTL and finance wins over ca
   await publish(pending,saved.returnsRows);
   const queued=await requestOperationalRangeRefresh(ids.user,ids.store,range.dateFrom,range.dateTo,{now:new Date('2026-10-04T12:00:00Z')});
   assert.equal(queued.queued,0);assert.equal(queued.pendingDays,28); // Only already queued comparison weeks remain.
+});
+
+test('scoped operational reader preserves every current column and verifies each full financial refs set once',async()=>{
+  await context(async client=>{
+    const params=[ids.business,ids.store,range.dateFrom,range.dateTo,[ids.product]];
+    const before=(await client.query(`select * from mc.current_operational_daily_metrics
+      where business_id=$1 and store_id=$2 and metric_date between $3 and $4 and product_id=any($5::uuid[])
+      order by metric_date,product_id`,params)).rows;
+    const after=(await client.query(`select * from mc.current_operational_daily_metrics_for_range($1,$2,$3::date,$4::date,$5::uuid[])
+      order by metric_date,product_id`,params)).rows;
+    assert.equal(after.length,7);assert.deepEqual(after,before);
+    const uniqueRefs=new Set(after.filter(row=>row.return_source==='financial_report').map(row=>JSON.stringify(row.return_source_refs)));
+    assert.ok(uniqueRefs.size>0&&uniqueRefs.size<after.length);
+    const functionBody=(await client.query(`select prosrc from pg_proc where oid=
+      'mc.current_operational_daily_metrics_for_range(uuid,uuid,date,date,uuid[])'::regprocedure`)).rows[0].prosrc;
+    let sql=functionBody;
+    for(const[name,parameter]of [['target_business','$1'],['target_store','$2'],['target_start','$3::date'],['target_end','$4::date'],['target_products','$5::uuid[]']]){
+      sql=sql.replace(new RegExp('\\b'+name+'\\b','g'),()=>parameter);
+    }
+    const plan=(await client.query('explain (analyze,buffers,format json) '+sql,params)).rows[0]['QUERY PLAN'][0].Plan;
+    const checks=[];function walk(node){if(node['Subplan Name']==='CTE checked_refs')checks.push(node);for(const child of node.Plans??[])walk(child);}walk(plan);
+    assert.equal(checks.length,1);assert.equal(checks[0]['Actual Rows'],uniqueRefs.size);assert.equal(checks[0]['Actual Loops'],1);
+    const narrowed=(await client.query(`select * from mc.current_operational_daily_metrics_for_range($1,$2,$3::date,$3::date,$4::uuid[])`,
+      [ids.business,ids.store,range.dateFrom,[ids.product]])).rows;
+    assert.equal(narrowed.length,1);assert.equal(narrowed[0].metric_date.toISOString().slice(0,10),range.dateFrom);
+    assert.equal((await client.query(`select * from mc.current_operational_daily_metrics_for_range($1,$2,$3::date,$4::date,$5::uuid[])`,
+      [ids.business,ids.store,range.dateFrom,range.dateTo,[randomUUID()]])).rowCount,0);
+  });
+});
+
+test('scoped operational reader cannot expose a foreign tenant or another store',async()=>{
+  const foreignRows=await context(client=>client.query(`select * from mc.current_operational_daily_metrics_for_range($1,$2,$3::date,$4::date,$5::uuid[])`,
+    [ids.business,ids.store,range.dateFrom,range.dateTo,[ids.product]]),{user:ids.foreignUser,business:ids.foreignBusiness});
+  assert.equal(foreignRows.rowCount,0);
+  const rows=await context(client=>client.query(`select * from mc.current_operational_daily_metrics_for_range($1,$2,$3::date,$4::date,$5::uuid[])`,
+    [ids.business,randomUUID(),range.dateFrom,range.dateTo,[ids.product]]));
+  assert.equal(rows.rowCount,0);
+});
+
+test('non-owner SELECT-only role reads the scoped function under forced RLS',{skip:!readRole},async()=>{
+  await context(async client=>{
+    await client.query(`grant usage on schema mc to ${readRole}`);
+    await client.query(`grant select on mc.operational_snapshot_activations,mc.operational_snapshots,mc.operational_periods,
+      mc.operational_snapshot_products,mc.operational_daily_metrics,mc.current_operational_daily_metrics,
+      mc.financial_week_coverage,mc.connections,mc.stores,mc.jobs,mc.financial_week_inventory,
+      mc.report_versions,mc.reports,mc.report_normalizations,mc.method_versions,mc.data_issues to ${readRole}`);
+    await client.query(`grant execute on function mc.context_business_id(),mc.context_user_id(),
+      mc.operational_financial_return_refs_current(uuid,uuid,jsonb),
+      mc.current_operational_daily_metrics_for_range(uuid,uuid,date,date,uuid[]) to ${readRole}`);
+    await client.query(`set local role ${readRole}`);
+    const role=(await client.query(`select current_user name,rolsuper,rolbypassrls from pg_roles where rolname=current_user`)).rows[0];
+    assert.equal(role.name,readRole);assert.equal(role.rolsuper,false);assert.equal(role.rolbypassrls,false);
+    const params=[ids.business,ids.store,range.dateFrom,range.dateTo,[ids.product]];
+    const original=(await client.query(`select * from mc.current_operational_daily_metrics where business_id=$1 and store_id=$2
+      and metric_date between $3 and $4 and product_id=any($5::uuid[]) order by metric_date,product_id`,params)).rows;
+    const scoped=(await client.query(`select * from mc.current_operational_daily_metrics_for_range($1,$2,$3::date,$4::date,$5::uuid[])
+      order by metric_date,product_id`,params)).rows;
+    assert.equal(scoped.length,7);assert.deepEqual(scoped,original);
+    await client.query("select set_config('app.business_id',$1,true)",[ids.foreignBusiness]);
+    assert.equal((await client.query(`select * from mc.current_operational_daily_metrics_for_range($1,$2,$3::date,$4::date,$5::uuid[])`,params)).rowCount,0);
+    assert.equal((await client.query(`select has_table_privilege(current_user,'mc.operational_daily_metrics','INSERT') allowed`)).rows[0].allowed,false);
+  });
 });
 
 test('confirmed financial empty week promotes retained funnel dates older than Statistics history locally',async()=>{

@@ -62,12 +62,12 @@ export async function getFinancialOverview(userId, storeId, selectedDate, select
     throw new Error('overview_invalid_period');
   }
   if(selectedDate===null||selectedDate===undefined||selectedDate===''){
-    pair=await loadPeriodPair(normalizedUserId,normalizedStoreId,{});
+    pair=await loadPeriodPair(normalizedUserId,normalizedStoreId,{comparisonPeriodCount:4});
     if(pair?.current){
       period=validateCalendarPeriod({start:pair.current.period_start,end:pair.current.period_end,timezone});
       previousPeriod=previousCalendarPeriod(period);
       const comparisonPeriods=previousFourCalendarPeriods(period);
-      if (!comparisonPeriods.every((value,index)=>envelopeMatchesPeriod(pair.history?.[index],value))) {
+      if (!comparisonPeriods.every((value,index)=>pair.history?.[index]===null||envelopeMatchesPeriod(pair.history?.[index],value))) {
         pair=await loadPeriodPair(normalizedUserId,normalizedStoreId,{
           periodStart:period.start,periodEnd:period.end,
           previousPeriodStart:previousPeriod.start,previousPeriodEnd:previousPeriod.end,comparisonPeriods
