@@ -1,5 +1,6 @@
 import { calendarWeekForDate, validateCalendarPeriod } from './financial-overview.mjs';
 import { frozenFinancialOverview } from './frozen-overview.mjs';
+import { withPublishedPeriodCache } from '../calculation/published-period-cache.mjs';
 
 function requestedWeek(url) {
   const value = url.searchParams.get('week');
@@ -153,22 +154,24 @@ export function createOverviewRoutes({
       send(res, 200, overviewPage(current, stores, null, pageOptions));
       return true;
     }
-    const state = await getOverviewState(current.user_id, {
-      storeId: store.id,
-      financialPeriodStart: period?.start ?? null,
-      financialPeriodEnd: period?.end ?? null
-    });
-    if (!state) {
-      send(res, 404, 'Магазин не найден.');
+    return withPublishedPeriodCache(current.user_id,async()=>{
+      const state = await getOverviewState(current.user_id, {
+        storeId: store.id,
+        financialPeriodStart: period?.start ?? null,
+        financialPeriodEnd: period?.end ?? null
+      });
+      if (!state) {
+        send(res, 404, 'Магазин не найден.');
+        return true;
+      }
+      if(readPublishedSituations&&state.financial?.status==='available'&&state.financial.publicationId&&state.financial.period?.start&&state.financial.period?.end){
+        const situations=await readPublishedSituations(current.user_id,{storeId:store.id,
+          publicationId:state.financial.publicationId,publicationSource:state.financial.publicationSource,
+          periodStart:state.financial.period.start,periodEnd:state.financial.period.end});
+        state.situations={...situations,items:situations.items.slice(0,3)};
+      }
+      send(res, 200, overviewPage(current, stores, state, pageOptions),{'cache-control':'no-store'});
       return true;
-    }
-    if(readPublishedSituations&&state.financial?.status==='available'&&state.financial.publicationId&&state.financial.period?.start&&state.financial.period?.end){
-      const situations=await readPublishedSituations(current.user_id,{storeId:store.id,
-        publicationId:state.financial.publicationId,publicationSource:state.financial.publicationSource,
-        periodStart:state.financial.period.start,periodEnd:state.financial.period.end});
-      state.situations={...situations,items:situations.items.slice(0,3)};
-    }
-    send(res, 200, overviewPage(current, stores, state, pageOptions),{'cache-control':'no-store'});
-    return true;
+    });
   };
 }

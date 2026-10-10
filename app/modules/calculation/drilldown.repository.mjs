@@ -9,6 +9,7 @@ import { buildSituations } from '../overview/situations.mjs';
 import { buildPublishedDrilldownModel, paginatePublishedSkuList } from './drilldown.mjs';
 import { readContributionPage } from './drilldown-evidence.repository.mjs';
 import { readSituationRevenueAbsence } from './situation-absence.repository.mjs';
+import { getCachedDailyPeriodRows } from './published-period-cache.mjs';
 
 const uuidPattern=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function invalid(code='drilldown_invalid_request'){throw new Error(code);}
@@ -28,6 +29,15 @@ function publicGroup({lineRefs,reportIds,...group}){return group;}
 function publicItem(item){return{...item,groups:item.groups.map(publicGroup)};}
 function presentationGroup(group){return {...publicGroup(group),reportIds:group.reportIds??[]};}
 function presentationItem(item){return {...publicItem(item),groups:item.groups.map(presentationGroup)};}
+function orderDailyRows(rows,fields){
+  return rows.sort((left,right)=>{
+    for(const field of fields){
+      if(left[field]===right[field])continue;
+      return left[field]<right[field]?-1:1;
+    }
+    return 0;
+  });
+}
 
 async function legacySnapshot(client,businessId,input){
   const publication=(await client.query(`select p.id,p.created_at as published_at,r.id as run_id,r.request_id,
@@ -64,7 +74,9 @@ async function dailySnapshot(client,businessId,input){
     where p.business_id=$1 and p.store_id=$2 and p.id=$3 and g.status='succeeded'`,
   [businessId,input.storeId,input.publicationId])).rows[0];
   if(!publication)invalid('drilldown_not_found');
-  const days=(await client.query(`select mapped.accounting_date::text,mapped.generation_id,day.coverage_complete,day.quality,day.tax_usable,
+  const cached=getCachedDailyPeriodRows({businessId,storeId:input.storeId,publicationId:input.publicationId,
+    periodStart:input.periodStart,periodEnd:input.periodEnd});
+  const days=cached?cached.days.map(({empty_evidence_revoked,...day})=>day):(await client.query(`select mapped.accounting_date::text,mapped.generation_id,day.coverage_complete,day.quality,day.tax_usable,
       day.store_profit_before_tax::text,day.selected_profit_before_tax::text,day.available_profit_before_tax::text,
       generation.parser_method_version_id,generation.result_method_version_id
     from mc.financial_daily_publication_days mapped
@@ -87,18 +99,18 @@ async function dailySnapshot(client,businessId,input){
   if(!compatible)envelope=unavailable(input.periodStart,input.periodEnd,['drilldown_publication_incompatible']);
   else{
     const args=[businessId,input.storeId,input.publicationId,input.periodStart,input.periodEnd];
-    const rows=(await client.query(`select result.id,result.generation_id,result.accounting_date::text,result.scope,
+    const rows=cached?orderDailyRows(cached.lines,['accounting_date','category_code','id']):(await client.query(`select result.id,result.generation_id,result.accounting_date::text,result.scope,
         result.product_id,result.variant_id,result.category_code,result.amount_signed::text,result.quality
       from mc.financial_daily_publication_days mapped join mc.financial_daily_results result
         on result.generation_id=mapped.generation_id and result.accounting_date=mapped.accounting_date
       where mapped.business_id=$1 and mapped.store_id=$2 and mapped.publication_id=$3 and mapped.accounting_date between $4 and $5
       order by result.accounting_date,result.category_code,result.id`,args)).rows;
-    const reasons=(await client.query(`select reason.accounting_date::text,reason.reason_code
+    const reasons=cached?cached.reasons:(await client.query(`select reason.accounting_date::text,reason.reason_code
       from mc.financial_daily_publication_days mapped join mc.financial_daily_reasons reason
         on reason.generation_id=mapped.generation_id and reason.accounting_date=mapped.accounting_date
       where mapped.business_id=$1 and mapped.store_id=$2 and mapped.publication_id=$3 and mapped.accounting_date between $4 and $5
       order by reason.accounting_date,reason.reason_code`,args)).rows;
-    const facts=(await client.query(`select fact.id,fact.generation_id,fact.accounting_date::text,fact.product_id,fact.tax_setting_version_id,
+    const facts=cached?orderDailyRows(cached.taxFacts,['accounting_date','product_id','id']):(await client.query(`select fact.id,fact.generation_id,fact.accounting_date::text,fact.product_id,fact.tax_setting_version_id,
         fact.tax_base_unrounded::text,fact.tax_numerator_unrounded::text,fact.tax_rate_fraction::text
       from mc.financial_daily_publication_days mapped join mc.financial_daily_tax_facts fact
         on fact.generation_id=mapped.generation_id and fact.accounting_date=mapped.accounting_date

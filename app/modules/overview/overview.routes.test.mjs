@@ -1,12 +1,31 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createOverviewRoutes } from './overview.routes.mjs';
+import { cacheDailyPeriodRows,getCachedDailyPeriodRows } from '../calculation/published-period-cache.mjs';
 
 const current = { user_id: 'user-1' };
 const stores = [
   { id: 'store-1', name: 'Первый', connected: true },
   { id: 'store-2', name: 'Второй', connected: true }
 ];
+
+test('overview reuses internal financial rows only between its current money and situations reads',async()=>{
+  const key={businessId:'business-1',storeId:'store-1',publicationId:'money-publication',periodStart:'2026-07-13',periodEnd:'2026-07-19'};
+  const rows={days:[{accounting_date:key.periodStart}],lines:[],reasons:[],taxFacts:[]};
+  let reads=0;
+  const s=setup({getOverviewState:async()=>{
+    assert.equal(getCachedDailyPeriodRows(key),null);
+    cacheDailyPeriodRows(key,rows);
+    return{financial:{status:'available',publicationId:key.publicationId,publicationSource:'daily',period:{start:key.periodStart,end:key.periodEnd}}};
+  },readPublishedSituations:async()=>{
+    reads++;assert.deepEqual(getCachedDailyPeriodRows(key),rows);
+    return{items:[],total:0,status:'complete'};
+  }});
+  await s.run('/overview?storeId=store-1');
+  assert.equal(getCachedDailyPeriodRows(key),null);
+  await s.run('/overview?storeId=store-1');
+  assert.equal(reads,2);assert.equal(getCachedDailyPeriodRows(key),null);
+});
 
 test('current overview binds all situations to its money publication and only displays first three',async()=>{
   let input;

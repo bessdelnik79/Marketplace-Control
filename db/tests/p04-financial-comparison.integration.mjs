@@ -8,14 +8,16 @@ if(!integrationUrl)throw new Error('Set P04_FINANCIAL_INTEGRATION_DATABASE_URL t
 if(!new URL(integrationUrl).pathname.slice(1).toLowerCase().includes('test'))throw new Error('Refusing to run outside a test database.');
 process.env.DATABASE_URL=integrationUrl;
 const {migrate,pool}=await import('../../app/infrastructure/database/client.mjs');
-const {getPublishedFinancialPeriodPair}=await import('../../app/modules/calculation/calculation.repository.mjs');
+const {getPublishedFinancialPeriod,getPublishedFinancialPeriodPair}=await import('../../app/modules/calculation/calculation.repository.mjs');
 const {getFinancialOverview}=await import('../../app/modules/overview/overview.service.mjs');
+const {withPublishedPeriodCache}=await import('../../app/modules/calculation/published-period-cache.mjs');
+const {readPublishedSituations}=await import('../../app/modules/calculation/drilldown.repository.mjs');
 await migrate();
 test.after(()=>pool.end());
 
 // Persist minimal synthetic read-model values. These tests exercise publication
 // reads and overview comparison, not the calculation/publication pipeline.
-async function fixture({current='100.0000',amounts=['10.0000','20.0000','30.0000','1000.0000'],missing=false,partial=false,methodVersion=null}={}){
+async function fixture({current='100.0000',amounts=['10.0000','20.0000','30.0000','1000.0000'],missing=false,partial=false,methodVersion=null,mixed=false,withTaxFacts=false}={}){
   const ids={user:randomUUID(),business:randomUUID(),store:randomUUID(),product:randomUUID()};
   const selected={start:'2026-09-14',end:'2026-09-20'};
   const periods=[selected,...previousFourCalendarPeriods(selected)];
@@ -35,23 +37,35 @@ async function fixture({current='100.0000',amounts=['10.0000','20.0000','30.0000
     const parser=(await client.query(`select id from mc.method_versions where code='wb_finance_import' order by version_no desc limit 1`)).rows[0].id;
     const method=(await client.query(`select id from mc.method_versions where code='financial_result' and parameters @> '{"targetPeriod":true}'::jsonb
       and ($1::text is null or implementation_version=$1) order by version_no desc limit 1`,[methodVersion])).rows[0].id;
+    let taxVersion=null;
+    if(withTaxFacts){
+      const setting=(await client.query(`insert into mc.tax_settings(business_id,effective_from) values($1,'2026-01-01') returning id`,[ids.business])).rows[0];
+      taxVersion=(await client.query(`insert into mc.tax_setting_versions(business_id,tax_setting_id,version_no,regime_code,usn_rate_fraction,vat_mode,changed_by)
+        values($1,$2,1,'usn_income',0.06,'exempt',$3) returning id`,[ids.business,setting.id,ids.user])).rows[0].id;
+      await client.query(`update mc.tax_settings set current_version_id=$1 where id=$2`,[taxVersion,setting.id]);
+    }
     await client.query(`insert into mc.financial_store_event_state(business_id,store_id,next_generation) values($1,$2,3)`,[ids.business,ids.store]);
+    const generationIds=new Map();
     let prior=null;
-    for(let generationNo=1;generationNo<=2;generationNo+=1){
+    for(let generationNo=1;generationNo<=(mixed?3:2);generationNo+=1){
+      if(generationNo===3)await client.query(`update mc.financial_store_event_state set next_generation=4 where business_id=$1 and store_id=$2`,[ids.business,ids.store]);
+      const affectedFrom=generationNo===3?selected.start:periods.at(-1).start;
       const job=(await client.query(`select * from mc.enqueue_job($1,'financial_dates_recalculate',$2,
-        jsonb_build_object('schemaVersion',1,'eventGeneration',$3::int,'affectedFrom','2026-08-17','affectedTo','2026-09-20','allowsWbApi',false))`,
-      [ids.store,`comparison:${randomUUID()}`,generationNo])).rows[0].id;
+        jsonb_build_object('schemaVersion',1,'eventGeneration',$3::int,'affectedFrom',$4::text,'affectedTo','2026-09-20','allowsWbApi',false))`,
+      [ids.store,`comparison:${randomUUID()}`,generationNo,affectedFrom])).rows[0].id;
       const generation=(await client.query(`insert into mc.financial_daily_generations(
         business_id,store_id,generation_no,source_event_generation,watermark_generation,job_id,affected_from,affected_to,
         parser_method_version_id,result_method_version_id,frozen_input_fingerprint)
-        values($1,$2,$3,$3,$3,$4,'2026-08-17','2026-09-20',$5,$6,$7) returning id`,
-      [ids.business,ids.store,generationNo,job,parser,method,randomUUID()])).rows[0].id;
-      if(generationNo===2){
+        values($1,$2,$3,$3,$3,$4,$8::date,'2026-09-20',$5,$6,$7) returning id`,
+      [ids.business,ids.store,generationNo,job,parser,method,randomUUID(),affectedFrom])).rows[0].id;
+      generationIds.set(generationNo,generation);
+      if(generationNo>=2){
         await client.query(`insert into mc.financial_daily_generation_products(business_id,store_id,generation_id,product_id,selected) values($1,$2,$3,$4,true)`,
         [ids.business,ids.store,generation,ids.product]);
         for(let index=0;index<periods.length;index+=1){
+          if(generationNo===3&&index!==0)continue;
           if(missing&&index===4)continue;
-          const period=periods[index],amount=index===0?current:amounts[index-1];
+          const period=periods[index],amount=generationNo===3?'200.0000':index===0?current:amounts[index-1];
           const quality=partial&&index===4?'partial':'complete';
           await client.query(`insert into mc.financial_daily_days(business_id,store_id,generation_id,accounting_date,
             coverage_complete,quality,tax_usable,store_profit_before_tax,selected_profit_before_tax,available_profit_before_tax)
@@ -64,16 +78,24 @@ async function fixture({current='100.0000',amounts=['10.0000','20.0000','30.0000
           [ids.business,ids.store,generation,period.start,ids.product,amount,quality]);
           if(quality==='partial')await client.query(`insert into mc.financial_daily_reasons(business_id,store_id,generation_id,accounting_date,scope,reason_code,severity)
             values($1,$2,$3,$4,'selected_products','cost_missing','partial')`,[ids.business,ids.store,generation,period.start]);
+          if(taxVersion)await client.query(`insert into mc.financial_daily_tax_facts(business_id,store_id,generation_id,accounting_date,product_id,
+            tax_setting_version_id,tax_base_unrounded,tax_numerator_unrounded,tax_rate_fraction,tax_amount_rounded)
+            select $1,$2,$3,date,$4,$5,5.5555,$8::numeric,0.06,round($8::numeric,4)
+              from generate_series($6::date,least($6::date+1,$7::date),'1 day') date`,
+          [ids.business,ids.store,generation,ids.product,taxVersion,period.start,period.end,generationNo===3?'0.44444':'0.33333']);
         }
       }
       await client.query(`update mc.financial_daily_generations set status='succeeded',quality='complete',finished_at=clock_timestamp() where id=$1`,[generation]);
       const publication=(await client.query(`insert into mc.financial_daily_publications(business_id,store_id,publication_no,
         generation_id,prior_publication_id,affected_from,affected_to,source_event_generation,watermark_generation)
-        values($1,$2,$3,$4,$5,'2026-08-17','2026-09-20',$3,$3) returning id`,[ids.business,ids.store,generationNo,generation,prior])).rows[0].id;
-      if(generationNo===2){
+        values($1,$2,$3,$4,$5,$6::date,'2026-09-20',$3,$3) returning id`,[ids.business,ids.store,generationNo,generation,prior,affectedFrom])).rows[0].id;
+      if(generationNo>=2){
         await client.query(`insert into mc.financial_daily_publication_days(business_id,store_id,publication_id,accounting_date,generation_id)
-          select business_id,store_id,$2,accounting_date,generation_id from mc.financial_daily_days where generation_id=$1`,[generation,publication]);
-        await client.query(`insert into mc.financial_daily_current_publications(business_id,store_id,publication_id) values($1,$2,$3)`,[ids.business,ids.store,publication]);
+          select business_id,store_id,$2,accounting_date,generation_id from mc.financial_daily_days
+          where (generation_id=$1 and ($4::uuid is null or accounting_date>=$3::date))
+            or (generation_id=$4 and accounting_date<$3::date)`,[generation,publication,selected.start,generationNo===3?generationIds.get(2):null]);
+        await client.query(`insert into mc.financial_daily_current_publications(business_id,store_id,publication_id) values($1,$2,$3)
+          on conflict(business_id,store_id) do update set publication_id=excluded.publication_id`,[ids.business,ids.store,publication]);
       }
       prior=publication;
     }
@@ -113,7 +135,9 @@ test('repository reads all four same-publication periods and latest overview loa
   assert.deepEqual(requests,[[ids.user,ids.store,{comparisonPeriodCount:4}]]);
   assert.equal(queries.filter(([sql])=>sql==='begin').length,1);
   const mappedReads=queries.filter(([sql])=>sql.includes('day.coverage_complete,day.quality,day.tax_usable'));
-  assert.deepEqual(mappedReads.map(([,values])=>values),ids.periods.map(value=>[ids.publication,value.start,value.end]));
+  assert.equal(mappedReads.length,1);
+  assert.equal(mappedReads[0][1][0],ids.publication);
+  assert.deepEqual(JSON.parse(mappedReads[0][1][1]).map(value=>[value.period_start,value.period_end]),ids.periods.map(value=>[value.start,value.end]));
   assert.equal(latestPair.publication_id,ids.publication);
   assert.equal(latestPair.history[0],latestPair.previous);
   assert.equal(latestPair.history.length,4);
@@ -171,4 +195,74 @@ test('latest obsolete publication keeps its frozen method and unavailable result
   assert.equal(overview.displayResult,null);
   assert.equal(overview.comparison.changePercent,null);
   assert.deepEqual(overview.missingReasons,['financial_method_upgrade_pending']);
+});
+
+test('situations reuse exact current daily rows while preserving their independent access checks',async t=>{
+  const ids=await fixture({current:'-100.0000',withTaxFacts:true});
+  const input={storeId:ids.store,publicationId:ids.publication,publicationSource:'daily',
+    periodStart:ids.periods[0].start,periodEnd:ids.periods[0].end};
+  const standalone=await readPublishedSituations(ids.user,input);
+  const queries=[];
+  const connect=pool.connect.bind(pool);
+  t.mock.method(pool,'connect',async()=>{
+    const client=await connect();
+    return{query:(...args)=>{queries.push(args);return client.query(...args);},release:(...args)=>client.release(...args)};
+  });
+  await withPublishedPeriodCache(ids.user,async()=>{
+    const money=await getFinancialOverview(ids.user,ids.store,null);
+    assert.equal(money.publicationId,input.publicationId);
+    queries.length=0;
+    const reused=await readPublishedSituations(ids.user,input);
+    assert.deepEqual(reused,standalone);
+    assert.equal(queries.length,13,'only the four repeated raw-row reads are omitted');
+    assert.equal(queries[0][0],'begin isolation level repeatable read read only');
+    assert.ok(queries.some(([sql])=>sql.includes('mc.financial_daily_publication_tariff_allowed')));
+    assert.ok(queries.some(([sql])=>sql.includes('generation.id=$1 or generation.id in')),
+      'all carried generations remain checked, including those outside the requested period');
+    const foreign=await fixture();
+    await assert.rejects(()=>readPublishedSituations(foreign.user,input),/drilldown_not_found/);
+  });
+  queries.length=0;
+  assert.deepEqual(await readPublishedSituations(ids.user,input),standalone);
+  assert.equal(queries.length,17,'outside the request cache, independent readers load their own rows');
+});
+
+test('batch ranges preserve mixed generation identity, independent tax rounding, partial and absent periods',async()=>{
+  const ids=await fixture({mixed:true,withTaxFacts:true,partial:true});
+  const comparisonPeriods=[ids.periods[1],{start:'2026-09-10',end:'2026-09-17'},ids.periods[4],{start:'2026-08-01',end:'2026-08-07'}];
+  const pair=await getPublishedFinancialPeriodPair(ids.user,ids.store,{periodStart:ids.periods[0].start,periodEnd:ids.periods[0].end,
+    previousPeriodStart:comparisonPeriods[0].start,previousPeriodEnd:comparisonPeriods[0].end,comparisonPeriods});
+  assert.equal(pair.history[0],pair.previous);
+  assert.equal(pair.current.totals.estimatedUsnTax,'0.8889','current dates use the new generation and round after summing facts');
+  assert.equal(pair.previous.totals.estimatedUsnTax,'0.6667','carried dates use their original generation, independently of the current period');
+  assert.equal(pair.history[2].quality,'partial');assert.equal(pair.history[3],null);
+  const ranges=[ids.periods[0],...comparisonPeriods],envelopes=[pair.current,...pair.history];
+  for(let index=0;index<ranges.length;index++){
+    const period=ranges[index],single=await getPublishedFinancialPeriod(ids.user,ids.store,period.start,period.end);
+    if(envelopes[index]===null){assert.equal(single,null);continue;}
+    const comparable=Object.fromEntries(Object.keys(envelopes[index]).map(key=>[key,single[key]]));
+    assert.deepEqual(envelopes[index],comparable,'batch and independent period readers agree on every envelope field');
+  }
+  const input={storeId:ids.store,publicationId:ids.publication,publicationSource:'daily',periodStart:ids.periods[0].start,periodEnd:ids.periods[0].end};
+  const standalone=await readPublishedSituations(ids.user,input);
+  await withPublishedPeriodCache(ids.user,async()=>{
+    await getPublishedFinancialPeriodPair(ids.user,ids.store,{comparisonPeriodCount:4});
+    assert.deepEqual(await readPublishedSituations(ids.user,input),standalone);
+  });
+});
+
+test('request row reuse cannot bypass a tariff change between money and situations',async()=>{
+  const ids=await fixture();
+  await withPublishedPeriodCache(ids.user,async()=>{
+    const money=await getFinancialOverview(ids.user,ids.store,null);
+    const client=await pool.connect();
+    try{
+      await client.query('begin');
+      await client.query("select set_config('app.user_id',$1,true),set_config('app.business_id',$2,true)",[ids.user,ids.business]);
+      await client.query(`update mc.subscriptions set period_start='2020-01-01',period_end='2020-02-01' where business_id=$1`,[ids.business]);
+      await client.query('commit');
+    }catch(error){await client.query('rollback');throw error;}finally{client.release();}
+    await assert.rejects(()=>readPublishedSituations(ids.user,{storeId:ids.store,publicationId:money.publicationId,
+      publicationSource:money.publicationSource,periodStart:money.period.start,periodEnd:money.period.end}),/drilldown_not_found/);
+  });
 });

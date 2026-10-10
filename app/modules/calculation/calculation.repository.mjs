@@ -3,6 +3,7 @@ import {readTariffContext,tariffPublicationAllowed} from '../billing/tariff-acce
 import { financialParserVersion } from '../reports/finance.mjs';
 import { calculateFinancialResult, calculateStoreTaxReference, createInputFingerprint, isVerifiedWbResultComponent } from './calculation.mjs';
 import { aggregateDailyFinancialGeneration } from './daily-generation.mjs';
+import { cacheDailyPeriodRows } from './published-period-cache.mjs';
 
 export const compatibleFinancialParserVersions=Object.freeze([
   financialParserVersion,'wb-finance-v12','wb-finance-v11','wb-finance-v10','wb-finance-v9','wb-finance-v8','wb-finance-v7','wb-finance-v6','wb-finance-v5','wb-finance-v4','wb-finance-v3','wb-finance-v2'
@@ -708,88 +709,140 @@ async function latestDailyPeriod(client,publicationId){
   return{period_start:shiftCalendarDate(latest,-weekday),period_end:shiftCalendarDate(latest,6-weekday)};
 }
 
-async function getDailyPeriodEnvelope(client,publication,periodStart,periodEnd){
+export async function loadDailyPeriodEnvelopes(client,publication,periods,businessId,storeId){
+  if(!periods.length)return[];
+  const requested=[...new Map(periods.map(period=>[periodKey(period.start,period.end),{
+    period_key:periodKey(period.start,period.end),period_start:period.start,period_end:period.end
+  }])).values()];
+  const args=[publication.publication_id,JSON.stringify(requested)];
+  const requestedSql=`with requested_periods as (
+    select period_key,period_start,period_end from jsonb_to_recordset($2::jsonb)
+      as requested(period_key text,period_start date,period_end date)
+  )`;
   const mapped=(await client.query(
-    `select mapped_day.accounting_date::text,mapped_day.generation_id,day.coverage_complete,day.quality,day.tax_usable,
+    `${requestedSql}
+     select period.period_key,mapped_day.accounting_date::text,mapped_day.generation_id,day.coverage_complete,day.quality,day.tax_usable,
             exists(select 1 from mc.financial_daily_generation_inputs input
               join mc.financial_week_coverage coverage on coverage.id=input.financial_week_coverage_id
               where input.generation_id=mapped_day.generation_id and input.source_kind='empty_week'
                 and mapped_day.accounting_date between coverage.week_start and coverage.week_end
                 and not mc.financial_empty_week_evidence_valid(coverage.id,input.empty_confirmation_job_id)) as empty_evidence_revoked,
-            day.store_profit_before_tax::text,day.selected_profit_before_tax::text,day.available_profit_before_tax::text
-       from mc.financial_daily_publication_days mapped_day
+            day.store_profit_before_tax::text,day.selected_profit_before_tax::text,day.available_profit_before_tax::text,
+            generation.parser_method_version_id,generation.result_method_version_id
+       from requested_periods period
+       join mc.financial_daily_publication_days mapped_day on mapped_day.publication_id=$1
+        and mapped_day.accounting_date between period.period_start and period.period_end
        join mc.financial_daily_days day on day.generation_id=mapped_day.generation_id and day.accounting_date=mapped_day.accounting_date
-      where mapped_day.publication_id=$1 and mapped_day.accounting_date between $2 and $3
-      order by mapped_day.accounting_date`,[publication.publication_id,periodStart,periodEnd]
+       join mc.financial_daily_generations generation on generation.id=mapped_day.generation_id
+      order by period.period_key,mapped_day.accounting_date`,args
   )).rows;
-  if(!mapped.length)return null;
+  if(!mapped.length)return periods.map(()=>null);
   const lines=(await client.query(
-    `select result.accounting_date::text,result.scope,result.product_id,result.variant_id,result.category_code,result.amount_signed::text
-       from mc.financial_daily_publication_days mapped_day
+    `${requestedSql}
+     select period.period_key,result.id,result.generation_id,result.accounting_date::text,result.scope,result.product_id,result.variant_id,
+            result.category_code,result.amount_signed::text,result.quality
+       from requested_periods period
+       join mc.financial_daily_publication_days mapped_day on mapped_day.publication_id=$1
+        and mapped_day.accounting_date between period.period_start and period.period_end
        join mc.financial_daily_results result on result.generation_id=mapped_day.generation_id and result.accounting_date=mapped_day.accounting_date
-      where mapped_day.publication_id=$1 and mapped_day.accounting_date between $2 and $3
-      order by result.accounting_date,result.scope,result.product_id nulls last,result.variant_id nulls last,result.category_code,result.id`,
-    [publication.publication_id,periodStart,periodEnd]
+      order by period.period_key,result.accounting_date,result.scope,result.product_id nulls last,result.variant_id nulls last,result.category_code,result.id`,args
   )).rows;
   const reasons=(await client.query(
-    `select reason.accounting_date::text,reason.reason_code
-       from mc.financial_daily_publication_days mapped_day
+    `${requestedSql}
+     select period.period_key,reason.accounting_date::text,reason.reason_code
+       from requested_periods period
+       join mc.financial_daily_publication_days mapped_day on mapped_day.publication_id=$1
+        and mapped_day.accounting_date between period.period_start and period.period_end
        join mc.financial_daily_reasons reason on reason.generation_id=mapped_day.generation_id and reason.accounting_date=mapped_day.accounting_date
-      where mapped_day.publication_id=$1 and mapped_day.accounting_date between $2 and $3
-      order by reason.accounting_date,reason.reason_code`,[publication.publication_id,periodStart,periodEnd]
+      order by period.period_key,reason.accounting_date,reason.reason_code`,args
   )).rows;
   const taxFacts=(await client.query(
-    `select fact.accounting_date::text,fact.product_id,fact.tax_base_unrounded::text,fact.tax_numerator_unrounded::text
-       from mc.financial_daily_publication_days mapped_day
+    `${requestedSql}
+     select period.period_key,fact.id,fact.generation_id,fact.accounting_date::text,fact.product_id,fact.tax_setting_version_id,
+            fact.tax_base_unrounded::text,fact.tax_numerator_unrounded::text,fact.tax_rate_fraction::text
+       from requested_periods period
+       join mc.financial_daily_publication_days mapped_day on mapped_day.publication_id=$1
+        and mapped_day.accounting_date between period.period_start and period.period_end
        join mc.financial_daily_tax_facts fact on fact.generation_id=mapped_day.generation_id and fact.accounting_date=mapped_day.accounting_date
-      where mapped_day.publication_id=$1 and mapped_day.accounting_date between $2 and $3
-      order by fact.accounting_date,fact.product_id,fact.tax_setting_version_id`,[publication.publication_id,periodStart,periodEnd]
+      order by period.period_key,fact.accounting_date,fact.product_id,fact.tax_setting_version_id`,args
   )).rows;
+  const collections={days:groupBy(mapped,row=>row.period_key),lines:groupBy(lines,row=>row.period_key),
+    reasons:groupBy(reasons,row=>row.period_key),taxFacts:groupBy(taxFacts,row=>row.period_key)};
+  const inputs=new Map(requested.map(period=>{
+    const rows=Object.fromEntries(Object.entries(collections).map(([name,grouped])=>[
+      name,(grouped.get(period.period_key)??[]).map(({period_key,...row})=>row)
+    ]));
+    if(rows.days.length&&period.period_key===requested[0].period_key)cacheDailyPeriodRows({businessId,storeId,publicationId:publication.publication_id,
+      periodStart:period.period_start,periodEnd:period.period_end},rows);
+    return[period.period_key,rows];
+  }));
+  const mappedGenerationsSql=`${requestedSql}, mapped_generations as (
+    select distinct period.period_key,period.period_start,period.period_end,mapped_day.generation_id
+      from requested_periods period
+      join mc.financial_daily_publication_days mapped_day on mapped_day.publication_id=$1
+       and mapped_day.accounting_date between period.period_start and period.period_end
+  )`;
   const reportMetadata=(await client.query(
-    `select max(document.received_at) as source_freshness,
+    `${mappedGenerationsSql}
+     select mapped_generation.period_key,max(document.received_at) as source_freshness,
             count(distinct report.external_report_id) filter(where summary.raw_data->>'reportType'='2'
               and nullif(btrim(summary.raw_data->>'country'),'') is not null
               and lower(btrim(summary.raw_data->>'country')) not in ('россия','российская федерация','russia','russian federation','ru'))::int as cross_border_report_count
-       from (select distinct generation_id from mc.financial_daily_publication_days
-              where publication_id=$1 and accounting_date between $2 and $3) mapped_generation
+       from mapped_generations mapped_generation
        join mc.financial_daily_generation_inputs input on input.generation_id=mapped_generation.generation_id and input.source_kind='report'
        join mc.report_versions report_version on report_version.id=input.report_version_id
-       join mc.reports report on report.id=report_version.report_id and report.period_start<=$3::date and report.period_end>=$2::date
+       join mc.reports report on report.id=report_version.report_id
+        and report.period_start<=mapped_generation.period_end and report.period_end>=mapped_generation.period_start
        join mc.source_documents document on document.id=report_version.document_id
        left join lateral(select candidate.raw_data from mc.financial_report_summary_versions candidate
-         where candidate.report_version_id=report_version.id order by candidate.created_at desc,candidate.id desc limit 1) summary on true`,
-    [publication.publication_id,periodStart,periodEnd]
-  )).rows[0]??{};
+         where candidate.report_version_id=report_version.id order by candidate.created_at desc,candidate.id desc limit 1) summary on true
+      group by mapped_generation.period_key`,args
+  )).rows;
   const emptyMetadata=(await client.query(
-    `select max(coalesce(confirmation.finished_at,confirmation.updated_at,confirmation.created_at)) as source_freshness
-       from (select distinct generation_id from mc.financial_daily_publication_days
-              where publication_id=$1 and accounting_date between $2 and $3) mapped_generation
+    `${mappedGenerationsSql}
+     select mapped_generation.period_key,max(coalesce(confirmation.finished_at,confirmation.updated_at,confirmation.created_at)) as source_freshness
+       from mapped_generations mapped_generation
        join mc.financial_daily_generation_inputs input on input.generation_id=mapped_generation.generation_id
         and input.source_kind='empty_week'
        join mc.financial_week_coverage coverage on coverage.id=input.financial_week_coverage_id
-        and coverage.week_start<=$3::date and coverage.week_end>=$2::date
-       join mc.jobs confirmation on confirmation.id=input.empty_confirmation_job_id`,
-    [publication.publication_id,periodStart,periodEnd]
-  )).rows[0]??{};
+        and coverage.week_start<=mapped_generation.period_end and coverage.week_end>=mapped_generation.period_start
+       join mc.jobs confirmation on confirmation.id=input.empty_confirmation_job_id
+      group by mapped_generation.period_key`,args
+  )).rows;
   const excluded=(await client.query(
-    `select count(distinct (report_row.raw_data->>'nmId'))::int as count
-       from mc.financial_daily_publication_days mapped_day
+    `${requestedSql}
+     select period.period_key,count(distinct (report_row.raw_data->>'nmId'))::int as count
+       from requested_periods period
+       join mc.financial_daily_publication_days mapped_day on mapped_day.publication_id=$1
+        and mapped_day.accounting_date between period.period_start and period.period_end
        join mc.financial_daily_generation_inputs input on input.generation_id=mapped_day.generation_id
         and input.source_kind='report' and input.report_normalization_id is not null
        join mc.operation_versions operation on operation.report_normalization_id=input.report_normalization_id
         and operation.accounting_date=mapped_day.accounting_date
        join mc.report_rows report_row on report_row.id=operation.report_row_id
-      where mapped_day.publication_id=$1 and mapped_day.accounting_date between $2 and $3
-        and btrim(coalesce(report_row.raw_data->>'nmId','')) ~ '^[1-9][0-9]*$'
+      where btrim(coalesce(report_row.raw_data->>'nmId','')) ~ '^[1-9][0-9]*$'
         and exists(select 1 from mc.financial_components component where component.operation_version_id=operation.id
           and component.category_code in ${resultCategorySql})
         and (operation.product_id is null or not exists(select 1 from mc.financial_daily_generation_products selected
-          where selected.generation_id=mapped_day.generation_id and selected.selected and selected.product_id=operation.product_id))`,
-    [publication.publication_id,periodStart,periodEnd]
-  )).rows[0];
-  return{...aggregateDailyPublicationPeriod(periodStart,periodEnd,{days:mapped,lines,reasons,taxFacts,
-    sourceFreshness:latestTimestamp([reportMetadata.source_freshness,emptyMetadata.source_freshness]),
-    crossBorderReportCount:reportMetadata.cross_border_report_count??0}),excluded_product_count:Number(excluded?.count??0)};
+          where selected.generation_id=mapped_day.generation_id and selected.selected and selected.product_id=operation.product_id))
+      group by period.period_key`,args
+  )).rows;
+  const reportByPeriod=new Map(reportMetadata.map(row=>[row.period_key,row]));
+  const emptyByPeriod=new Map(emptyMetadata.map(row=>[row.period_key,row]));
+  const excludedByPeriod=new Map(excluded.map(row=>[row.period_key,row]));
+  const envelopes=new Map(requested.map(period=>{
+    const rows=inputs.get(period.period_key);
+    if(!rows.days.length)return[period.period_key,null];
+    const report=reportByPeriod.get(period.period_key)??{},empty=emptyByPeriod.get(period.period_key)??{};
+    return[period.period_key,{...aggregateDailyPublicationPeriod(period.period_start,period.period_end,{...rows,
+      sourceFreshness:latestTimestamp([report.source_freshness,empty.source_freshness]),
+      crossBorderReportCount:report.cross_border_report_count??0}),excluded_product_count:Number(excludedByPeriod.get(period.period_key)?.count??0)}];
+  }));
+  return periods.map(period=>envelopes.get(periodKey(period.start,period.end)));
+}
+
+async function getDailyPeriodEnvelope(client,businessId,storeId,publication,periodStart,periodEnd){
+  return(await loadDailyPeriodEnvelopes(client,publication,[{start:periodStart,end:periodEnd}],businessId,storeId))[0];
 }
 
 async function getDailyUpdateStatus(client,businessId,storeId,periodStart=null,periodEnd=null,publication=null,canRetry=false){
@@ -880,7 +933,7 @@ export async function getPublishedFinancialPeriod(userId,storeId,periodStart,per
     const canRetry=['owner','editor'].includes(role);
     const daily=await getCurrentDailyPublicationContext(client,businessId,storeId);
     if(daily){
-      const period=await getDailyPeriodEnvelope(client,daily,periodStart,periodEnd);
+      const period=await getDailyPeriodEnvelope(client,businessId,storeId,daily,periodStart,periodEnd);
       if(period)return{...daily,update_status:await getDailyUpdateStatus(client,businessId,storeId,periodStart,periodEnd,daily,canRetry),...period};
       if(blocksLegacyFinancialFallback(daily))return{...daily,
         update_status:await getDailyUpdateStatus(client,businessId,storeId,periodStart,periodEnd,daily,canRetry),
@@ -912,15 +965,13 @@ export async function getPublishedFinancialPeriodPair(userId,storeId,{periodStar
           comparisonPeriods=comparisonPeriodsBeforeRange(periodStart,periodEnd,comparisonPeriodCount);
           previousPeriodStart=comparisonPeriods[0].start;previousPeriodEnd=comparisonPeriods[0].end;
         }
-        const current=await getDailyPeriodEnvelope(client,daily,periodStart,periodEnd);
+        const hasPrevious=Boolean(previousPeriodStart&&previousPeriodEnd);
+        const envelopes=await loadDailyPeriodEnvelopes(client,daily,[{start:periodStart,end:periodEnd},
+          ...(hasPrevious?[{start:previousPeriodStart,end:previousPeriodEnd}]:[]),...comparisonPeriods],businessId,storeId);
+        const current=envelopes[0];
         if(current){
-          const previous=previousPeriodStart&&previousPeriodEnd
-            ?await getDailyPeriodEnvelope(client,daily,previousPeriodStart,previousPeriodEnd):null;
-          const history=[];
-          for(const period of comparisonPeriods){
-            history.push(period.start===previousPeriodStart&&period.end===previousPeriodEnd?previous:
-              await getDailyPeriodEnvelope(client,daily,period.start,period.end));
-          }
+          const previous=hasPrevious?envelopes[1]:null;
+          const history=envelopes.slice(hasPrevious?2:1);
           return{...daily,update_status:await getDailyUpdateStatus(client,businessId,storeId,periodStart,periodEnd,daily,canRetry),current,previous,history};
         }
       }
