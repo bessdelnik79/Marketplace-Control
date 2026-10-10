@@ -75,6 +75,14 @@ P02_INTEGRATION_DATABASE_URL=postgresql:///marketplace_control_p02_test node db/
 P03_INTEGRATION_DATABASE_URL=postgresql:///marketplace_control_p03_test node db/tests/p03-app.integration.mjs
 ```
 
+Точные SKU-метаданные и индексный поиск операций под FORCE RLS проверяются отдельным сценарием:
+
+```sh
+SKU_SOURCE_METADATA_INTEGRATION_DATABASE_URL=postgresql:///mc_sku_metadata_test node db/tests/sku-source-metadata.integration.mjs
+```
+
+Нужна пустая одноразовая PostgreSQL-БД с отдельным сегментом `test` в имени и bootstrap-роль с CREATEROLE. Сценарий создаёт минимальную схему чтения и обычную роль `NOLOGIN NOSUPERUSER NOBYPASSRLS` с правом SELECT, проверяет реальные daily/legacy-запросы, точные замороженные исходники, приоритет ID компонента, количества и изоляцию tenant/магазина. Нагрузочная часть с 11 320 операциями и 360 доказательствами проверяет `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)` с обычным планировщиком: каждый индексный поиск по ID должен читать не более одной операции без массового сканирования. Созданные схема и роль удаляются после успеха или ошибки; сценарий запускается отдельно от `npm --prefix db test`.
+
 Счётчики страницы ситуации (товар/точный период, принятые оперативные snapshots, подтверждённые нули, неполные дни, сохранённый fallback, чужой tenant и недоступный товар):
 
 ```sh

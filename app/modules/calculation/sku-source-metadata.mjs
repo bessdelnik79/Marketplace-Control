@@ -10,8 +10,8 @@ export async function loadSkuSourceMetadata(client,{context,model,businessId}){
       and i.report_version_id=rr.report_version_id and i.report_normalization_id=o.report_normalization_id)`:
     `exists(select 1 from mc.calculation_inputs i where i.business_id=$1 and i.store_id=$2 and i.run_id=r.owner and i.report_version_id=rr.report_version_id)
       and exists(select 1 from mc.calculation_inputs i where i.business_id=$1 and i.store_id=$2 and i.run_id=r.owner and i.report_normalization_id=o.report_normalization_id)`;
-  // Keep the correlated ID lookup from being flattened into a date/product join
-  // that repeatedly scans operations for every evidence row (OFFSET 0 below).
+  // CASE allows a direct indexed ID lookup under RLS; OFFSET 0 keeps it correlated
+  // instead of flattening it into a date/product join that repeatedly scans operations.
   const rows=(await client.query(`with sku_source_refs as(select * from jsonb_to_recordset($3::jsonb)
       as r("groupKey" text,id uuid,owner uuid,date date,period uuid))
     select distinct r."groupKey" group_key,p.external_report_id report_id,o.id operation_id,o.operation_type,o.quantity::text,
@@ -24,7 +24,7 @@ export async function loadSkuSourceMetadata(client,{context,model,businessId}){
     join lateral (select operation.id,operation.operation_type,operation.quantity,operation.accounting_date,operation.product_id,
         operation.state,operation.report_row_id,operation.report_normalization_id
       from mc.operation_versions operation
-      where operation.id=coalesce(f.operation_version_id,e.source_operation_version_id) and operation.business_id=$1 and operation.store_id=$2
+      where operation.id=case when f.operation_version_id is not null then f.operation_version_id else e.source_operation_version_id end and operation.business_id=$1 and operation.store_id=$2
       offset 0) o on o.accounting_date=l.accounting_date and o.product_id is not distinct from l.product_id and o.state='active'
     join mc.report_rows rr on rr.id=o.report_row_id and rr.business_id=$1 and rr.store_id=$2
       and (e.report_row_id is null or e.report_row_id=rr.id)
